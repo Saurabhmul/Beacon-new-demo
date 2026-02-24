@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/form";
 import { Building2, Mail, Phone, User, Save, Loader2 } from "lucide-react";
 import type { ClientConfig } from "@shared/schema";
+import { useAuth } from "@/hooks/use-auth";
 
 const formSchema = z.object({
   companyName: z.string().min(2, "Company name must be at least 2 characters"),
@@ -30,6 +31,10 @@ type FormValues = z.infer<typeof formSchema>;
 
 export default function ClientConfigPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+
+  const userFullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ");
+  const userEmail = user?.email || "";
 
   const { data: config, isLoading } = useQuery<ClientConfig>({
     queryKey: ["/api/client-config"],
@@ -39,14 +44,14 @@ export default function ClientConfigPage() {
     resolver: zodResolver(formSchema),
     defaultValues: {
       companyName: "",
-      contactEmail: "",
-      contactName: "",
+      contactEmail: userEmail,
+      contactName: userFullName,
       contactPhone: "",
     },
     values: config
       ? {
           companyName: config.companyName,
-          contactEmail: config.contactEmail,
+          contactEmail: userEmail,
           contactName: config.contactName,
           contactPhone: config.contactPhone || "",
         }
@@ -140,7 +145,7 @@ export default function ClientConfigPage() {
                       Contact Email
                     </FormLabel>
                     <FormControl>
-                      <Input type="email" placeholder="jane@acmefinancial.com" {...field} data-testid="input-contact-email" />
+                      <Input type="email" placeholder="jane@acmefinancial.com" {...field} disabled className="bg-muted/50 cursor-not-allowed" data-testid="input-contact-email" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
