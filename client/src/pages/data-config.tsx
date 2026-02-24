@@ -244,7 +244,7 @@ export default function DataConfigPage() {
 
   if (!config) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="p-6 max-w-6xl mx-auto">
         <Card>
           <CardContent className="p-8 text-center">
             <Database className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
@@ -258,7 +258,7 @@ export default function DataConfigPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <div className="p-6 max-w-6xl mx-auto space-y-6">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-64 w-full" />
       </div>
@@ -266,7 +266,7 @@ export default function DataConfigPage() {
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-sans font-bold tracking-tight" data-testid="text-dataconfig-heading">
           Data Configuration

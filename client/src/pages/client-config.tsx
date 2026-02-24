@@ -75,7 +75,7 @@ export default function ClientConfigPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-2xl mx-auto space-y-6">
+      <div className="p-6 max-w-6xl mx-auto space-y-6">
         <Skeleton className="h-8 w-48" />
         <Card><CardContent className="p-6 space-y-4">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
@@ -85,7 +85,7 @@ export default function ClientConfigPage() {
   }
 
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-6">
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-sans font-bold tracking-tight" data-testid="text-config-heading">
           Client Configuration

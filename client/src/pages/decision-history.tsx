@@ -23,7 +23,7 @@ export default function DecisionHistoryPage() {
   const reviewedDecisions = decisions?.filter((d) => d.status !== "pending") || [];
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-sans font-bold tracking-tight" data-testid="text-history-heading">
           Decision History

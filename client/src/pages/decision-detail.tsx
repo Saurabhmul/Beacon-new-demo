@@ -72,7 +72,7 @@ export default function DecisionDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-4xl mx-auto space-y-6">
+      <div className="p-6 max-w-6xl mx-auto space-y-6">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-96 w-full" />
       </div>
@@ -81,7 +81,7 @@ export default function DecisionDetailPage() {
 
   if (!decision) {
     return (
-      <div className="p-6 max-w-4xl mx-auto text-center">
+      <div className="p-6 max-w-6xl mx-auto text-center">
         <p className="text-muted-foreground">Decision not found.</p>
       </div>
     );
@@ -90,7 +90,7 @@ export default function DecisionDetailPage() {
   const isPending = decision.status === "pending";
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
         <Button variant="outline" size="icon" onClick={() => setLocation(isPending ? "/review" : "/history")} data-testid="button-back">
           <ArrowLeft className="w-4 h-4" />

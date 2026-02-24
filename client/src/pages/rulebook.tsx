@@ -79,7 +79,7 @@ export default function RulebookPage() {
 
   if (!config) {
     return (
-      <div className="p-6 max-w-3xl mx-auto">
+      <div className="p-6 max-w-6xl mx-auto">
         <Card>
           <CardContent className="p-8 text-center">
             <BookOpen className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
@@ -92,7 +92,7 @@ export default function RulebookPage() {
   }
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-sans font-bold tracking-tight" data-testid="text-rulebook-heading">
           Action Rulebook
