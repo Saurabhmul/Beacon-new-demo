@@ -51,9 +51,8 @@ const MANDATORY_FIELDS = [
 ];
 
 const OPTIONAL_FIELDS = [
-  "conversation_history", "contactability_signals", "income_attributes",
-  "employment_attributes", "bureau_attributes", "arrangements_ptps",
-  "payment_plans", "broken_promises", "compliance_policy", "knowledge_base",
+  "conversation_history", "income_and_employment_data",
+  "credit_bureau_data", "compliance_policy", "knowledge_base",
 ];
 
 const DEFAULT_PROMPT = `You are an AI decision engine for early delinquency management. Analyze the customer data provided against the SOP rules.
