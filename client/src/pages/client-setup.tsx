@@ -46,8 +46,8 @@ const companyFormSchema = z.object({
 type CompanyFormValues = z.infer<typeof companyFormSchema>;
 
 const MANDATORY_FIELDS = [
-  "customer_id", "account_id", "dpd_bucket",
-  "outstanding_amount", "current_due_amount", "current_due_date",
+  "customer / account / loan id", "dpd_bucket",
+  "outstanding_amount", "amount_due", "due_date",
 ];
 
 const OPTIONAL_FIELDS = [

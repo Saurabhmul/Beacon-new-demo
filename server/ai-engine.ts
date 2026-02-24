@@ -83,7 +83,7 @@ Required JSON output format:
   try {
     const parsed = JSON.parse(jsonStr);
     return {
-      customer_guid: parsed.customer_guid || String(customerData.customer_id || customerData.account_id || "unknown"),
+      customer_guid: parsed.customer_guid || String(customerData["customer / account / loan id"] || customerData.customer_id || customerData.account_id || "unknown"),
       combined_cmd: parsed.combined_cmd ?? null,
       problem_description: parsed.problem_description || "",
       problem_confidence_score: Math.min(10, Math.max(1, parseInt(parsed.problem_confidence_score) || 5)),
@@ -99,7 +99,7 @@ Required JSON output format:
     };
   } catch (e) {
     return {
-      customer_guid: String(customerData.customer_id || customerData.account_id || "unknown"),
+      customer_guid: String(customerData["customer / account / loan id"] || customerData.customer_id || customerData.account_id || "unknown"),
       combined_cmd: null,
       problem_description: "AI analysis could not be parsed. Raw response stored.",
       problem_confidence_score: 1,
