@@ -87,7 +87,7 @@ export default function ClientConfigPage() {
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-serif font-bold tracking-tight" data-testid="text-config-heading">
+        <h1 className="text-2xl font-sans font-bold tracking-tight" data-testid="text-config-heading">
           Client Configuration
         </h1>
         <p className="text-sm text-muted-foreground mt-1">

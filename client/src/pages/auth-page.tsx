@@ -94,7 +94,7 @@ export default function AuthPage() {
           <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center mb-4">
             <Zap className="w-7 h-7 text-primary-foreground" />
           </div>
-          <h1 className="text-2xl font-serif font-bold tracking-tight" data-testid="text-auth-title">Beacon Demo</h1>
+          <h1 className="text-2xl font-sans font-bold tracking-tight" data-testid="text-auth-title">Beacon Demo</h1>
           <p className="text-sm text-muted-foreground mt-1">AI-Powered Decision Engine</p>
         </div>
 

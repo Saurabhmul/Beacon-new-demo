@@ -76,7 +76,7 @@ export default function LandingPage() {
               <span className="w-1.5 h-1.5 rounded-full bg-accent-foreground/60" />
               Now in Pilot
             </div>
-            <h1 className="text-4xl md:text-5xl lg:text-6xl font-serif font-bold tracking-tight leading-tight mb-6" data-testid="text-hero-heading">
+            <h1 className="text-4xl md:text-5xl lg:text-6xl font-sans font-bold tracking-tight leading-tight mb-6" data-testid="text-hero-heading">
               Intelligent Decisions for{" "}
               <span className="text-primary">Early Delinquency</span>{" "}
               Management
@@ -114,7 +114,7 @@ export default function LandingPage() {
       <section id="features" className="py-20 px-6">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-serif font-bold mb-4" data-testid="text-features-heading">
+            <h2 className="text-3xl md:text-4xl font-sans font-bold mb-4" data-testid="text-features-heading">
               Everything You Need to Manage Delinquency
             </h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
@@ -144,7 +144,7 @@ export default function LandingPage() {
       <section id="how-it-works" className="py-20 px-6 bg-card/50">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-serif font-bold mb-4" data-testid="text-how-heading">
+            <h2 className="text-3xl md:text-4xl font-sans font-bold mb-4" data-testid="text-how-heading">
               How Beacon Works
             </h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
@@ -158,7 +158,7 @@ export default function LandingPage() {
               { step: "03", title: "Review AI Decisions", desc: "AI analyzes each customer against your rules and recommends actions. Your team reviews, approves, or adjusts with full transparency." },
             ].map((item) => (
               <div key={item.step} className="relative">
-                <div className="text-6xl font-serif font-bold text-primary/10 mb-4">{item.step}</div>
+                <div className="text-6xl font-sans font-bold text-primary/10 mb-4">{item.step}</div>
                 <h3 className="font-semibold text-lg mb-2" data-testid={`text-step-${item.step}`}>{item.title}</h3>
                 <p className="text-sm text-muted-foreground leading-relaxed">{item.desc}</p>
               </div>
@@ -169,7 +169,7 @@ export default function LandingPage() {
 
       <section className="py-20 px-6">
         <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-3xl md:text-4xl font-serif font-bold mb-4">
+          <h2 className="text-3xl md:text-4xl font-sans font-bold mb-4">
             Ready to Transform Your Collections?
           </h2>
           <p className="text-lg text-muted-foreground mb-8">

@@ -136,7 +136,7 @@ export default function UploadPage() {
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-serif font-bold tracking-tight" data-testid="text-upload-heading">
+        <h1 className="text-2xl font-sans font-bold tracking-tight" data-testid="text-upload-heading">
           Upload Data
         </h1>
         <p className="text-sm text-muted-foreground mt-1">

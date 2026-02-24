@@ -97,7 +97,7 @@ export default function DecisionDetailPage() {
         </Button>
         <div className="flex-1">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-xl font-serif font-bold tracking-tight" data-testid="text-decision-heading">
+            <h1 className="text-xl font-sans font-bold tracking-tight" data-testid="text-decision-heading">
               Customer: {decision.customerGuid}
             </h1>
             <Badge variant={decision.status === "pending" ? "outline" : decision.agentAgreed ? "default" : "destructive"}>
