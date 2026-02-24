@@ -17,19 +17,15 @@ import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
   Settings,
-  BookOpen,
   Upload,
   ClipboardList,
   LogOut,
   Zap,
-  Database,
 } from "lucide-react";
 
 const navItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Client Setup", url: "/config", icon: Settings },
-  { title: "Action Rulebook", url: "/rulebook", icon: BookOpen },
-  { title: "Data Config", url: "/data-config", icon: Database },
   { title: "Upload Data", url: "/upload", icon: Upload },
   { title: "Review Queue", url: "/review", icon: ClipboardList },
 ];

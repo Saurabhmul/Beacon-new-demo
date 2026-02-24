@@ -46,7 +46,7 @@ export default function DashboardPage() {
     {
       label: "Action Rulebook",
       done: false,
-      href: "/rulebook",
+      href: "/config",
       icon: BookOpen,
       desc: "Define your SOP and collection rules",
     },

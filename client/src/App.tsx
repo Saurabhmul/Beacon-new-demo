@@ -11,9 +11,7 @@ import NotFound from "@/pages/not-found";
 import LandingPage from "@/pages/landing";
 import AuthPage from "@/pages/auth-page";
 import DashboardPage from "@/pages/dashboard";
-import ClientConfigPage from "@/pages/client-config";
-import RulebookPage from "@/pages/rulebook";
-import DataConfigPage from "@/pages/data-config";
+import ClientSetupPage from "@/pages/client-setup";
 import UploadPage from "@/pages/upload";
 import ReviewQueuePage from "@/pages/review-queue";
 import DecisionDetailPage from "@/pages/decision-detail";
@@ -35,9 +33,7 @@ function AuthenticatedLayout() {
           <main className="flex-1 overflow-auto">
             <Switch>
               <Route path="/dashboard" component={DashboardPage} />
-              <Route path="/config" component={ClientConfigPage} />
-              <Route path="/rulebook" component={RulebookPage} />
-              <Route path="/data-config" component={DataConfigPage} />
+              <Route path="/config" component={ClientSetupPage} />
               <Route path="/upload" component={UploadPage} />
               <Route path="/review" component={ReviewQueuePage} />
               <Route path="/review/:id" component={DecisionDetailPage} />
