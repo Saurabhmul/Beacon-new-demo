@@ -1,38 +1,172 @@
-import { type User, type InsertUser } from "@shared/schema";
-import { randomUUID } from "crypto";
-
-// modify the interface with any CRUD methods
-// you might need
+import {
+  clientConfigs, rulebooks, dataConfigs, dataUploads, decisions,
+  type ClientConfig, type InsertClientConfig,
+  type Rulebook, type InsertRulebook,
+  type DataConfig, type InsertDataConfig,
+  type DataUpload, type InsertDataUpload,
+  type Decision, type InsertDecision,
+} from "@shared/schema";
+import { db } from "./db";
+import { eq, desc, and, sql } from "drizzle-orm";
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  getClientConfig(userId: string): Promise<ClientConfig | undefined>;
+  createClientConfig(data: InsertClientConfig): Promise<ClientConfig>;
+  updateClientConfig(userId: string, data: Partial<InsertClientConfig>): Promise<ClientConfig>;
+
+  getRulebooks(userId: string): Promise<Rulebook[]>;
+  getRulebook(id: number): Promise<Rulebook | undefined>;
+  createRulebook(data: InsertRulebook): Promise<Rulebook>;
+  deleteRulebook(id: number): Promise<void>;
+
+  getDataConfig(userId: string): Promise<DataConfig | undefined>;
+  createDataConfig(data: InsertDataConfig): Promise<DataConfig>;
+  updateDataConfig(userId: string, data: Partial<InsertDataConfig>): Promise<DataConfig>;
+
+  getUploads(userId: string): Promise<DataUpload[]>;
+  getUpload(id: number): Promise<DataUpload | undefined>;
+  createUpload(data: InsertDataUpload): Promise<DataUpload>;
+  updateUploadStatus(id: number, status: string): Promise<void>;
+
+  getDecisions(userId: string, status?: string): Promise<Decision[]>;
+  getDecision(id: number): Promise<Decision | undefined>;
+  createDecision(data: InsertDecision): Promise<Decision>;
+  updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string): Promise<Decision>;
+  updateDecisionEmailReview(id: number, emailAccepted: boolean, emailRejectReason?: string): Promise<Decision>;
+  getDecisionStats(userId: string): Promise<{ pending: number; approved: number; total: number; recentDecisions: Decision[] }>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-
-  constructor() {
-    this.users = new Map();
+export class DatabaseStorage implements IStorage {
+  async getClientConfig(userId: string): Promise<ClientConfig | undefined> {
+    const [config] = await db.select().from(clientConfigs).where(eq(clientConfigs.userId, userId));
+    return config || undefined;
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+  async createClientConfig(data: InsertClientConfig): Promise<ClientConfig> {
+    const [config] = await db.insert(clientConfigs).values(data).returning();
+    return config;
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+  async updateClientConfig(userId: string, data: Partial<InsertClientConfig>): Promise<ClientConfig> {
+    const [config] = await db
+      .update(clientConfigs)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(clientConfigs.userId, userId))
+      .returning();
+    return config;
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+  async getRulebooks(userId: string): Promise<Rulebook[]> {
+    return db.select().from(rulebooks).where(eq(rulebooks.userId, userId)).orderBy(desc(rulebooks.createdAt));
+  }
+
+  async getRulebook(id: number): Promise<Rulebook | undefined> {
+    const [rb] = await db.select().from(rulebooks).where(eq(rulebooks.id, id));
+    return rb || undefined;
+  }
+
+  async createRulebook(data: InsertRulebook): Promise<Rulebook> {
+    const [rb] = await db.insert(rulebooks).values(data).returning();
+    return rb;
+  }
+
+  async deleteRulebook(id: number): Promise<void> {
+    await db.delete(rulebooks).where(eq(rulebooks.id, id));
+  }
+
+  async getDataConfig(userId: string): Promise<DataConfig | undefined> {
+    const [config] = await db.select().from(dataConfigs).where(eq(dataConfigs.userId, userId));
+    return config || undefined;
+  }
+
+  async createDataConfig(data: InsertDataConfig): Promise<DataConfig> {
+    const [config] = await db.insert(dataConfigs).values(data).returning();
+    return config;
+  }
+
+  async updateDataConfig(userId: string, data: Partial<InsertDataConfig>): Promise<DataConfig> {
+    const [config] = await db
+      .update(dataConfigs)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(dataConfigs.userId, userId))
+      .returning();
+    return config;
+  }
+
+  async getUploads(userId: string): Promise<DataUpload[]> {
+    return db.select().from(dataUploads).where(eq(dataUploads.userId, userId)).orderBy(desc(dataUploads.createdAt));
+  }
+
+  async getUpload(id: number): Promise<DataUpload | undefined> {
+    const [upload] = await db.select().from(dataUploads).where(eq(dataUploads.id, id));
+    return upload || undefined;
+  }
+
+  async createUpload(data: InsertDataUpload): Promise<DataUpload> {
+    const [upload] = await db.insert(dataUploads).values(data).returning();
+    return upload;
+  }
+
+  async updateUploadStatus(id: number, status: string): Promise<void> {
+    await db.update(dataUploads).set({ status }).where(eq(dataUploads.id, id));
+  }
+
+  async getDecisions(userId: string, status?: string): Promise<Decision[]> {
+    if (status && status !== "all") {
+      return db.select().from(decisions)
+        .where(and(eq(decisions.userId, userId), eq(decisions.status, status)))
+        .orderBy(desc(decisions.createdAt));
+    }
+    return db.select().from(decisions).where(eq(decisions.userId, userId)).orderBy(desc(decisions.createdAt));
+  }
+
+  async getDecision(id: number): Promise<Decision | undefined> {
+    const [decision] = await db.select().from(decisions).where(eq(decisions.id, id));
+    return decision || undefined;
+  }
+
+  async createDecision(data: InsertDecision): Promise<Decision> {
+    const [decision] = await db.insert(decisions).values(data).returning();
+    return decision;
+  }
+
+  async updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string): Promise<Decision> {
+    const [decision] = await db
+      .update(decisions)
+      .set({
+        status: agentAgreed ? "approved" : "rejected",
+        agentAgreed,
+        agentReason: agentReason || null,
+        reviewedAt: new Date(),
+      })
+      .where(eq(decisions.id, id))
+      .returning();
+    return decision;
+  }
+
+  async updateDecisionEmailReview(id: number, emailAccepted: boolean, emailRejectReason?: string): Promise<Decision> {
+    const [decision] = await db
+      .update(decisions)
+      .set({
+        emailAccepted,
+        emailRejectReason: emailRejectReason || null,
+      })
+      .where(eq(decisions.id, id))
+      .returning();
+    return decision;
+  }
+
+  async getDecisionStats(userId: string) {
+    const allDecisions = await db.select().from(decisions).where(eq(decisions.userId, userId)).orderBy(desc(decisions.createdAt));
+    const pending = allDecisions.filter(d => d.status === "pending").length;
+    const approved = allDecisions.filter(d => d.status !== "pending").length;
+    return {
+      pending,
+      approved,
+      total: allDecisions.length,
+      recentDecisions: allDecisions.slice(0, 5),
+    };
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();

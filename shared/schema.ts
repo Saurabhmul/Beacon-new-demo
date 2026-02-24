@@ -1,18 +1,166 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, integer, timestamp, boolean, jsonb, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { relations } from "drizzle-orm";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+export * from "./models/auth";
+export * from "./models/chat";
+
+export const clientConfigs = pgTable("client_configs", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull(),
+  companyName: text("company_name").notNull(),
+  contactEmail: text("contact_email").notNull(),
+  contactName: text("contact_name").notNull(),
+  contactPhone: text("contact_phone"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export const rulebooks = pgTable("rulebooks", {
+  id: serial("id").primaryKey(),
+  clientConfigId: integer("client_config_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  title: text("title").notNull(),
+  sopText: text("sop_text"),
+  sopFileUrl: text("sop_file_url"),
+  sopFileName: text("sop_file_name"),
+  extractedText: text("extracted_text"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export const dataConfigs = pgTable("data_configs", {
+  id: serial("id").primaryKey(),
+  clientConfigId: integer("client_config_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  mandatoryFields: jsonb("mandatory_fields").$type<string[]>().default([]).notNull(),
+  optionalFields: jsonb("optional_fields").$type<string[]>().default([]).notNull(),
+  dpdBuckets: jsonb("dpd_buckets").$type<string[]>().default([]).notNull(),
+  promptTemplate: text("prompt_template"),
+  outputFormat: text("output_format"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const dataUploads = pgTable("data_uploads", {
+  id: serial("id").primaryKey(),
+  clientConfigId: integer("client_config_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  fileName: text("file_name").notNull(),
+  fileType: text("file_type").notNull(),
+  fileSize: integer("file_size").notNull(),
+  recordCount: integer("record_count").default(0),
+  status: text("status").default("uploaded").notNull(),
+  uploadedData: jsonb("uploaded_data").$type<Record<string, unknown>[]>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const decisions = pgTable("decisions", {
+  id: serial("id").primaryKey(),
+  clientConfigId: integer("client_config_id").notNull(),
+  dataUploadId: integer("data_upload_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  customerGuid: text("customer_guid").notNull(),
+  customerData: jsonb("customer_data").$type<Record<string, unknown>>().notNull(),
+  combinedCmd: real("combined_cmd"),
+  problemDescription: text("problem_description"),
+  problemConfidenceScore: integer("problem_confidence_score"),
+  problemEvidence: text("problem_evidence"),
+  proposedSolution: text("proposed_solution"),
+  solutionConfidenceScore: integer("solution_confidence_score"),
+  solutionEvidence: text("solution_evidence"),
+  internalAction: text("internal_action"),
+  abilityToPay: real("ability_to_pay"),
+  reasonForAbilityToPay: text("reason_for_ability_to_pay"),
+  noOfLatestPaymentsFailed: integer("no_of_latest_payments_failed"),
+  proposedEmailToCustomer: text("proposed_email_to_customer"),
+  aiRawOutput: jsonb("ai_raw_output").$type<Record<string, unknown>>(),
+  status: text("status").default("pending").notNull(),
+  agentAgreed: boolean("agent_agreed"),
+  agentReason: text("agent_reason"),
+  emailAccepted: boolean("email_accepted"),
+  emailRejectReason: text("email_reject_reason"),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const clientConfigRelations = relations(clientConfigs, ({ many }) => ({
+  rulebooks: many(rulebooks),
+  dataConfigs: many(dataConfigs),
+  dataUploads: many(dataUploads),
+  decisions: many(decisions),
+}));
+
+export const rulebookRelations = relations(rulebooks, ({ one }) => ({
+  clientConfig: one(clientConfigs, {
+    fields: [rulebooks.clientConfigId],
+    references: [clientConfigs.id],
+  }),
+}));
+
+export const dataConfigRelations = relations(dataConfigs, ({ one }) => ({
+  clientConfig: one(clientConfigs, {
+    fields: [dataConfigs.clientConfigId],
+    references: [clientConfigs.id],
+  }),
+}));
+
+export const dataUploadRelations = relations(dataUploads, ({ one, many }) => ({
+  clientConfig: one(clientConfigs, {
+    fields: [dataUploads.clientConfigId],
+    references: [clientConfigs.id],
+  }),
+  decisions: many(decisions),
+}));
+
+export const decisionRelations = relations(decisions, ({ one }) => ({
+  clientConfig: one(clientConfigs, {
+    fields: [decisions.clientConfigId],
+    references: [clientConfigs.id],
+  }),
+  dataUpload: one(dataUploads, {
+    fields: [decisions.dataUploadId],
+    references: [dataUploads.id],
+  }),
+}));
+
+export const insertClientConfigSchema = createInsertSchema(clientConfigs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertRulebookSchema = createInsertSchema(rulebooks).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertDataConfigSchema = createInsertSchema(dataConfigs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertDataUploadSchema = createInsertSchema(dataUploads).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertDecisionSchema = createInsertSchema(decisions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type ClientConfig = typeof clientConfigs.$inferSelect;
+export type InsertClientConfig = z.infer<typeof insertClientConfigSchema>;
+export type Rulebook = typeof rulebooks.$inferSelect;
+export type InsertRulebook = z.infer<typeof insertRulebookSchema>;
+export type DataConfig = typeof dataConfigs.$inferSelect;
+export type InsertDataConfig = z.infer<typeof insertDataConfigSchema>;
+export type DataUpload = typeof dataUploads.$inferSelect;
+export type InsertDataUpload = z.infer<typeof insertDataUploadSchema>;
+export type Decision = typeof decisions.$inferSelect;
+export type InsertDecision = z.infer<typeof insertDecisionSchema>;
