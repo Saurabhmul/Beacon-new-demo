@@ -7,7 +7,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - **Frontend**: React + TypeScript + Tailwind CSS + Shadcn UI + Wouter routing
 - **Backend**: Express.js + TypeScript
 - **Database**: PostgreSQL (Replit managed) + Drizzle ORM
-- **Auth**: Replit Auth (OpenID Connect)
+- **Auth**: Custom email/password (bcryptjs + express-session)
 - **AI**: Gemini 2.5 Flash via Replit AI Integrations (no API key needed)
 - **File Processing**: Multer for uploads, PapaParse for CSV parsing
 
