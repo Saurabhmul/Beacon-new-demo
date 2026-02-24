@@ -44,6 +44,18 @@ export const dataConfigs = pgTable("data_configs", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const dpdStages = pgTable("dpd_stages", {
+  id: serial("id").primaryKey(),
+  clientConfigId: integer("client_config_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  fromDays: integer("from_days").notNull(),
+  toDays: integer("to_days").notNull(),
+  color: text("color").default("blue").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const dataUploads = pgTable("data_uploads", {
   id: serial("id").primaryKey(),
   clientConfigId: integer("client_config_id").notNull(),
@@ -107,6 +119,13 @@ export const dataConfigRelations = relations(dataConfigs, ({ one }) => ({
   }),
 }));
 
+export const dpdStageRelations = relations(dpdStages, ({ one }) => ({
+  clientConfig: one(clientConfigs, {
+    fields: [dpdStages.clientConfigId],
+    references: [clientConfigs.id],
+  }),
+}));
+
 export const dataUploadRelations = relations(dataUploads, ({ one, many }) => ({
   clientConfig: one(clientConfigs, {
     fields: [dataUploads.clientConfigId],
@@ -144,6 +163,11 @@ export const insertDataConfigSchema = createInsertSchema(dataConfigs).omit({
   updatedAt: true,
 });
 
+export const insertDpdStageSchema = createInsertSchema(dpdStages).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertDataUploadSchema = createInsertSchema(dataUploads).omit({
   id: true,
   createdAt: true,
@@ -160,6 +184,8 @@ export type Rulebook = typeof rulebooks.$inferSelect;
 export type InsertRulebook = z.infer<typeof insertRulebookSchema>;
 export type DataConfig = typeof dataConfigs.$inferSelect;
 export type InsertDataConfig = z.infer<typeof insertDataConfigSchema>;
+export type DpdStage = typeof dpdStages.$inferSelect;
+export type InsertDpdStage = z.infer<typeof insertDpdStageSchema>;
 export type DataUpload = typeof dataUploads.$inferSelect;
 export type InsertDataUpload = z.infer<typeof insertDataUploadSchema>;
 export type Decision = typeof decisions.$inferSelect;

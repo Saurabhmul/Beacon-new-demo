@@ -186,6 +186,96 @@ export async function registerRoutes(
     }
   });
 
+  // DPD Stages
+  app.get("/api/dpd-stages", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const stages = await storage.getDpdStages(userId);
+      res.json(stages);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch DPD stages" });
+    }
+  });
+
+  app.post("/api/dpd-stages", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const config = await storage.getClientConfig(userId);
+      if (!config) return res.status(400).json({ error: "Configure client first" });
+
+      const { name, description, fromDays, toDays, color } = req.body;
+      if (fromDays >= toDays) return res.status(400).json({ error: "From days must be less than To days" });
+
+      const existing = await storage.getDpdStages(userId);
+      const overlap = existing.find(s =>
+        (fromDays >= s.fromDays && fromDays <= s.toDays) ||
+        (toDays >= s.fromDays && toDays <= s.toDays) ||
+        (fromDays <= s.fromDays && toDays >= s.toDays)
+      );
+      if (overlap) return res.status(400).json({ error: `Overlaps with existing stage "${overlap.name}" (${overlap.fromDays}-${overlap.toDays} days)` });
+
+      const stage = await storage.createDpdStage({
+        name,
+        description,
+        fromDays,
+        toDays,
+        color: color || "blue",
+        userId,
+        clientConfigId: config.id,
+      });
+      res.status(201).json(stage);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create DPD stage" });
+    }
+  });
+
+  app.patch("/api/dpd-stages/:id", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const id = parseInt(req.params.id);
+      const { name, description, fromDays, toDays, color } = req.body;
+
+      const existing = await storage.getDpdStages(userId);
+      const owned = existing.find(s => s.id === id);
+      if (!owned) return res.status(404).json({ error: "DPD stage not found" });
+
+      const checkFrom = fromDays ?? owned.fromDays;
+      const checkTo = toDays ?? owned.toDays;
+
+      if (checkFrom >= checkTo) {
+        return res.status(400).json({ error: "From days must be less than To days" });
+      }
+
+      const overlap = existing.find(s =>
+        s.id !== id && (
+          (checkFrom >= s.fromDays && checkFrom <= s.toDays) ||
+          (checkTo >= s.fromDays && checkTo <= s.toDays) ||
+          (checkFrom <= s.fromDays && checkTo >= s.toDays)
+        )
+      );
+      if (overlap) return res.status(400).json({ error: `Overlaps with existing stage "${overlap.name}" (${overlap.fromDays}-${overlap.toDays} days)` });
+
+      const stage = await storage.updateDpdStage(id, { name, description, fromDays: checkFrom, toDays: checkTo, color });
+      res.json(stage);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update DPD stage" });
+    }
+  });
+
+  app.delete("/api/dpd-stages/:id", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const id = parseInt(req.params.id);
+      const stages = await storage.getDpdStages(userId);
+      const stage = stages.find(s => s.id === id);
+      if (!stage) return res.status(404).json({ error: "DPD stage not found" });
+      await storage.deleteDpdStage(id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete DPD stage" });
+    }
+  });
+
   // Uploads
   app.get("/api/uploads", isAuthenticated, async (req, res) => {
     try {

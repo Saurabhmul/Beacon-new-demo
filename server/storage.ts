@@ -1,8 +1,9 @@
 import {
-  clientConfigs, rulebooks, dataConfigs, dataUploads, decisions,
+  clientConfigs, rulebooks, dataConfigs, dataUploads, decisions, dpdStages,
   type ClientConfig, type InsertClientConfig,
   type Rulebook, type InsertRulebook,
   type DataConfig, type InsertDataConfig,
+  type DpdStage, type InsertDpdStage,
   type DataUpload, type InsertDataUpload,
   type Decision, type InsertDecision,
 } from "@shared/schema";
@@ -22,6 +23,11 @@ export interface IStorage {
   getDataConfig(userId: string): Promise<DataConfig | undefined>;
   createDataConfig(data: InsertDataConfig): Promise<DataConfig>;
   updateDataConfig(userId: string, data: Partial<InsertDataConfig>): Promise<DataConfig>;
+
+  getDpdStages(userId: string): Promise<DpdStage[]>;
+  createDpdStage(data: InsertDpdStage): Promise<DpdStage>;
+  updateDpdStage(id: number, data: Partial<InsertDpdStage>): Promise<DpdStage>;
+  deleteDpdStage(id: number): Promise<void>;
 
   getUploads(userId: string): Promise<DataUpload[]>;
   getUpload(id: number): Promise<DataUpload | undefined>;
@@ -91,6 +97,24 @@ export class DatabaseStorage implements IStorage {
       .where(eq(dataConfigs.userId, userId))
       .returning();
     return config;
+  }
+
+  async getDpdStages(userId: string): Promise<DpdStage[]> {
+    return db.select().from(dpdStages).where(eq(dpdStages.userId, userId)).orderBy(dpdStages.fromDays);
+  }
+
+  async createDpdStage(data: InsertDpdStage): Promise<DpdStage> {
+    const [stage] = await db.insert(dpdStages).values(data).returning();
+    return stage;
+  }
+
+  async updateDpdStage(id: number, data: Partial<InsertDpdStage>): Promise<DpdStage> {
+    const [stage] = await db.update(dpdStages).set(data).where(eq(dpdStages.id, id)).returning();
+    return stage;
+  }
+
+  async deleteDpdStage(id: number): Promise<void> {
+    await db.delete(dpdStages).where(eq(dpdStages.id, id));
   }
 
   async getUploads(userId: string): Promise<DataUpload[]> {
