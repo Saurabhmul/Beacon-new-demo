@@ -32,7 +32,7 @@ import {
 import {
   Building2, Mail, Phone, User, Save, Loader2,
   BookOpen, Upload, FileText, Trash2, Plus, File as FileIcon,
-  Database, Pencil,
+  Database, Pencil, MessageSquare,
 } from "lucide-react";
 import type { ClientConfig, Rulebook, DataConfig, DpdStage } from "@shared/schema";
 
@@ -460,8 +460,6 @@ function DataConfigTab() {
 
   const [mandatoryFields] = useState<string[]>(MANDATORY_FIELDS);
   const [optionalFields, setOptionalFields] = useState<string[]>([]);
-  const [promptTemplate, setPromptTemplate] = useState(DEFAULT_PROMPT);
-  const [outputFormat, setOutputFormat] = useState(DEFAULT_OUTPUT);
   const [customField, setCustomField] = useState("");
   const [hydrated, setHydrated] = useState(false);
 
@@ -469,12 +467,6 @@ function DataConfigTab() {
     if (dataConfig && !hydrated) {
       if (dataConfig.optionalFields && (dataConfig.optionalFields as string[]).length > 0) {
         setOptionalFields(dataConfig.optionalFields as string[]);
-      }
-      if (dataConfig.promptTemplate) {
-        setPromptTemplate(dataConfig.promptTemplate);
-      }
-      if (dataConfig.outputFormat) {
-        setOutputFormat(dataConfig.outputFormat);
       }
       setHydrated(true);
     }
@@ -495,8 +487,6 @@ function DataConfigTab() {
         mandatoryFields,
         optionalFields,
         dpdBuckets: [],
-        promptTemplate,
-        outputFormat,
       });
       return res.json();
     },
@@ -612,13 +602,7 @@ function DataConfigTab() {
 
   return (
     <>
-      <Tabs defaultValue="data-fields" className="w-full">
-        <TabsList className="mb-4">
-          <TabsTrigger value="data-fields" data-testid="tab-data-fields">Data Fields</TabsTrigger>
-          <TabsTrigger value="prompt-config" data-testid="tab-prompt-config">Prompt Config</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="data-fields" className="space-y-6">
+      <div className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Mandatory Data Fields</CardTitle>
@@ -760,47 +744,7 @@ function DataConfigTab() {
               Save Configuration
             </Button>
           </div>
-        </TabsContent>
-
-        <TabsContent value="prompt-config" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">AI Prompt Template</CardTitle>
-              <CardDescription>Customize the prompt sent to AI along with customer data and SOP rules.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                value={promptTemplate}
-                onChange={(e) => setPromptTemplate(e.target.value)}
-                className="min-h-[200px] text-sm font-mono"
-                data-testid="textarea-prompt"
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Expected Output Format</CardTitle>
-              <CardDescription>Define the JSON structure expected from AI responses.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                value={outputFormat}
-                onChange={(e) => setOutputFormat(e.target.value)}
-                className="min-h-[200px] text-sm font-mono"
-                data-testid="textarea-output-format"
-              />
-            </CardContent>
-          </Card>
-
-          <div className="pt-2 pb-8">
-            <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-prompt-config">
-              {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-              Save Configuration
-            </Button>
-          </div>
-        </TabsContent>
-      </Tabs>
+      </div>
 
       <Dialog open={stageDialogOpen} onOpenChange={setStageDialogOpen}>
         <DialogContent>
@@ -882,6 +826,87 @@ function DataConfigTab() {
   );
 }
 
+function PromptConfigTab() {
+  const { toast } = useToast();
+
+  const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
+
+  const [promptTemplate, setPromptTemplate] = useState(DEFAULT_PROMPT);
+  const [outputFormat, setOutputFormat] = useState(DEFAULT_OUTPUT);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    if (dataConfig && !hydrated) {
+      if (dataConfig.promptTemplate) {
+        setPromptTemplate(dataConfig.promptTemplate);
+      }
+      if (dataConfig.outputFormat) {
+        setOutputFormat(dataConfig.outputFormat);
+      }
+      setHydrated(true);
+    }
+  }, [dataConfig, hydrated]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const method = dataConfig ? "PATCH" : "POST";
+      const res = await apiRequest(method, "/api/data-config", {
+        promptTemplate,
+        outputFormat,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/data-config"] });
+      toast({ title: "Prompt configuration saved" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save.", variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">AI Prompt Template</CardTitle>
+          <CardDescription>Customize the prompt sent to AI along with customer data and SOP rules.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Textarea
+            value={promptTemplate}
+            onChange={(e) => setPromptTemplate(e.target.value)}
+            className="min-h-[200px] text-sm font-mono"
+            data-testid="textarea-prompt"
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Expected Output Format</CardTitle>
+          <CardDescription>Define the JSON structure expected from AI responses.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Textarea
+            value={outputFormat}
+            onChange={(e) => setOutputFormat(e.target.value)}
+            className="min-h-[200px] text-sm font-mono"
+            data-testid="textarea-output-format"
+          />
+        </CardContent>
+      </Card>
+
+      <div className="pt-2 pb-8">
+        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-prompt-config">
+          {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+          Save Configuration
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function ClientSetupPage() {
   const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"] });
 
@@ -910,6 +935,10 @@ export default function ClientSetupPage() {
             <Database className="w-3.5 h-3.5 mr-1.5" />
             Data Configuration
           </TabsTrigger>
+          <TabsTrigger value="prompt-config" data-testid="tab-prompt-config" disabled={!config}>
+            <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+            Prompt Config
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="company">
@@ -922,6 +951,10 @@ export default function ClientSetupPage() {
 
         <TabsContent value="data-config">
           <DataConfigTab />
+        </TabsContent>
+
+        <TabsContent value="prompt-config">
+          <PromptConfigTab />
         </TabsContent>
       </Tabs>
     </div>
