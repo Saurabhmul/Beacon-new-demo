@@ -37,7 +37,7 @@ export default function DashboardPage() {
 
   const setupSteps = [
     {
-      label: "Client Setup",
+      label: "Client Configuration",
       done: !!config,
       href: "/config",
       icon: Settings,

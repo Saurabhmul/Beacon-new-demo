@@ -25,7 +25,7 @@ import {
 
 const navItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Client Setup", url: "/config", icon: Settings },
+  { title: "Client Configuration", url: "/config", icon: Settings },
   { title: "Upload Data", url: "/upload", icon: Upload },
   { title: "Review Queue", url: "/review", icon: ClipboardList },
 ];
