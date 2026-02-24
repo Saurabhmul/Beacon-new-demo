@@ -9,6 +9,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 import LandingPage from "@/pages/landing";
+import AuthPage from "@/pages/auth-page";
 import DashboardPage from "@/pages/dashboard";
 import ClientConfigPage from "@/pages/client-config";
 import RulebookPage from "@/pages/rulebook";
@@ -68,6 +69,7 @@ function AppRouter() {
   if (!user) {
     return (
       <Switch>
+        <Route path="/auth" component={AuthPage} />
         <Route path="/" component={LandingPage} />
         <Route component={LandingPage} />
       </Switch>

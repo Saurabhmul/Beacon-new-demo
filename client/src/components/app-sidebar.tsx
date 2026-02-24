@@ -38,7 +38,7 @@ const navItems = [
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { user } = useAuth();
+  const { user, logout, isLoggingOut } = useAuth();
 
   const initials = user
     ? `${user.firstName?.[0] || ""}${user.lastName?.[0] || ""}`.toUpperCase() || "U"
@@ -96,12 +96,17 @@ export function AppSidebar() {
             </div>
           </div>
         </div>
-        <a href="/api/logout">
-          <Button variant="outline" size="sm" className="w-full justify-start gap-2 text-sidebar-foreground border-sidebar-border" data-testid="button-logout">
-            <LogOut className="w-3.5 h-3.5" />
-            Sign Out
-          </Button>
-        </a>
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full justify-start gap-2 text-sidebar-foreground border-sidebar-border"
+          data-testid="button-logout"
+          onClick={() => logout()}
+          disabled={isLoggingOut}
+        >
+          <LogOut className="w-3.5 h-3.5" />
+          {isLoggingOut ? "Signing out..." : "Sign Out"}
+        </Button>
       </SidebarFooter>
     </Sidebar>
   );

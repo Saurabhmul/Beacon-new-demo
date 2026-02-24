@@ -22,7 +22,7 @@ export async function registerRoutes(
   registerAuthRoutes(app);
 
   function getUserId(req: any): string {
-    return req.user?.claims?.sub;
+    return req.user?.id;
   }
 
   // Client Config

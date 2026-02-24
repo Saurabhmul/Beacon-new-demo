@@ -54,12 +54,12 @@ export default function LandingPage() {
             <a href="#how-it-works" className="text-sm text-muted-foreground transition-colors" data-testid="link-how-it-works">How It Works</a>
           </div>
           <div className="flex items-center gap-3">
-            <a href="/api/login">
+            <a href="/auth">
               <Button variant="outline" size="sm" data-testid="button-login" disabled={isLoading}>
                 Log In
               </Button>
             </a>
-            <a href="/api/login">
+            <a href="/auth">
               <Button size="sm" data-testid="button-get-started" disabled={isLoading}>
                 Get Started
                 <ArrowRight className="w-4 h-4 ml-1" />
@@ -85,7 +85,7 @@ export default function LandingPage() {
               Upload customer data, define your collection policies, and let AI recommend the right action for every borrower. Built for lenders who need consistency, speed, and compliance.
             </p>
             <div className="flex flex-wrap items-center gap-4">
-              <a href="/api/login">
+              <a href="/auth">
                 <Button size="lg" data-testid="button-hero-cta">
                   Start Free Pilot
                   <ChevronRight className="w-4 h-4 ml-1" />
@@ -175,7 +175,7 @@ export default function LandingPage() {
           <p className="text-lg text-muted-foreground mb-8">
             Join leading lenders using AI-powered decision support to improve outcomes and reduce risk.
           </p>
-          <a href="/api/login">
+          <a href="/auth">
             <Button size="lg" data-testid="button-cta-bottom">
               Start Your Free Pilot
               <ArrowRight className="w-4 h-4 ml-1" />
