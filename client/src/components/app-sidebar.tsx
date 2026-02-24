@@ -20,7 +20,6 @@ import {
   BookOpen,
   Upload,
   ClipboardList,
-  History,
   LogOut,
   Zap,
   Database,
@@ -33,7 +32,6 @@ const navItems = [
   { title: "Data Config", url: "/data-config", icon: Database },
   { title: "Upload Data", url: "/upload", icon: Upload },
   { title: "Review Queue", url: "/review", icon: ClipboardList },
-  { title: "Decision History", url: "/history", icon: History },
 ];
 
 export function AppSidebar() {

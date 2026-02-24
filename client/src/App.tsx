@@ -17,7 +17,6 @@ import DataConfigPage from "@/pages/data-config";
 import UploadPage from "@/pages/upload";
 import ReviewQueuePage from "@/pages/review-queue";
 import DecisionDetailPage from "@/pages/decision-detail";
-import DecisionHistoryPage from "@/pages/decision-history";
 
 function AuthenticatedLayout() {
   const style = {
@@ -42,7 +41,6 @@ function AuthenticatedLayout() {
               <Route path="/upload" component={UploadPage} />
               <Route path="/review" component={ReviewQueuePage} />
               <Route path="/review/:id" component={DecisionDetailPage} />
-              <Route path="/history" component={DecisionHistoryPage} />
               <Route component={DashboardPage} />
             </Switch>
           </main>

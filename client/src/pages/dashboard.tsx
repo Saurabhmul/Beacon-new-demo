@@ -154,7 +154,7 @@ export default function DashboardPage() {
         <div>
           <div className="flex items-center justify-between gap-4 mb-4">
             <h2 className="text-lg font-semibold">Recent Decisions</h2>
-            <Link href="/history">
+            <Link href="/review">
               <Button variant="outline" size="sm" data-testid="button-view-all-history">
                 View All
                 <ArrowRight className="w-3.5 h-3.5 ml-1" />
