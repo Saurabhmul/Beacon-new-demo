@@ -45,9 +45,13 @@ const companyFormSchema = z.object({
 
 type CompanyFormValues = z.infer<typeof companyFormSchema>;
 
-const MANDATORY_FIELDS = [
+const MANDATORY_LOAN_FIELDS = [
   "customer / account / loan id", "dpd_bucket",
   "outstanding_amount", "amount_due", "due_date",
+];
+
+const MANDATORY_PAYMENT_FIELDS = [
+  "customer / account / loan id", "date_of_payment", "amount_paid", "payment_status",
 ];
 
 const OPTIONAL_FIELDS = [
@@ -457,7 +461,9 @@ function DataConfigTab() {
   const { data: dataConfig, isLoading } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
   const { data: dpdStages = [] } = useQuery<DpdStage[]>({ queryKey: ["/api/dpd-stages"] });
 
-  const [mandatoryFields] = useState<string[]>(MANDATORY_FIELDS);
+  const [mandatoryFields] = useState<string[]>(MANDATORY_LOAN_FIELDS);
+  const [paymentAdditionalFields, setPaymentAdditionalFields] = useState<string[]>([]);
+  const [customPaymentField, setCustomPaymentField] = useState("");
   const [optionalFields, setOptionalFields] = useState<string[]>([]);
   const [customField, setCustomField] = useState("");
   const [hydrated, setHydrated] = useState(false);
@@ -604,8 +610,8 @@ function DataConfigTab() {
       <div className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Mandatory Data Fields</CardTitle>
-              <CardDescription>These fields are required in every upload for the pilot.</CardDescription>
+              <CardTitle className="text-base">Mandatory Loan Data</CardTitle>
+              <CardDescription>These fields are required in every loan data upload.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap gap-2">
@@ -614,6 +620,50 @@ function DataConfigTab() {
                     {f.replace(/_/g, " ")}
                   </Badge>
                 ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Mandatory Payment History</CardTitle>
+              <CardDescription>These fields are required in every payment history upload.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {MANDATORY_PAYMENT_FIELDS.map((f) => (
+                  <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
+                    {f.replace(/_/g, " ")}
+                  </Badge>
+                ))}
+                {paymentAdditionalFields.map((f) => (
+                  <Badge key={f} variant="secondary" className="text-xs py-1 px-2.5">
+                    {f.replace(/_/g, " ")}
+                  </Badge>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={customPaymentField}
+                  onChange={(e) => setCustomPaymentField(e.target.value)}
+                  placeholder="Add additional field (e.g. payment method)"
+                  className="max-w-[280px]"
+                  data-testid="input-custom-payment-field"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (customPaymentField.trim()) {
+                      setPaymentAdditionalFields((prev) => [...prev, customPaymentField.trim().replace(/\s+/g, "_")]);
+                      setCustomPaymentField("");
+                    }
+                  }}
+                  data-testid="button-add-payment-field"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" />
+                  Add
+                </Button>
               </div>
             </CardContent>
           </Card>
