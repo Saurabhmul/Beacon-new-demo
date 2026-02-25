@@ -346,6 +346,14 @@ export async function registerRoutes(
     }
   });
 
+  function findIdColumn(record: Record<string, unknown>): string | undefined {
+    const keys = Object.keys(record);
+    return keys.find(k => {
+      const lower = k.toLowerCase();
+      return lower.includes("customer") || lower.includes("account") || lower.includes("loan");
+    });
+  }
+
   app.post("/api/uploads", isAuthenticated, upload.single("file"), async (req, res) => {
     try {
       const userId = getUserId(req);
@@ -357,32 +365,65 @@ export async function registerRoutes(
 
       const category = req.body.category || "loan_data";
 
-      let records: Record<string, unknown>[] = [];
+      let newRecords: Record<string, unknown>[] = [];
       const content = file.buffer.toString("utf-8");
 
       if (file.originalname.endsWith(".csv")) {
         const parsed = Papa.parse(content, { header: true, skipEmptyLines: true });
-        records = parsed.data as Record<string, unknown>[];
+        newRecords = parsed.data as Record<string, unknown>[];
       } else if (file.originalname.endsWith(".json")) {
         const json = JSON.parse(content);
-        records = Array.isArray(json) ? json : [json];
+        newRecords = Array.isArray(json) ? json : [json];
       } else {
         return res.status(400).json({ error: "Unsupported file type. Use CSV or JSON." });
       }
 
-      const uploadRecord = await storage.createUpload({
-        fileName: file.originalname,
-        fileType: file.originalname.endsWith(".csv") ? "CSV" : "JSON",
-        fileSize: file.size,
-        recordCount: records.length,
-        status: "uploaded",
-        uploadCategory: category,
-        uploadedData: records,
-        userId,
-        clientConfigId: config.id,
-      });
+      const existingUpload = await storage.getUploadByCategory(userId, category);
 
-      res.status(201).json(uploadRecord);
+      if (existingUpload && existingUpload.uploadedData) {
+        const existingRecords = existingUpload.uploadedData as Record<string, unknown>[];
+        const idCol = newRecords.length > 0 ? findIdColumn(newRecords[0]) : undefined;
+
+        let mergedRecords: Record<string, unknown>[];
+
+        if (idCol) {
+          const recordMap = new Map<string, Record<string, unknown>>();
+          for (const r of existingRecords) {
+            const id = String(r[idCol] || "");
+            if (id) recordMap.set(id, r);
+          }
+          for (const r of newRecords) {
+            const id = String(r[idCol] || "");
+            if (id) recordMap.set(id, r);
+          }
+          mergedRecords = Array.from(recordMap.values());
+        } else {
+          mergedRecords = [...existingRecords, ...newRecords];
+        }
+
+        const updatedUpload = await storage.updateUploadData(existingUpload.id, {
+          uploadedData: mergedRecords,
+          recordCount: mergedRecords.length,
+          fileName: file.originalname,
+          fileSize: file.size,
+        });
+
+        res.status(200).json(updatedUpload);
+      } else {
+        const uploadRecord = await storage.createUpload({
+          fileName: file.originalname,
+          fileType: file.originalname.endsWith(".csv") ? "CSV" : "JSON",
+          fileSize: file.size,
+          recordCount: newRecords.length,
+          status: "uploaded",
+          uploadCategory: category,
+          uploadedData: newRecords,
+          userId,
+          clientConfigId: config.id,
+        });
+
+        res.status(201).json(uploadRecord);
+      }
     } catch (error) {
       console.error("Upload error:", error);
       res.status(500).json({ error: "Failed to upload file" });

@@ -385,11 +385,22 @@ export default function UploadPage() {
 
   const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"] });
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
+  const { data: conversationUploads = [] } = useQuery<DataUpload[]>({
+    queryKey: ["/api/uploads", "conversation_history"],
+    queryFn: async () => {
+      const res = await fetch(`/api/uploads?category=conversation_history`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
 
   const showConversationHistory = useMemo(() => {
-    if (!dataConfig?.optionalFields) return false;
-    return (dataConfig.optionalFields as string[]).includes("conversation_history");
-  }, [dataConfig]);
+    const enabledInConfig = dataConfig?.optionalFields
+      ? (dataConfig.optionalFields as string[]).includes("conversation_history")
+      : false;
+    const hasExistingData = conversationUploads.length > 0;
+    return enabledInConfig || hasExistingData;
+  }, [dataConfig, conversationUploads]);
 
   const processMutation = useMutation({
     mutationFn: async (uploadId: number) => {

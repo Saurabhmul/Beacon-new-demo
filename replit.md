@@ -33,6 +33,8 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - Each section has: sample CSV download, drag-and-drop upload, data table viewer with search by customer ID, column filter, and pagination
 - AI analysis (Analyze button) available only on Loan Data uploads
 - Upload category stored in `uploadCategory` field on `data_uploads` table
+- Conversation History tab persists if data exists, even when disabled in config
+- CSV uploads upsert records by customer/loan/account ID — re-uploading updates existing records and adds new ones
 
 ## Database Tables
 - `users` / `sessions` - Auth

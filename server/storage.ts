@@ -30,8 +30,10 @@ export interface IStorage {
   deleteDpdStage(id: number): Promise<void>;
 
   getUploads(userId: string): Promise<DataUpload[]>;
+  getUploadByCategory(userId: string, category: string): Promise<DataUpload | undefined>;
   getUpload(id: number): Promise<DataUpload | undefined>;
   createUpload(data: InsertDataUpload): Promise<DataUpload>;
+  updateUploadData(id: number, data: { uploadedData: Record<string, unknown>[]; recordCount: number; fileName: string; fileSize: number }): Promise<DataUpload>;
   updateUploadStatus(id: number, status: string): Promise<void>;
 
   getDecisions(userId: string, status?: string): Promise<Decision[]>;
@@ -121,6 +123,18 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(dataUploads).where(eq(dataUploads.userId, userId)).orderBy(desc(dataUploads.createdAt));
   }
 
+  async getUploadByCategory(userId: string, category: string): Promise<DataUpload | undefined> {
+    const [upload] = await db.select().from(dataUploads)
+      .where(and(
+        eq(dataUploads.userId, userId),
+        eq(dataUploads.uploadCategory, category),
+        eq(dataUploads.status, "uploaded")
+      ))
+      .orderBy(desc(dataUploads.createdAt))
+      .limit(1);
+    return upload || undefined;
+  }
+
   async getUpload(id: number): Promise<DataUpload | undefined> {
     const [upload] = await db.select().from(dataUploads).where(eq(dataUploads.id, id));
     return upload || undefined;
@@ -128,6 +142,19 @@ export class DatabaseStorage implements IStorage {
 
   async createUpload(data: InsertDataUpload): Promise<DataUpload> {
     const [upload] = await db.insert(dataUploads).values(data).returning();
+    return upload;
+  }
+
+  async updateUploadData(id: number, data: { uploadedData: Record<string, unknown>[]; recordCount: number; fileName: string; fileSize: number }): Promise<DataUpload> {
+    const [upload] = await db.update(dataUploads)
+      .set({
+        uploadedData: data.uploadedData,
+        recordCount: data.recordCount,
+        fileName: data.fileName,
+        fileSize: data.fileSize,
+      })
+      .where(eq(dataUploads.id, id))
+      .returning();
     return upload;
   }
 
