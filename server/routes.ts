@@ -280,10 +280,69 @@ export async function registerRoutes(
   app.get("/api/uploads", isAuthenticated, async (req, res) => {
     try {
       const userId = getUserId(req);
+      const category = req.query.category as string | undefined;
       const uploads = await storage.getUploads(userId);
-      res.json(uploads);
+      if (category) {
+        res.json(uploads.filter(u => u.uploadCategory === category));
+      } else {
+        res.json(uploads);
+      }
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch uploads" });
+    }
+  });
+
+  const MANDATORY_LOAN_FIELDS = [
+    "customer / account / loan id", "dpd_bucket",
+    "outstanding_amount", "amount_due", "due_date",
+  ];
+
+  const MANDATORY_PAYMENT_FIELDS = [
+    "customer / account / loan id", "date_of_payment", "amount_paid", "payment_status",
+  ];
+
+  const CONVERSATION_HISTORY_FIELDS = [
+    "customer / account / loan id", "date", "channel", "direction", "message_content",
+  ];
+
+  app.get("/api/uploads/sample/:category", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const category = req.params.category;
+      const dataConfig = await storage.getDataConfig(userId);
+
+      let fields: string[] = [];
+      let filename = "sample.csv";
+
+      if (category === "loan_data") {
+        fields = [...MANDATORY_LOAN_FIELDS];
+        if (dataConfig?.optionalFields) {
+          const optional = dataConfig.optionalFields as string[];
+          fields.push(...optional.filter(f => f !== "conversation_history"));
+        }
+        filename = "sample_loan_data.csv";
+      } else if (category === "payment_history") {
+        fields = [...MANDATORY_PAYMENT_FIELDS];
+        if (dataConfig?.paymentAdditionalFields) {
+          fields.push(...(dataConfig.paymentAdditionalFields as string[]));
+        }
+        filename = "sample_payment_history.csv";
+      } else if (category === "conversation_history") {
+        fields = [...CONVERSATION_HISTORY_FIELDS];
+        filename = "sample_conversation_history.csv";
+      } else {
+        return res.status(400).json({ error: "Invalid category" });
+      }
+
+      const header = fields.join(",");
+      const sampleRow = fields.map(() => "").join(",");
+      const csv = header + "\n" + sampleRow + "\n";
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(csv);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to generate sample CSV" });
     }
   });
 
@@ -295,6 +354,8 @@ export async function registerRoutes(
 
       const file = req.file;
       if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+      const category = req.body.category || "loan_data";
 
       let records: Record<string, unknown>[] = [];
       const content = file.buffer.toString("utf-8");
@@ -315,6 +376,7 @@ export async function registerRoutes(
         fileSize: file.size,
         recordCount: records.length,
         status: "uploaded",
+        uploadCategory: category,
         uploadedData: records,
         userId,
         clientConfigId: config.id,

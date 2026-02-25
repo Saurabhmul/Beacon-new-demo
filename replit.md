@@ -13,30 +13,37 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 
 ## Key Pages
 - `/` - Landing page (unauthenticated) or Dashboard (authenticated)
-- `/config` - Client company configuration
-- `/rulebook` - SOP/Rulebook management (text or file upload)
-- `/data-config` - Data field configuration and AI prompt template
-- `/upload` - CSV/JSON file upload and AI processing
+- `/config` - Client Configuration (4 tabs: Company Details, Action Rulebook, Data Configuration, Prompt Config)
+- `/upload` - Upload Data (tabbed: Loan Data, Payment History, Conversation History if enabled)
 - `/review` - Pending decisions review queue
 - `/review/:id` - Individual decision detail with approve/reject
 - `/history` - Decision history
 
 ## Data Flow
-1. Manager configures client details
-2. Manager uploads SOP rules (text or PDF/JPG with OCR)
-3. Manager configures data fields and AI prompt template
-4. Manager uploads customer data (CSV/JSON)
-5. AI processes each customer against SOP rules
+1. Manager configures client details in Client Configuration
+2. Manager uploads SOP rules (text or PDF/JPG with OCR) in Action Rulebook tab
+3. Manager configures data fields (mandatory loan + payment fields, optional fields) and AI prompt template
+4. Manager uploads customer data per category (Loan Data, Payment History, optional Conversation History)
+5. AI processes loan data against SOP rules
 6. Agent reviews decisions in the review queue
 7. Agent approves/rejects with reasoning
 
+## Upload Data Page
+- Dynamic sections based on Data Configuration: Loan Data (always), Payment History (always), Conversation History (if selected in optional fields)
+- Each section has: sample CSV download, drag-and-drop upload, data table viewer with search by customer ID, column filter, and pagination
+- AI analysis (Analyze button) available only on Loan Data uploads
+- Upload category stored in `uploadCategory` field on `data_uploads` table
+
 ## Database Tables
-- `users` / `sessions` - Replit Auth
+- `users` / `sessions` - Auth
 - `client_configs` - Company details per user
 - `rulebooks` - SOP documents/text per client
-- `data_configs` - Field mapping and prompt templates
-- `data_uploads` - Uploaded file records
+- `data_configs` - Field mapping, prompt templates, payment additional fields
+- `data_uploads` - Uploaded file records with `uploadCategory` (loan_data, payment_history, conversation_history)
 - `decisions` - AI decisions with review status
+- `dpd_stages` - Configurable DPD bucket stages
 
 ## Recent Changes
+- 2026-02-25: Rebuilt Upload Data page with categorized sections, sample CSV downloads, data table viewers with search/filter/pagination
+- 2026-02-25: Added `uploadCategory` to data_uploads, `paymentAdditionalFields` to data_configs
 - 2026-02-24: Initial MVP build with all core features

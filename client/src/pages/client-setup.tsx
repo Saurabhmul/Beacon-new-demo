@@ -473,6 +473,9 @@ function DataConfigTab() {
       if (dataConfig.optionalFields && (dataConfig.optionalFields as string[]).length > 0) {
         setOptionalFields(dataConfig.optionalFields as string[]);
       }
+      if (dataConfig.paymentAdditionalFields && (dataConfig.paymentAdditionalFields as string[]).length > 0) {
+        setPaymentAdditionalFields(dataConfig.paymentAdditionalFields as string[]);
+      }
       setHydrated(true);
     }
   }, [dataConfig, hydrated]);
@@ -491,6 +494,7 @@ function DataConfigTab() {
       const res = await apiRequest(method, "/api/data-config", {
         mandatoryFields,
         optionalFields,
+        paymentAdditionalFields,
         dpdBuckets: [],
       });
       return res.json();

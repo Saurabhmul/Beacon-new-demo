@@ -1,12 +1,14 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -15,24 +17,68 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Upload, FileUp, FileText, Loader2, Brain, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
-import type { DataUpload, ClientConfig, Rulebook } from "@shared/schema";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Upload, FileUp, FileText, Loader2, Brain, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark } from "lucide-react";
+import type { DataUpload, ClientConfig, DataConfig } from "@shared/schema";
 
-export default function UploadPage() {
+type UploadCategory = "loan_data" | "payment_history" | "conversation_history";
+
+const CATEGORY_META: Record<UploadCategory, { label: string; icon: typeof Landmark; description: string }> = {
+  loan_data: {
+    label: "Loan Data",
+    icon: Landmark,
+    description: "Upload loan portfolio data with customer details, DPD buckets, and outstanding amounts.",
+  },
+  payment_history: {
+    label: "Payment History",
+    icon: CreditCard,
+    description: "Upload payment transaction history for customers.",
+  },
+  conversation_history: {
+    label: "Conversation History",
+    icon: MessageSquare,
+    description: "Upload customer interaction and conversation logs.",
+  },
+};
+
+const PAGE_SIZE = 10;
+
+function UploadSection({ category, processing, onProcess }: {
+  category: UploadCategory;
+  processing: boolean;
+  onProcess: (uploadId: number) => void;
+}) {
   const { toast } = useToast();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [processing, setProcessing] = useState(false);
-  const [processProgress, setProcessProgress] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [columnFilter, setColumnFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
+  const [expandedUploadId, setExpandedUploadId] = useState<number | null>(null);
 
-  const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"] });
-  const { data: rulebooks } = useQuery<Rulebook[]>({ queryKey: ["/api/rulebooks"] });
-  const { data: uploads, isLoading } = useQuery<DataUpload[]>({ queryKey: ["/api/uploads"] });
+  const meta = CATEGORY_META[category];
+  const Icon = meta.icon;
+
+  const { data: uploads = [], isLoading } = useQuery<DataUpload[]>({
+    queryKey: ["/api/uploads", category],
+    queryFn: async () => {
+      const res = await fetch(`/api/uploads?category=${category}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+  });
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
       if (!selectedFile) throw new Error("No file selected");
       const formData = new FormData();
       formData.append("file", selectedFile);
+      formData.append("category", category);
       const res = await fetch("/api/uploads", {
         method: "POST",
         body: formData,
@@ -45,14 +91,305 @@ export default function UploadPage() {
       return res.json();
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/uploads", category] });
       queryClient.invalidateQueries({ queryKey: ["/api/uploads"] });
-      toast({ title: "File uploaded", description: "Data has been uploaded and validated." });
+      toast({ title: "File uploaded", description: `${meta.label} has been uploaded and validated.` });
       setSelectedFile(null);
     },
     onError: (err: Error) => {
       toast({ title: "Upload failed", description: err.message, variant: "destructive" });
     },
   });
+
+  const handleFileDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file && (file.name.endsWith(".csv") || file.name.endsWith(".json"))) {
+      setSelectedFile(file);
+    } else {
+      toast({ title: "Invalid file", description: "Please upload a CSV or JSON file.", variant: "destructive" });
+    }
+  }, [toast]);
+
+  const downloadSampleCsv = () => {
+    window.open(`/api/uploads/sample/${category}`, "_blank");
+  };
+
+  const latestUpload = uploads.length > 0 ? uploads[0] : null;
+  const viewingUpload = expandedUploadId
+    ? uploads.find(u => u.id === expandedUploadId)
+    : latestUpload;
+
+  useEffect(() => {
+    setPage(1);
+    setSearchQuery("");
+    setColumnFilter("all");
+  }, [viewingUpload?.id]);
+
+  const records = useMemo(() => {
+    if (!viewingUpload?.uploadedData) return [];
+    return viewingUpload.uploadedData as Record<string, unknown>[];
+  }, [viewingUpload]);
+
+  const columns = useMemo(() => {
+    if (records.length === 0) return [];
+    return Object.keys(records[0]);
+  }, [records]);
+
+  const idColumn = useMemo(() => {
+    return columns.find(c =>
+      c.toLowerCase().includes("customer") ||
+      c.toLowerCase().includes("account") ||
+      c.toLowerCase().includes("loan") ||
+      c === "customer / account / loan id"
+    ) || columns[0] || "";
+  }, [columns]);
+
+  const filteredRecords = useMemo(() => {
+    let result = records;
+    if (searchQuery.trim() && idColumn) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(r => {
+        const val = String(r[idColumn] || "").toLowerCase();
+        return val.includes(q);
+      });
+    }
+    if (columnFilter !== "all" && columnFilter) {
+      result = result.filter(r => {
+        const val = r[columnFilter];
+        return val !== null && val !== undefined && val !== "";
+      });
+    }
+    return result;
+  }, [records, searchQuery, idColumn, columnFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE));
+  const paginatedRecords = filteredRecords.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Icon className="w-5 h-5 text-primary" />
+          <h2 className="text-lg font-semibold">{meta.label}</h2>
+        </div>
+        <Button variant="outline" size="sm" onClick={downloadSampleCsv} data-testid={`button-download-sample-${category}`}>
+          <Download className="w-3.5 h-3.5 mr-1.5" />
+          Download Sample CSV
+        </Button>
+      </div>
+
+      <Card>
+        <CardContent className="pt-6">
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleFileDrop}
+            className="border-2 border-dashed border-border rounded-md p-6 text-center transition-colors hover:border-primary/50"
+          >
+            {selectedFile ? (
+              <div className="space-y-3">
+                <FileUp className="w-8 h-8 text-primary mx-auto" />
+                <p className="text-sm font-medium">{selectedFile.name}</p>
+                <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                <div className="flex items-center justify-center gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)} data-testid={`button-remove-${category}`}>
+                    Remove
+                  </Button>
+                  <Button size="sm" onClick={() => uploadMutation.mutate()} disabled={uploadMutation.isPending} data-testid={`button-upload-${category}`}>
+                    {uploadMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                    Upload
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Upload className="w-8 h-8 text-muted-foreground mx-auto" />
+                <p className="text-sm text-muted-foreground">{meta.description}</p>
+                <label>
+                  <input
+                    type="file"
+                    accept=".csv,.json"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) setSelectedFile(file);
+                    }}
+                    data-testid={`input-file-${category}`}
+                  />
+                  <Button variant="outline" size="sm" asChild>
+                    <span>Browse Files</span>
+                  </Button>
+                </label>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {isLoading ? (
+        <Skeleton className="h-40 w-full" />
+      ) : uploads.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Uploaded Files</CardTitle>
+              {uploads.length > 1 && (
+                <Select
+                  value={String(viewingUpload?.id || "")}
+                  onValueChange={(val) => setExpandedUploadId(Number(val))}
+                >
+                  <SelectTrigger className="w-[220px] h-8 text-xs" data-testid={`select-upload-${category}`}>
+                    <SelectValue placeholder="Select upload" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {uploads.map((u) => (
+                      <SelectItem key={u.id} value={String(u.id)}>
+                        {u.fileName} ({u.recordCount} records)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            {viewingUpload && (
+              <div className="flex items-center gap-3 mt-2">
+                <div className="flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">{viewingUpload.fileName}</span>
+                </div>
+                <Badge variant="secondary" className="text-[10px]">{viewingUpload.fileType}</Badge>
+                <span className="text-xs text-muted-foreground">{viewingUpload.recordCount} records</span>
+                <Badge
+                  variant={viewingUpload.status === "processed" ? "default" : viewingUpload.status === "processing" ? "secondary" : "outline"}
+                  className="text-[10px]"
+                >
+                  {viewingUpload.status === "processed" && <CheckCircle2 className="w-3 h-3 mr-1" />}
+                  {viewingUpload.status}
+                </Badge>
+                {category === "loan_data" && viewingUpload.status === "uploaded" && (
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="ml-auto h-7 text-xs"
+                    onClick={() => onProcess(viewingUpload.id)}
+                    disabled={processing}
+                    data-testid={`button-process-${viewingUpload.id}`}
+                  >
+                    <Brain className="w-3.5 h-3.5 mr-1" />
+                    Analyze with AI
+                  </Button>
+                )}
+              </div>
+            )}
+          </CardHeader>
+          {records.length > 0 && (
+            <CardContent className="pt-0">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="relative flex-1 max-w-xs">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder={`Search by ${idColumn.replace(/_/g, " ")}...`}
+                    value={searchQuery}
+                    onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+                    className="pl-8 h-8 text-xs"
+                    data-testid={`input-search-${category}`}
+                  />
+                </div>
+                <Select value={columnFilter} onValueChange={(val) => { setColumnFilter(val); setPage(1); }}>
+                  <SelectTrigger className="w-[180px] h-8 text-xs" data-testid={`select-filter-${category}`}>
+                    <SelectValue placeholder="Filter by column" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All columns</SelectItem>
+                    {columns.map((col) => (
+                      <SelectItem key={col} value={col}>{col.replace(/_/g, " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-xs text-muted-foreground ml-auto">
+                  {filteredRecords.length} of {records.length} records
+                </span>
+              </div>
+
+              <div className="border rounded-md overflow-auto max-h-[400px]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {columns.map((col) => (
+                        <TableHead key={col} className="text-xs whitespace-nowrap">{col.replace(/_/g, " ")}</TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {paginatedRecords.map((row, i) => (
+                      <TableRow key={i} data-testid={`row-data-${category}-${i}`}>
+                        {columns.map((col) => (
+                          <TableCell key={col} className="text-xs py-2 whitespace-nowrap max-w-[200px] truncate">
+                            {String(row[col] ?? "")}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                    {paginatedRecords.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="text-center text-sm text-muted-foreground py-6">
+                          No matching records found.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between mt-3">
+                  <span className="text-xs text-muted-foreground">
+                    Page {page} of {totalPages}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      disabled={page <= 1}
+                      onClick={() => setPage(p => p - 1)}
+                      data-testid={`button-prev-${category}`}
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      disabled={page >= totalPages}
+                      onClick={() => setPage(p => p + 1)}
+                      data-testid={`button-next-${category}`}
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          )}
+        </Card>
+      ) : null}
+    </div>
+  );
+}
+
+export default function UploadPage() {
+  const { toast } = useToast();
+  const [processing, setProcessing] = useState(false);
+  const [processProgress, setProcessProgress] = useState(0);
+
+  const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"] });
+  const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
+
+  const showConversationHistory = useMemo(() => {
+    if (!dataConfig?.optionalFields) return false;
+    return (dataConfig.optionalFields as string[]).includes("conversation_history");
+  }, [dataConfig]);
 
   const processMutation = useMutation({
     mutationFn: async (uploadId: number) => {
@@ -100,6 +437,7 @@ export default function UploadPage() {
     onSuccess: () => {
       setProcessing(false);
       queryClient.invalidateQueries({ queryKey: ["/api/uploads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/uploads", "loan_data"] });
       queryClient.invalidateQueries({ queryKey: ["/api/decisions/stats"] });
       toast({ title: "Processing complete", description: "AI decisions have been generated for all customers." });
     },
@@ -108,16 +446,6 @@ export default function UploadPage() {
       toast({ title: "Processing failed", description: err.message, variant: "destructive" });
     },
   });
-
-  const handleFileDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file && (file.name.endsWith(".csv") || file.name.endsWith(".json"))) {
-      setSelectedFile(file);
-    } else {
-      toast({ title: "Invalid file", description: "Please upload a CSV or JSON file.", variant: "destructive" });
-    }
-  }, [toast]);
 
   if (!config) {
     return (
@@ -133,6 +461,10 @@ export default function UploadPage() {
     );
   }
 
+  const categories: UploadCategory[] = showConversationHistory
+    ? ["loan_data", "payment_history", "conversation_history"]
+    : ["loan_data", "payment_history"];
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
@@ -140,75 +472,9 @@ export default function UploadPage() {
           Upload Data
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Upload CSV or JSON files with customer loan and payment data.
+          Upload structured data files for AI analysis. Each section requires specific fields — download the sample CSV for reference.
         </p>
       </div>
-
-      {rulebooks && rulebooks.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Active Rulebook</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-primary" />
-              <span className="text-sm font-medium">{rulebooks[0].title}</span>
-              <Badge variant="secondary" className="text-[10px]">Active</Badge>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Upload Customer Data</CardTitle>
-          <CardDescription>Drag and drop or browse for CSV/JSON files containing customer data.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleFileDrop}
-            className="border-2 border-dashed border-border rounded-md p-8 text-center transition-colors"
-          >
-            {selectedFile ? (
-              <div className="space-y-3">
-                <FileUp className="w-10 h-10 text-primary mx-auto" />
-                <p className="text-sm font-medium">{selectedFile.name}</p>
-                <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
-                <div className="flex items-center justify-center gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)} data-testid="button-remove-upload">
-                    Remove
-                  </Button>
-                  <Button size="sm" onClick={() => uploadMutation.mutate()} disabled={uploadMutation.isPending} data-testid="button-upload-file">
-                    {uploadMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-                    Upload
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <Upload className="w-10 h-10 text-muted-foreground mx-auto" />
-                <p className="text-sm text-muted-foreground">Drag & drop a CSV or JSON file here</p>
-                <label>
-                  <input
-                    type="file"
-                    accept=".csv,.json"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) setSelectedFile(file);
-                    }}
-                    data-testid="input-data-file"
-                  />
-                  <Button variant="outline" size="sm" asChild>
-                    <span>Browse Files</span>
-                  </Button>
-                </label>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
 
       {processing && (
         <Card>
@@ -225,77 +491,29 @@ export default function UploadPage() {
         </Card>
       )}
 
-      <div>
-        <h2 className="text-lg font-semibold mb-3">Uploaded Files</h2>
-        {isLoading ? (
-          <Skeleton className="h-40 w-full" />
-        ) : uploads && uploads.length > 0 ? (
-          <Card>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>File</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Records</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {uploads.map((u) => (
-                    <TableRow key={u.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-muted-foreground" />
-                          <span className="text-sm font-medium" data-testid={`text-upload-name-${u.id}`}>{u.fileName}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary" className="text-[10px]">{u.fileType}</Badge>
-                      </TableCell>
-                      <TableCell className="text-sm">{u.recordCount}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={u.status === "processed" ? "default" : u.status === "processing" ? "secondary" : "outline"}
-                          className="text-[10px]"
-                        >
-                          {u.status === "processed" && <CheckCircle2 className="w-3 h-3 mr-1" />}
-                          {u.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {new Date(u.createdAt).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {u.status === "uploaded" && (
-                          <Button
-                            size="sm"
-                            onClick={() => processMutation.mutate(u.id)}
-                            disabled={processing}
-                            data-testid={`button-process-${u.id}`}
-                          >
-                            <Brain className="w-3.5 h-3.5 mr-1.5" />
-                            Analyze
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card>
-            <CardContent className="p-8 text-center">
-              <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">No files uploaded yet.</p>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+      <Tabs defaultValue="loan_data">
+        <TabsList data-testid="tabs-upload-category">
+          {categories.map((cat) => {
+            const Icon = CATEGORY_META[cat].icon;
+            return (
+              <TabsTrigger key={cat} value={cat} data-testid={`tab-${cat}`}>
+                <Icon className="w-4 h-4 mr-1.5" />
+                {CATEGORY_META[cat].label}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+
+        {categories.map((cat) => (
+          <TabsContent key={cat} value={cat} className="mt-4">
+            <UploadSection
+              category={cat}
+              processing={processing}
+              onProcess={(id) => processMutation.mutate(id)}
+            />
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 }

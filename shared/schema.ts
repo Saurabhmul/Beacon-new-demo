@@ -37,6 +37,7 @@ export const dataConfigs = pgTable("data_configs", {
   userId: varchar("user_id").notNull(),
   mandatoryFields: jsonb("mandatory_fields").$type<string[]>().default([]).notNull(),
   optionalFields: jsonb("optional_fields").$type<string[]>().default([]).notNull(),
+  paymentAdditionalFields: jsonb("payment_additional_fields").$type<string[]>().default([]).notNull(),
   dpdBuckets: jsonb("dpd_buckets").$type<string[]>().default([]).notNull(),
   promptTemplate: text("prompt_template"),
   outputFormat: text("output_format"),
@@ -65,6 +66,7 @@ export const dataUploads = pgTable("data_uploads", {
   fileSize: integer("file_size").notNull(),
   recordCount: integer("record_count").default(0),
   status: text("status").default("uploaded").notNull(),
+  uploadCategory: text("upload_category").default("loan_data").notNull(),
   uploadedData: jsonb("uploaded_data").$type<Record<string, unknown>[]>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
