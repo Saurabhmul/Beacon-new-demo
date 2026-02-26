@@ -1,0 +1,76 @@
+Hi team — our Replit Preview frequently shows “Your app crashed” during development, but the server logs still show Express continuing to serve requests (port 5000). Restarting the dev server temporarily fixes it, but it returns.
+
+Can you please investigate and confirm:
+
+Process kill reason (OOM / watchdog / container restart):
+
+Are you seeing any OOM kills or runtime restarts for this repl?
+
+Please share the termination reason (signal/exit code) and resource graphs if possible.
+
+Port / routing mismatch in Preview:
+
+Our dev server reports: serving on port 5000.
+
+Can you confirm Preview is routing to the correct port and not expecting 3000/5173, etc.?
+
+If Replit requires a specific exposed port, please advise the correct config.
+
+Multiple processes / dev servers:
+
+We may be running a backend + frontend dev server (Vite/React) and proxying.
+
+Can you confirm whether Replit is detecting the correct “web” process and not attaching Preview to a process that exits?
+
+Node/runtime stability:
+
+Please confirm the Node version used and whether it’s changing between runs.
+
+If needed, help us pin Node and ensure consistent runtime.
+
+We also see a PostCSS warning:
+A PostCSS plugin did not pass the 'from' option to postcss.parse
+— if you believe Replit is treating this as fatal or it correlates with the crash, please advise.
+
+Thanks!
+
+What you can try on your side (often fixes it permanently)
+1) Make sure the frontend dev server (Vite) binds to 0.0.0.0
+
+If you have a Vite dev server, it must listen on 0.0.0.0 in Replit (not just localhost), or Preview will “crash” / disconnect.
+
+In vite.config.ts:
+
+set host to true or "0.0.0.0"
+
+set strictPort to true
+
+pick a stable port
+
+2) Ensure Replit Preview is pointing at the right port
+
+If Express is on 5000 but Vite is on 5173 (common), Preview may randomly attach to the wrong one unless configured.
+
+Typical stable approach:
+
+Vite runs on 5173
+
+Express runs on 5000
+
+Preview points to Vite (5173)
+
+Vite proxies /api → localhost:5000
+
+(or the reverse: serve built frontend from Express in dev, but that’s less common)
+
+3) Pin PostCSS/Tailwind versions (warning source)
+
+If this started “first time”, it often coincides with a dependency bump or lockfile change.
+
+Make sure postcss, autoprefixer, tailwindcss are compatible and pinned.
+
+Reinstall cleanly: delete node_modules + lockfile, reinstall, commit lockfile.
+
+4) Ask Replit explicitly if you’re hitting memory limits
+
+This exact “works until it doesn’t, restarting helps” pattern is very often OOM kills during dev (Vite + TS + Prisma + etc. can spike RAM).
