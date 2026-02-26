@@ -12,8 +12,11 @@ export function getSession() {
     createTableIfMissing: true,
     ttl: sessionTtl,
     tableName: "sessions",
+    errorLog: (err: Error) => {
+      console.error("Session store error:", err.message);
+    },
   });
-  return session({
+  const sessionMiddleware = session({
     secret: process.env.SESSION_SECRET!,
     store: sessionStore,
     resave: false,
@@ -24,6 +27,17 @@ export function getSession() {
       maxAge: sessionTtl,
     },
   });
+  return (req: any, res: any, next: any) => {
+    sessionMiddleware(req, res, (err: any) => {
+      if (err) {
+        console.error("Session middleware error:", err.message);
+        if (req.path.startsWith("/api")) {
+          return res.status(500).json({ message: "Session error" });
+        }
+      }
+      next();
+    });
+  };
 }
 
 declare module "express-session" {
