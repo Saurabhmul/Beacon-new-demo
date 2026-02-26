@@ -334,8 +334,23 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid category" });
       }
 
+      const SAMPLE_VALUES: Record<string, string> = {
+        "customer / account / loan id": "CUST001",
+        "dpd_bucket": "30 or Easy",
+        "amount_due": "5000",
+        "minimum_due": "1500",
+        "due_date": "2026-01-15",
+        "date_of_payment": "2026-01-10",
+        "amount_paid": "5000",
+        "payment_status": "paid",
+        "date": "2026-01-12",
+        "channel": "phone",
+        "direction": "inbound",
+        "message_content": "Customer called regarding payment",
+      };
+
       const header = fields.join(",");
-      const sampleRow = fields.map(() => "").join(",");
+      const sampleRow = fields.map(f => SAMPLE_VALUES[f] || "").join(",");
       const csv = header + "\n" + sampleRow + "\n";
 
       res.setHeader("Content-Type", "text/csv");

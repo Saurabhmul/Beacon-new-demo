@@ -54,6 +54,12 @@ const MANDATORY_PAYMENT_FIELDS = [
   "customer / account / loan id", "date_of_payment", "amount_paid", "payment_status",
 ];
 
+const FIELD_HINTS: Record<string, string> = {
+  due_date: "YYYY-MM-DD",
+  date_of_payment: "YYYY-MM-DD",
+  dpd_bucket: "days or stage e.g. Easy, Medium, Hard",
+};
+
 const OPTIONAL_FIELDS = [
   "conversation_history", "income_and_employment_data",
   "credit_bureau_data", "compliance_policy", "knowledge_base",
@@ -620,9 +626,14 @@ function DataConfigTab() {
             <CardContent>
               <div className="flex flex-wrap gap-2">
                 {mandatoryFields.map((f) => (
-                  <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
-                    {f.replace(/_/g, " ")}
-                  </Badge>
+                  <div key={f} className="flex flex-col items-start">
+                    <Badge variant="default" className="text-xs py-1 px-2.5">
+                      {f.replace(/_/g, " ")}
+                    </Badge>
+                    {FIELD_HINTS[f] && (
+                      <span className="text-[10px] text-muted-foreground mt-0.5 ml-1">{FIELD_HINTS[f]}</span>
+                    )}
+                  </div>
                 ))}
               </div>
             </CardContent>
@@ -636,9 +647,14 @@ function DataConfigTab() {
             <CardContent>
               <div className="flex flex-wrap gap-2 mb-4">
                 {MANDATORY_PAYMENT_FIELDS.map((f) => (
-                  <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
-                    {f.replace(/_/g, " ")}
-                  </Badge>
+                  <div key={f} className="flex flex-col items-start">
+                    <Badge variant="default" className="text-xs py-1 px-2.5">
+                      {f.replace(/_/g, " ")}
+                    </Badge>
+                    {FIELD_HINTS[f] && (
+                      <span className="text-[10px] text-muted-foreground mt-0.5 ml-1">{FIELD_HINTS[f]}</span>
+                    )}
+                  </div>
                 ))}
                 {paymentAdditionalFields.map((f) => (
                   <Badge key={f} variant="secondary" className="text-xs py-1 px-2.5">
