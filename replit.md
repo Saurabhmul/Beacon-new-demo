@@ -31,11 +31,13 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 ## Upload Data Page
 - Dynamic sections based on Data Configuration: Loan Data (always), Payment History (always), Conversation History (if selected in optional fields)
 - Each section has: sample CSV download, drag-and-drop upload, data table viewer with search by customer/account/loan ID, and pagination
-- Download Data button available for Loan Data and Payment History uploads (exports current data as CSV)
+- "Track Uploads" button in each section switches to an in-page upload history view showing: date/time, filename, uploader email, record/processed/failed counts, and CSV download with per-row status
+- Download Data button exports current merged data as CSV
 - Data table columns ordered to match sample CSV field order (mandatory fields first, then optional, then any extra uploaded fields)
 - Upload category stored in `uploadCategory` field on `data_uploads` table
 - Conversation History tab persists if data exists, even when disabled in config
 - CSV uploads upsert records by customer/loan/account ID — re-uploading updates existing records and adds new ones
+- Each upload creates an upload log entry tracking per-row status (created/updated/failed with messages)
 
 ## Database Tables
 - `users` / `sessions` - Auth
@@ -43,10 +45,12 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - `rulebooks` - SOP documents/text per client
 - `data_configs` - Field mapping, prompt templates, payment additional fields
 - `data_uploads` - Uploaded file records with `uploadCategory` (loan_data, payment_history, conversation_history)
+- `upload_logs` - Upload history with per-row status tracking (created/updated/failed) and download capability
 - `decisions` - AI decisions with review status
 - `dpd_stages` - Configurable DPD bucket stages
 
 ## Recent Changes
+- 2026-02-27: Added Track Uploads feature with upload history view, per-row status tracking (created/updated/failed), CSV download with status columns
 - 2026-02-27: Replaced "Analyze with AI" button with "Download Data" for loans/payments; ordered table columns to match sample CSV; removed column filter (search only)
 - 2026-02-25: Rebuilt Upload Data page with categorized sections, sample CSV downloads, data table viewers with search/filter/pagination
 - 2026-02-25: Added `uploadCategory` to data_uploads, `paymentAdditionalFields` to data_configs

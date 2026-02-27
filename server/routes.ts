@@ -6,6 +6,9 @@ import multer from "multer";
 import Papa from "papaparse";
 import { analyzeCustomer, extractTextFromImage } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
+import { users, uploadLogs } from "@shared/schema";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 
@@ -369,6 +372,61 @@ export async function registerRoutes(
     });
   }
 
+  app.get("/api/upload-logs", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const category = req.query.category as string;
+      if (!category) return res.status(400).json({ error: "Category is required" });
+
+      const logs = await storage.getUploadLogs(userId, category);
+
+      const logsWithEmail = await Promise.all(
+        logs.map(async (log) => {
+          const [user] = await db.select({ email: users.email }).from(users).where(eq(users.id, log.userId));
+          const { rowResults, ...logWithoutResults } = log;
+          return { ...logWithoutResults, uploaderEmail: user?.email || "Unknown" };
+        })
+      );
+
+      res.json(logsWithEmail);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch upload logs" });
+    }
+  });
+
+  app.get("/api/upload-logs/:id/download", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const logId = Number(req.params.id);
+      const log = await storage.getUploadLog(logId);
+      if (!log || log.userId !== userId) return res.status(404).json({ error: "Upload log not found" });
+
+      const rows = log.rowResults || [];
+      if (rows.length === 0) return res.status(400).json({ error: "No row data available" });
+
+      const dataKeys = Object.keys(rows[0]).filter(k => k !== "_status" && k !== "_message");
+      const headers = [...dataKeys, "status", "message"];
+      const csvRows = rows.map(row => {
+        return headers.map(h => {
+          let val: string;
+          if (h === "status") val = String(row._status || "");
+          else if (h === "message") val = String(row._message || "");
+          else val = String((row as Record<string, unknown>)[h] ?? "");
+          return val.includes(",") || val.includes('"') || val.includes("\n")
+            ? `"${val.replace(/"/g, '""')}"`
+            : val;
+        }).join(",");
+      });
+
+      const csv = [headers.join(","), ...csvRows].join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${log.fileName.replace(/\.[^.]+$/, "")}_status.csv"`);
+      res.send(csv);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to download upload log" });
+    }
+  });
+
   app.post("/api/uploads", isAuthenticated, upload.single("file"), async (req, res) => {
     try {
       const userId = getUserId(req);
@@ -394,6 +452,9 @@ export async function registerRoutes(
       }
 
       const existingUpload = await storage.getUploadByCategory(userId, category);
+      const rowResults: Array<Record<string, unknown> & { _status: string; _message: string }> = [];
+      let processedCount = 0;
+      let failedCount = 0;
 
       if (existingUpload && existingUpload.uploadedData) {
         const existingRecords = existingUpload.uploadedData as Record<string, unknown>[];
@@ -402,18 +463,34 @@ export async function registerRoutes(
         let mergedRecords: Record<string, unknown>[];
 
         if (idCol) {
+          const existingIds = new Set<string>();
           const recordMap = new Map<string, Record<string, unknown>>();
           for (const r of existingRecords) {
             const id = String(r[idCol] || "");
-            if (id) recordMap.set(id, r);
+            if (id) {
+              recordMap.set(id, r);
+              existingIds.add(id);
+            }
           }
           for (const r of newRecords) {
             const id = String(r[idCol] || "");
-            if (id) recordMap.set(id, r);
+            if (!id) {
+              rowResults.push({ ...r, _status: "failed", _message: "Missing ID value" });
+              failedCount++;
+              continue;
+            }
+            const isUpdate = existingIds.has(id);
+            recordMap.set(id, r);
+            rowResults.push({ ...r, _status: isUpdate ? "updated" : "created", _message: isUpdate ? "Updated successfully" : "Created successfully" });
+            processedCount++;
           }
           mergedRecords = Array.from(recordMap.values());
         } else {
           mergedRecords = [...existingRecords, ...newRecords];
+          for (const r of newRecords) {
+            rowResults.push({ ...r, _status: "created", _message: "Created successfully" });
+            processedCount++;
+          }
         }
 
         const updatedUpload = await storage.updateUploadData(existingUpload.id, {
@@ -423,8 +500,26 @@ export async function registerRoutes(
           fileSize: file.size,
         });
 
+        await storage.createUploadLog({
+          dataUploadId: existingUpload.id,
+          userId,
+          fileName: file.originalname,
+          fileType: file.originalname.endsWith(".csv") ? "CSV" : "JSON",
+          fileSize: file.size,
+          recordCount: newRecords.length,
+          processedCount,
+          failedCount,
+          uploadCategory: category,
+          rowResults,
+        });
+
         res.status(200).json(updatedUpload);
       } else {
+        for (const r of newRecords) {
+          rowResults.push({ ...r, _status: "created", _message: "Created successfully" });
+          processedCount++;
+        }
+
         const uploadRecord = await storage.createUpload({
           fileName: file.originalname,
           fileType: file.originalname.endsWith(".csv") ? "CSV" : "JSON",
@@ -435,6 +530,19 @@ export async function registerRoutes(
           uploadedData: newRecords,
           userId,
           clientConfigId: config.id,
+        });
+
+        await storage.createUploadLog({
+          dataUploadId: uploadRecord.id,
+          userId,
+          fileName: file.originalname,
+          fileType: file.originalname.endsWith(".csv") ? "CSV" : "JSON",
+          fileSize: file.size,
+          recordCount: newRecords.length,
+          processedCount,
+          failedCount,
+          uploadCategory: category,
+          rowResults,
         });
 
         res.status(201).json(uploadRecord);

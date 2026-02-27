@@ -1,11 +1,12 @@
 import {
-  clientConfigs, rulebooks, dataConfigs, dataUploads, decisions, dpdStages,
+  clientConfigs, rulebooks, dataConfigs, dataUploads, decisions, dpdStages, uploadLogs,
   type ClientConfig, type InsertClientConfig,
   type Rulebook, type InsertRulebook,
   type DataConfig, type InsertDataConfig,
   type DpdStage, type InsertDpdStage,
   type DataUpload, type InsertDataUpload,
   type Decision, type InsertDecision,
+  type UploadLog, type InsertUploadLog,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, sql } from "drizzle-orm";
@@ -42,6 +43,10 @@ export interface IStorage {
   updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string): Promise<Decision>;
   updateDecisionEmailReview(id: number, emailAccepted: boolean, emailRejectReason?: string): Promise<Decision>;
   getDecisionStats(userId: string): Promise<{ pending: number; approved: number; total: number; recentDecisions: Decision[] }>;
+
+  createUploadLog(data: InsertUploadLog): Promise<UploadLog>;
+  getUploadLogs(userId: string, category: string): Promise<UploadLog[]>;
+  getUploadLog(id: number): Promise<UploadLog | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -217,6 +222,22 @@ export class DatabaseStorage implements IStorage {
       total: allDecisions.length,
       recentDecisions: allDecisions.slice(0, 5),
     };
+  }
+
+  async createUploadLog(data: InsertUploadLog): Promise<UploadLog> {
+    const [log] = await db.insert(uploadLogs).values(data).returning();
+    return log;
+  }
+
+  async getUploadLogs(userId: string, category: string): Promise<UploadLog[]> {
+    return db.select().from(uploadLogs)
+      .where(and(eq(uploadLogs.userId, userId), eq(uploadLogs.uploadCategory, category)))
+      .orderBy(desc(uploadLogs.createdAt));
+  }
+
+  async getUploadLog(id: number): Promise<UploadLog | undefined> {
+    const [log] = await db.select().from(uploadLogs).where(eq(uploadLogs.id, id));
+    return log || undefined;
   }
 }
 

@@ -71,6 +71,21 @@ export const dataUploads = pgTable("data_uploads", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const uploadLogs = pgTable("upload_logs", {
+  id: serial("id").primaryKey(),
+  dataUploadId: integer("data_upload_id"),
+  userId: varchar("user_id").notNull(),
+  fileName: text("file_name").notNull(),
+  fileType: text("file_type").notNull(),
+  fileSize: integer("file_size").notNull(),
+  recordCount: integer("record_count").default(0).notNull(),
+  processedCount: integer("processed_count").default(0).notNull(),
+  failedCount: integer("failed_count").default(0).notNull(),
+  uploadCategory: text("upload_category").notNull(),
+  rowResults: jsonb("row_results").$type<Array<Record<string, unknown> & { _status: string; _message: string }>>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const decisions = pgTable("decisions", {
   id: serial("id").primaryKey(),
   clientConfigId: integer("client_config_id").notNull(),
@@ -180,6 +195,11 @@ export const insertDecisionSchema = createInsertSchema(decisions).omit({
   createdAt: true,
 });
 
+export const insertUploadLogSchema = createInsertSchema(uploadLogs).omit({
+  id: true,
+  createdAt: true,
+});
+
 export type ClientConfig = typeof clientConfigs.$inferSelect;
 export type InsertClientConfig = z.infer<typeof insertClientConfigSchema>;
 export type Rulebook = typeof rulebooks.$inferSelect;
@@ -192,3 +212,5 @@ export type DataUpload = typeof dataUploads.$inferSelect;
 export type InsertDataUpload = z.infer<typeof insertDataUploadSchema>;
 export type Decision = typeof decisions.$inferSelect;
 export type InsertDecision = z.infer<typeof insertDecisionSchema>;
+export type UploadLog = typeof uploadLogs.$inferSelect;
+export type InsertUploadLog = z.infer<typeof insertUploadLogSchema>;

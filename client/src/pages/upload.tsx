@@ -16,17 +16,25 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark } from "lucide-react";
+import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark, ArrowLeft, History, AlertCircle } from "lucide-react";
 import type { DataUpload, ClientConfig, DataConfig } from "@shared/schema";
 
 type UploadCategory = "loan_data" | "payment_history" | "conversation_history";
+
+interface UploadLogEntry {
+  id: number;
+  dataUploadId: number | null;
+  userId: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  recordCount: number;
+  processedCount: number;
+  failedCount: number;
+  uploadCategory: string;
+  createdAt: string;
+  uploaderEmail: string;
+}
 
 const CATEGORY_META: Record<UploadCategory, { label: string; icon: typeof Landmark; description: string }> = {
   loan_data: {
@@ -54,6 +62,116 @@ const FIELD_ORDER: Record<UploadCategory, string[]> = {
   conversation_history: ["customer / account / loan id", "date", "channel", "direction", "message_content"],
 };
 
+function UploadHistoryView({ category, onBack }: {
+  category: UploadCategory;
+  onBack: () => void;
+}) {
+  const meta = CATEGORY_META[category];
+
+  const { data: logs = [], isLoading } = useQuery<UploadLogEntry[]>({
+    queryKey: ["/api/upload-logs", category],
+    queryFn: async () => {
+      const res = await fetch(`/api/upload-logs?category=${category}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+  });
+
+  const formatDate = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) +
+      " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="sm" onClick={onBack} className="h-8 px-2" data-testid={`button-back-${category}`}>
+          <ArrowLeft className="w-4 h-4 mr-1" />
+          Back to {meta.label}
+        </Button>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <History className="w-4 h-4" />
+            Upload History — {meta.label}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {isLoading ? (
+            <Skeleton className="h-40 w-full" />
+          ) : logs.length === 0 ? (
+            <div className="text-center py-8">
+              <History className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No upload history yet.</p>
+            </div>
+          ) : (
+            <div className="border rounded-md overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-xs whitespace-nowrap">Date & Time</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">File Name</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Uploaded By</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap text-center">Records</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap text-center">Processed</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap text-center">Failed</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap text-center">Download</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {logs.map((log) => (
+                    <TableRow key={log.id} data-testid={`row-log-${log.id}`}>
+                      <TableCell className="text-xs py-2 whitespace-nowrap">{formatDate(log.createdAt)}</TableCell>
+                      <TableCell className="text-xs py-2 whitespace-nowrap max-w-[200px] truncate">
+                        <div className="flex items-center gap-1.5">
+                          <FileText className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                          {log.fileName}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-xs py-2 whitespace-nowrap">{log.uploaderEmail}</TableCell>
+                      <TableCell className="text-xs py-2 text-center">{log.recordCount}</TableCell>
+                      <TableCell className="text-xs py-2 text-center">
+                        <Badge variant="outline" className="text-[10px] text-green-600 border-green-200 bg-green-50">
+                          <CheckCircle2 className="w-3 h-3 mr-0.5" />
+                          {log.processedCount}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs py-2 text-center">
+                        {log.failedCount > 0 ? (
+                          <Badge variant="outline" className="text-[10px] text-red-600 border-red-200 bg-red-50">
+                            <AlertCircle className="w-3 h-3 mr-0.5" />
+                            {log.failedCount}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs py-2 text-center">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0"
+                          onClick={() => window.open(`/api/upload-logs/${log.id}/download`, "_blank")}
+                          data-testid={`button-download-log-${log.id}`}
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function UploadSection({ category, dataConfig }: {
   category: UploadCategory;
   dataConfig?: DataConfig | null;
@@ -62,7 +180,7 @@ function UploadSection({ category, dataConfig }: {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
-  const [expandedUploadId, setExpandedUploadId] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<"main" | "history">("main");
 
   const meta = CATEGORY_META[category];
   const Icon = meta.icon;
@@ -96,6 +214,7 @@ function UploadSection({ category, dataConfig }: {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/uploads", category] });
       queryClient.invalidateQueries({ queryKey: ["/api/uploads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/upload-logs", category] });
       toast({ title: "File uploaded", description: `${meta.label} has been uploaded and validated.` });
       setSelectedFile(null);
     },
@@ -119,19 +238,16 @@ function UploadSection({ category, dataConfig }: {
   };
 
   const latestUpload = uploads.length > 0 ? uploads[0] : null;
-  const viewingUpload = expandedUploadId
-    ? uploads.find(u => u.id === expandedUploadId)
-    : latestUpload;
 
   useEffect(() => {
     setPage(1);
     setSearchQuery("");
-  }, [viewingUpload?.id]);
+  }, [latestUpload?.id]);
 
   const records = useMemo(() => {
-    if (!viewingUpload?.uploadedData) return [];
-    return viewingUpload.uploadedData as Record<string, unknown>[];
-  }, [viewingUpload]);
+    if (!latestUpload?.uploadedData) return [];
+    return latestUpload.uploadedData as Record<string, unknown>[];
+  }, [latestUpload]);
 
   const columns = useMemo(() => {
     if (records.length === 0) return [];
@@ -173,6 +289,10 @@ function UploadSection({ category, dataConfig }: {
   const totalPages = Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE));
   const paginatedRecords = filteredRecords.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
+  if (viewMode === "history") {
+    return <UploadHistoryView category={category} onBack={() => setViewMode("main")} />;
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -180,10 +300,16 @@ function UploadSection({ category, dataConfig }: {
           <Icon className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-semibold">{meta.label}</h2>
         </div>
-        <Button variant="outline" size="sm" onClick={downloadSampleCsv} data-testid={`button-download-sample-${category}`}>
-          <Download className="w-3.5 h-3.5 mr-1.5" />
-          Download Sample CSV
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setViewMode("history")} data-testid={`button-track-uploads-${category}`}>
+            <History className="w-3.5 h-3.5 mr-1.5" />
+            Track Uploads
+          </Button>
+          <Button variant="outline" size="sm" onClick={downloadSampleCsv} data-testid={`button-download-sample-${category}`}>
+            <Download className="w-3.5 h-3.5 mr-1.5" />
+            Download Sample CSV
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -235,156 +361,121 @@ function UploadSection({ category, dataConfig }: {
 
       {isLoading ? (
         <Skeleton className="h-40 w-full" />
-      ) : uploads.length > 0 ? (
+      ) : records.length > 0 ? (
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Uploaded Files</CardTitle>
-              {uploads.length > 1 && (
-                <Select
-                  value={String(viewingUpload?.id || "")}
-                  onValueChange={(val) => setExpandedUploadId(Number(val))}
+              <CardTitle className="text-base">Current Data</CardTitle>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">{records.length} records</span>
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    const csvHeader = columns.join(",");
+                    const csvRows = records.map(row =>
+                      columns.map(col => {
+                        const val = String(row[col] ?? "");
+                        return val.includes(",") || val.includes('"') || val.includes("\n")
+                          ? `"${val.replace(/"/g, '""')}"`
+                          : val;
+                      }).join(",")
+                    );
+                    const csv = [csvHeader, ...csvRows].join("\n");
+                    const blob = new Blob([csv], { type: "text/csv" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `${category}_data_export.csv`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  data-testid={`button-download-data-${category}`}
                 >
-                  <SelectTrigger className="w-[220px] h-8 text-xs" data-testid={`select-upload-${category}`}>
-                    <SelectValue placeholder="Select upload" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {uploads.map((u) => (
-                      <SelectItem key={u.id} value={String(u.id)}>
-                        {u.fileName} ({u.recordCount} records)
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
+                  <Download className="w-3.5 h-3.5 mr-1" />
+                  Download Data
+                </Button>
+              </div>
             </div>
-            {viewingUpload && (
-              <div className="flex items-center gap-3 mt-2">
-                <div className="flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground">{viewingUpload.fileName}</span>
-                </div>
-                <Badge variant="secondary" className="text-[10px]">{viewingUpload.fileType}</Badge>
-                <span className="text-xs text-muted-foreground">{viewingUpload.recordCount} records</span>
-                <Badge
-                  variant={viewingUpload.status === "processed" ? "default" : viewingUpload.status === "processing" ? "secondary" : "outline"}
-                  className="text-[10px]"
-                >
-                  {viewingUpload.status === "processed" && <CheckCircle2 className="w-3 h-3 mr-1" />}
-                  {viewingUpload.status}
-                </Badge>
-                {(category === "loan_data" || category === "payment_history") && records.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="default"
-                    className="ml-auto h-7 text-xs"
-                    onClick={() => {
-                      const csvHeader = columns.join(",");
-                      const csvRows = records.map(row =>
-                        columns.map(col => {
-                          const val = String(row[col] ?? "");
-                          return val.includes(",") || val.includes('"') || val.includes("\n")
-                            ? `"${val.replace(/"/g, '""')}"`
-                            : val;
-                        }).join(",")
-                      );
-                      const csv = [csvHeader, ...csvRows].join("\n");
-                      const blob = new Blob([csv], { type: "text/csv" });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = `${viewingUpload.fileName.replace(/\.[^.]+$/, "")}_export.csv`;
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    }}
-                    data-testid={`button-download-data-${category}`}
-                  >
-                    <Download className="w-3.5 h-3.5 mr-1" />
-                    Download Data
-                  </Button>
-                )}
-              </div>
-            )}
           </CardHeader>
-          {records.length > 0 && (
-            <CardContent className="pt-0">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="relative flex-1 max-w-xs">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-                  <Input
-                    placeholder={`Search by ${idColumn.replace(/_/g, " ")}...`}
-                    value={searchQuery}
-                    onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
-                    className="pl-8 h-8 text-xs"
-                    data-testid={`input-search-${category}`}
-                  />
-                </div>
-                <span className="text-xs text-muted-foreground ml-auto">
-                  {filteredRecords.length} of {records.length} records
-                </span>
+          <CardContent className="pt-0">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="relative flex-1 max-w-xs">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                <Input
+                  placeholder={`Search by ${idColumn.replace(/_/g, " ")}...`}
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+                  className="pl-8 h-8 text-xs"
+                  data-testid={`input-search-${category}`}
+                />
               </div>
+              <span className="text-xs text-muted-foreground ml-auto">
+                {filteredRecords.length} of {records.length} records
+              </span>
+            </div>
 
-              <div className="border rounded-md overflow-auto max-h-[400px]">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
+            <div className="border rounded-md overflow-auto max-h-[400px]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    {columns.map((col) => (
+                      <TableHead key={col} className="text-xs whitespace-nowrap">{col.replace(/_/g, " ")}</TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {paginatedRecords.map((row, i) => (
+                    <TableRow key={i} data-testid={`row-data-${category}-${i}`}>
                       {columns.map((col) => (
-                        <TableHead key={col} className="text-xs whitespace-nowrap">{col.replace(/_/g, " ")}</TableHead>
+                        <TableCell key={col} className="text-xs py-2 whitespace-nowrap max-w-[200px] truncate">
+                          {String(row[col] ?? "")}
+                        </TableCell>
                       ))}
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {paginatedRecords.map((row, i) => (
-                      <TableRow key={i} data-testid={`row-data-${category}-${i}`}>
-                        {columns.map((col) => (
-                          <TableCell key={col} className="text-xs py-2 whitespace-nowrap max-w-[200px] truncate">
-                            {String(row[col] ?? "")}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))}
-                    {paginatedRecords.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={columns.length} className="text-center text-sm text-muted-foreground py-6">
-                          No matching records found.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
+                  ))}
+                  {paginatedRecords.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={columns.length} className="text-center text-sm text-muted-foreground py-6">
+                        No matching records found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
 
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between mt-3">
-                  <span className="text-xs text-muted-foreground">
-                    Page {page} of {totalPages}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 w-7 p-0"
-                      disabled={page <= 1}
-                      onClick={() => setPage(p => p - 1)}
-                      data-testid={`button-prev-${category}`}
-                    >
-                      <ChevronLeft className="w-3.5 h-3.5" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 w-7 p-0"
-                      disabled={page >= totalPages}
-                      onClick={() => setPage(p => p + 1)}
-                      data-testid={`button-next-${category}`}
-                    >
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-3">
+                <span className="text-xs text-muted-foreground">
+                  Page {page} of {totalPages}
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    disabled={page <= 1}
+                    onClick={() => setPage(p => p - 1)}
+                    data-testid={`button-prev-${category}`}
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage(p => p + 1)}
+                    data-testid={`button-next-${category}`}
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </Button>
                 </div>
-              )}
-            </CardContent>
-          )}
+              </div>
+            )}
+          </CardContent>
         </Card>
       ) : null}
     </div>
