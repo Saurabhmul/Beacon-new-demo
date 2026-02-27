@@ -2,12 +2,11 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -24,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Upload, FileUp, FileText, Loader2, Brain, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark } from "lucide-react";
+import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark } from "lucide-react";
 import type { DataUpload, ClientConfig, DataConfig } from "@shared/schema";
 
 type UploadCategory = "loan_data" | "payment_history" | "conversation_history";
@@ -49,15 +48,19 @@ const CATEGORY_META: Record<UploadCategory, { label: string; icon: typeof Landma
 
 const PAGE_SIZE = 10;
 
-function UploadSection({ category, processing, onProcess }: {
+const FIELD_ORDER: Record<UploadCategory, string[]> = {
+  loan_data: ["customer / account / loan id", "dpd_bucket", "amount_due", "minimum_due", "due_date"],
+  payment_history: ["customer / account / loan id", "date_of_payment", "amount_paid", "payment_status"],
+  conversation_history: ["customer / account / loan id", "date", "channel", "direction", "message_content"],
+};
+
+function UploadSection({ category, dataConfig }: {
   category: UploadCategory;
-  processing: boolean;
-  onProcess: (uploadId: number) => void;
+  dataConfig?: DataConfig | null;
 }) {
   const { toast } = useToast();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [columnFilter, setColumnFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   const [expandedUploadId, setExpandedUploadId] = useState<number | null>(null);
 
@@ -123,7 +126,6 @@ function UploadSection({ category, processing, onProcess }: {
   useEffect(() => {
     setPage(1);
     setSearchQuery("");
-    setColumnFilter("all");
   }, [viewingUpload?.id]);
 
   const records = useMemo(() => {
@@ -133,8 +135,19 @@ function UploadSection({ category, processing, onProcess }: {
 
   const columns = useMemo(() => {
     if (records.length === 0) return [];
-    return Object.keys(records[0]);
-  }, [records]);
+    const allKeys = Object.keys(records[0]);
+    const mandatoryFields = FIELD_ORDER[category] || [];
+    let optionalFields: string[] = [];
+    if (category === "loan_data" && dataConfig?.optionalFields) {
+      optionalFields = (dataConfig.optionalFields as string[]).filter(f => f !== "conversation_history");
+    } else if (category === "payment_history" && dataConfig?.paymentAdditionalFields) {
+      optionalFields = dataConfig.paymentAdditionalFields as string[];
+    }
+    const knownOrder = [...mandatoryFields, ...optionalFields];
+    const ordered = knownOrder.filter(f => allKeys.includes(f));
+    const remaining = allKeys.filter(f => !knownOrder.includes(f));
+    return [...ordered, ...remaining];
+  }, [records, category, dataConfig]);
 
   const idColumn = useMemo(() => {
     return columns.find(c =>
@@ -154,14 +167,8 @@ function UploadSection({ category, processing, onProcess }: {
         return val.includes(q);
       });
     }
-    if (columnFilter !== "all" && columnFilter) {
-      result = result.filter(r => {
-        const val = r[columnFilter];
-        return val !== null && val !== undefined && val !== "";
-      });
-    }
     return result;
-  }, [records, searchQuery, idColumn, columnFilter]);
+  }, [records, searchQuery, idColumn]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE));
   const paginatedRecords = filteredRecords.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -266,17 +273,34 @@ function UploadSection({ category, processing, onProcess }: {
                   {viewingUpload.status === "processed" && <CheckCircle2 className="w-3 h-3 mr-1" />}
                   {viewingUpload.status}
                 </Badge>
-                {category === "loan_data" && viewingUpload.status === "uploaded" && (
+                {(category === "loan_data" || category === "payment_history") && records.length > 0 && (
                   <Button
                     size="sm"
                     variant="default"
                     className="ml-auto h-7 text-xs"
-                    onClick={() => onProcess(viewingUpload.id)}
-                    disabled={processing}
-                    data-testid={`button-process-${viewingUpload.id}`}
+                    onClick={() => {
+                      const csvHeader = columns.join(",");
+                      const csvRows = records.map(row =>
+                        columns.map(col => {
+                          const val = String(row[col] ?? "");
+                          return val.includes(",") || val.includes('"') || val.includes("\n")
+                            ? `"${val.replace(/"/g, '""')}"`
+                            : val;
+                        }).join(",")
+                      );
+                      const csv = [csvHeader, ...csvRows].join("\n");
+                      const blob = new Blob([csv], { type: "text/csv" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `${viewingUpload.fileName.replace(/\.[^.]+$/, "")}_export.csv`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    data-testid={`button-download-data-${category}`}
                   >
-                    <Brain className="w-3.5 h-3.5 mr-1" />
-                    Analyze with AI
+                    <Download className="w-3.5 h-3.5 mr-1" />
+                    Download Data
                   </Button>
                 )}
               </div>
@@ -295,17 +319,6 @@ function UploadSection({ category, processing, onProcess }: {
                     data-testid={`input-search-${category}`}
                   />
                 </div>
-                <Select value={columnFilter} onValueChange={(val) => { setColumnFilter(val); setPage(1); }}>
-                  <SelectTrigger className="w-[180px] h-8 text-xs" data-testid={`select-filter-${category}`}>
-                    <SelectValue placeholder="Filter by column" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All columns</SelectItem>
-                    {columns.map((col) => (
-                      <SelectItem key={col} value={col}>{col.replace(/_/g, " ")}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
                 <span className="text-xs text-muted-foreground ml-auto">
                   {filteredRecords.length} of {records.length} records
                 </span>
@@ -379,10 +392,6 @@ function UploadSection({ category, processing, onProcess }: {
 }
 
 export default function UploadPage() {
-  const { toast } = useToast();
-  const [processing, setProcessing] = useState(false);
-  const [processProgress, setProcessProgress] = useState(0);
-
   const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"] });
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
   const { data: conversationUploads = [] } = useQuery<DataUpload[]>({
@@ -401,62 +410,6 @@ export default function UploadPage() {
     const hasExistingData = conversationUploads.length > 0;
     return enabledInConfig || hasExistingData;
   }, [dataConfig, conversationUploads]);
-
-  const processMutation = useMutation({
-    mutationFn: async (uploadId: number) => {
-      setProcessing(true);
-      setProcessProgress(0);
-
-      const res = await fetch(`/api/uploads/${uploadId}/process`, {
-        method: "POST",
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Processing failed");
-      }
-
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-
-      if (reader) {
-        let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              try {
-                const event = JSON.parse(line.slice(6));
-                if (event.type === "progress") {
-                  setProcessProgress(((event.index + 1) / event.total) * 100);
-                } else if (event.type === "complete") {
-                  setProcessProgress(100);
-                }
-              } catch {}
-            }
-          }
-        }
-      }
-
-      return true;
-    },
-    onSuccess: () => {
-      setProcessing(false);
-      queryClient.invalidateQueries({ queryKey: ["/api/uploads"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/uploads", "loan_data"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/decisions/stats"] });
-      toast({ title: "Processing complete", description: "AI decisions have been generated for all customers." });
-    },
-    onError: (err: Error) => {
-      setProcessing(false);
-      toast({ title: "Processing failed", description: err.message, variant: "destructive" });
-    },
-  });
 
   if (!config) {
     return (
@@ -487,21 +440,6 @@ export default function UploadPage() {
         </p>
       </div>
 
-      {processing && (
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3 mb-3">
-              <Brain className="w-5 h-5 text-primary animate-pulse" />
-              <span className="text-sm font-medium">Processing with AI...</span>
-            </div>
-            <Progress value={processProgress} className="h-2" />
-            <p className="text-xs text-muted-foreground mt-2">
-              Analyzing each customer against your rulebook. This may take a moment.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
       <Tabs defaultValue="loan_data">
         <TabsList data-testid="tabs-upload-category">
           {categories.map((cat) => {
@@ -519,8 +457,7 @@ export default function UploadPage() {
           <TabsContent key={cat} value={cat} className="mt-4">
             <UploadSection
               category={cat}
-              processing={processing}
-              onProcess={(id) => processMutation.mutate(id)}
+              dataConfig={dataConfig}
             />
           </TabsContent>
         ))}

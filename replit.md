@@ -30,8 +30,9 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 
 ## Upload Data Page
 - Dynamic sections based on Data Configuration: Loan Data (always), Payment History (always), Conversation History (if selected in optional fields)
-- Each section has: sample CSV download, drag-and-drop upload, data table viewer with search by customer ID, column filter, and pagination
-- AI analysis (Analyze button) available only on Loan Data uploads
+- Each section has: sample CSV download, drag-and-drop upload, data table viewer with search by customer/account/loan ID, and pagination
+- Download Data button available for Loan Data and Payment History uploads (exports current data as CSV)
+- Data table columns ordered to match sample CSV field order (mandatory fields first, then optional, then any extra uploaded fields)
 - Upload category stored in `uploadCategory` field on `data_uploads` table
 - Conversation History tab persists if data exists, even when disabled in config
 - CSV uploads upsert records by customer/loan/account ID — re-uploading updates existing records and adds new ones
@@ -46,6 +47,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - `dpd_stages` - Configurable DPD bucket stages
 
 ## Recent Changes
+- 2026-02-27: Replaced "Analyze with AI" button with "Download Data" for loans/payments; ordered table columns to match sample CSV; removed column filter (search only)
 - 2026-02-25: Rebuilt Upload Data page with categorized sections, sample CSV downloads, data table viewers with search/filter/pagination
 - 2026-02-25: Added `uploadCategory` to data_uploads, `paymentAdditionalFields` to data_configs
 - 2026-02-24: Initial MVP build with all core features
