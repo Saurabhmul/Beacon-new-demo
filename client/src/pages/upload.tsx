@@ -16,7 +16,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark, ArrowLeft, History, AlertCircle } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark, ArrowLeft, History, AlertCircle, Trash2 } from "lucide-react";
 import type { DataUpload, ClientConfig, DataConfig } from "@shared/schema";
 
 type UploadCategory = "loan_data" | "payment_history" | "conversation_history";
@@ -181,6 +192,8 @@ function UploadSection({ category, dataConfig }: {
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState<"main" | "history">("main");
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const meta = CATEGORY_META[category];
   const Icon = meta.icon;
@@ -223,6 +236,32 @@ function UploadSection({ category, dataConfig }: {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (indices: number[]) => {
+      const res = await fetch(`/api/uploads/${category}/records`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ indices }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Delete failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/uploads", category] });
+      queryClient.invalidateQueries({ queryKey: ["/api/uploads"] });
+      toast({ title: "Records deleted", description: `${data.deletedCount} record(s) deleted successfully.` });
+      setSelectedRows(new Set());
+      setShowDeleteConfirm(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const handleFileDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
@@ -242,16 +281,21 @@ function UploadSection({ category, dataConfig }: {
   useEffect(() => {
     setPage(1);
     setSearchQuery("");
+    setSelectedRows(new Set());
   }, [latestUpload?.id]);
 
-  const records = useMemo(() => {
+  const indexedRecords = useMemo(() => {
     if (!latestUpload?.uploadedData) return [];
-    return latestUpload.uploadedData as Record<string, unknown>[];
+    return (latestUpload.uploadedData as Record<string, unknown>[]).map((row, idx) => ({ ...row, __idx: idx }));
   }, [latestUpload]);
+
+  const records = useMemo(() => {
+    return indexedRecords as Record<string, unknown>[];
+  }, [indexedRecords]);
 
   const columns = useMemo(() => {
     if (records.length === 0) return [];
-    const allKeys = Object.keys(records[0]);
+    const allKeys = Object.keys(records[0]).filter(k => k !== "__idx");
     const mandatoryFields = FIELD_ORDER[category] || [];
     let optionalFields: string[] = [];
     if (category === "loan_data" && dataConfig?.optionalFields) {
@@ -367,6 +411,18 @@ function UploadSection({ category, dataConfig }: {
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Current Data</CardTitle>
               <div className="flex items-center gap-2">
+                {selectedRows.size > 0 && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="h-7 text-xs"
+                    onClick={() => setShowDeleteConfirm(true)}
+                    data-testid={`button-delete-selected-${category}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1" />
+                    Delete {selectedRows.size} selected
+                  </Button>
+                )}
                 <span className="text-xs text-muted-foreground">{records.length} records</span>
                 <Button
                   size="sm"
@@ -420,24 +476,61 @@ function UploadSection({ category, dataConfig }: {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10 px-2">
+                      <Checkbox
+                        checked={filteredRecords.length > 0 && filteredRecords.every((row) => selectedRows.has(row.__idx as number))}
+                        ref={(el) => {
+                          if (el) {
+                            const someSelected = filteredRecords.some((row) => selectedRows.has(row.__idx as number));
+                            const allSelected = filteredRecords.length > 0 && filteredRecords.every((row) => selectedRows.has(row.__idx as number));
+                            (el as unknown as HTMLButtonElement).dataset.state = allSelected ? "checked" : someSelected ? "indeterminate" : "unchecked";
+                          }
+                        }}
+                        onCheckedChange={(checked) => {
+                          const next = new Set(selectedRows);
+                          filteredRecords.forEach((row) => {
+                            const idx = row.__idx as number;
+                            if (checked) next.add(idx);
+                            else next.delete(idx);
+                          });
+                          setSelectedRows(next);
+                        }}
+                        data-testid={`checkbox-select-all-${category}`}
+                      />
+                    </TableHead>
                     {columns.map((col) => (
                       <TableHead key={col} className="text-xs whitespace-nowrap">{col.replace(/_/g, " ")}</TableHead>
                     ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedRecords.map((row, i) => (
-                    <TableRow key={i} data-testid={`row-data-${category}-${i}`}>
-                      {columns.map((col) => (
-                        <TableCell key={col} className="text-xs py-2 whitespace-nowrap max-w-[200px] truncate">
-                          {String(row[col] ?? "")}
+                  {paginatedRecords.map((row, i) => {
+                    const rowIdx = row.__idx as number;
+                    return (
+                      <TableRow key={rowIdx} data-testid={`row-data-${category}-${i}`} className={selectedRows.has(rowIdx) ? "bg-muted/50" : ""}>
+                        <TableCell className="px-2">
+                          <Checkbox
+                            checked={selectedRows.has(rowIdx)}
+                            onCheckedChange={(checked) => {
+                              const next = new Set(selectedRows);
+                              if (checked) next.add(rowIdx);
+                              else next.delete(rowIdx);
+                              setSelectedRows(next);
+                            }}
+                            data-testid={`checkbox-row-${category}-${i}`}
+                          />
                         </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
+                        {columns.map((col) => (
+                          <TableCell key={col} className="text-xs py-2 whitespace-nowrap max-w-[200px] truncate">
+                            {String(row[col] ?? "")}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    );
+                  })}
                   {paginatedRecords.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={columns.length} className="text-center text-sm text-muted-foreground py-6">
+                      <TableCell colSpan={columns.length + 1} className="text-center text-sm text-muted-foreground py-6">
                         No matching records found.
                       </TableCell>
                     </TableRow>
@@ -478,6 +571,28 @@ function UploadSection({ category, dataConfig }: {
           </CardContent>
         </Card>
       ) : null}
+
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedRows.size} record{selectedRows.size !== 1 ? "s" : ""}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. The selected records will be permanently removed from your {meta.label.toLowerCase()} data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid={`button-cancel-delete-${category}`}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteMutation.mutate(Array.from(selectedRows))}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid={`button-confirm-delete-${category}`}
+            >
+              {deleteMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

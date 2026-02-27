@@ -462,6 +462,39 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/uploads/:category/records", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const category = req.params.category;
+      const { indices } = req.body as { indices: number[] };
+
+      if (!Array.isArray(indices) || indices.length === 0) {
+        return res.status(400).json({ error: "No rows specified for deletion" });
+      }
+
+      const existingUpload = await storage.getUploadByCategory(userId, category);
+      if (!existingUpload || !existingUpload.uploadedData) {
+        return res.status(404).json({ error: "No data found for this category" });
+      }
+
+      const records = existingUpload.uploadedData as Record<string, unknown>[];
+      const validIndices = indices.filter(i => Number.isInteger(i) && i >= 0 && i < records.length);
+      const indicesToDelete = new Set(validIndices);
+      const remaining = records.filter((_, i) => !indicesToDelete.has(i));
+
+      await storage.updateUploadData(existingUpload.id, {
+        uploadedData: remaining,
+        recordCount: remaining.length,
+        fileName: existingUpload.fileName,
+        fileSize: existingUpload.fileSize,
+      });
+
+      res.json({ deletedCount: records.length - remaining.length, remainingCount: remaining.length });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete records" });
+    }
+  });
+
   app.post("/api/uploads", isAuthenticated, upload.single("file"), async (req, res) => {
     try {
       const userId = getUserId(req);
