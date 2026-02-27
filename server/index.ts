@@ -3,17 +3,6 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 
-const originalExit = process.exit.bind(process);
-process.exit = ((code?: number) => {
-  if (code === 1 && process.env.NODE_ENV !== "production") {
-    console.error("Non-critical error intercepted - server continuing");
-    return undefined as never;
-  }
-  return originalExit(code);
-}) as typeof process.exit;
-
-process.on("SIGHUP", () => {});
-
 process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err.message);
 });
