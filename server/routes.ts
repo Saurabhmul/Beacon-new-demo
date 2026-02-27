@@ -404,8 +404,28 @@ export async function registerRoutes(
       const rows = log.rowResults || [];
       if (rows.length === 0) return res.status(400).json({ error: "No row data available" });
 
-      const dataKeys = Object.keys(rows[0]).filter(k => k !== "_status" && k !== "_message");
-      const headers = [...dataKeys, "status", "message"];
+      const allDataKeys = Object.keys(rows[0]).filter(k => k !== "_status" && k !== "_message");
+
+      let orderedFields: string[] = [];
+      if (log.uploadCategory === "loan_data") {
+        orderedFields = [...MANDATORY_LOAN_FIELDS];
+        const dataConfig = await storage.getDataConfig(userId);
+        if (dataConfig?.optionalFields) {
+          orderedFields.push(...(dataConfig.optionalFields as string[]).filter(f => f !== "conversation_history"));
+        }
+      } else if (log.uploadCategory === "payment_history") {
+        orderedFields = [...MANDATORY_PAYMENT_FIELDS];
+        const dataConfig = await storage.getDataConfig(userId);
+        if (dataConfig?.paymentAdditionalFields) {
+          orderedFields.push(...(dataConfig.paymentAdditionalFields as string[]));
+        }
+      } else if (log.uploadCategory === "conversation_history") {
+        orderedFields = [...CONVERSATION_HISTORY_FIELDS];
+      }
+
+      const knownKeys = orderedFields.filter(f => allDataKeys.includes(f));
+      const remainingKeys = allDataKeys.filter(f => !orderedFields.includes(f));
+      const headers = [...knownKeys, "status", "message", ...remainingKeys];
       const csvRows = rows.map(row => {
         return headers.map(h => {
           let val: string;
