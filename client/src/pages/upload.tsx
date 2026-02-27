@@ -65,7 +65,7 @@ const CATEGORY_META: Record<UploadCategory, { label: string; icon: typeof Landma
   },
 };
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 50;
 
 const FIELD_ORDER: Record<UploadCategory, string[]> = {
   loan_data: ["customer / account / loan id", "dpd_bucket", "amount_due", "minimum_due", "due_date"],
@@ -471,7 +471,7 @@ function UploadSection({ category, dataConfig }: {
               </span>
             </div>
 
-            <div className="border rounded-md overflow-auto max-h-[400px]">
+            <div className="border rounded-md overflow-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
