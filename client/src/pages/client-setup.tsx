@@ -51,7 +51,7 @@ const MANDATORY_LOAN_FIELDS = [
 ];
 
 const MANDATORY_PAYMENT_FIELDS = [
-  "customer / account / loan id", "date_of_payment", "amount_paid", "payment_status",
+  "customer / account / loan id", "payment_reference", "date_of_payment", "amount_paid", "payment_status",
 ];
 
 const OPTIONAL_FIELDS = [
