@@ -423,7 +423,6 @@ function UploadSection({ category, dataConfig }: {
                     Delete {selectedRows.size} selected
                   </Button>
                 )}
-                <span className="text-xs text-muted-foreground">{records.length} records</span>
                 <Button
                   size="sm"
                   variant="default"
