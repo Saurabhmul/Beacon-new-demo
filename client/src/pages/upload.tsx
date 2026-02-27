@@ -27,7 +27,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark, ArrowLeft, History, AlertCircle, Trash2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark, ArrowLeft, History, AlertCircle, Trash2, Pencil } from "lucide-react";
 import type { DataUpload, ClientConfig, DataConfig } from "@shared/schema";
 
 type UploadCategory = "loan_data" | "payment_history" | "conversation_history";
@@ -194,6 +202,7 @@ function UploadSection({ category, dataConfig }: {
   const [viewMode, setViewMode] = useState<"main" | "history">("main");
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [editingRow, setEditingRow] = useState<{ index: number; data: Record<string, string> } | null>(null);
 
   const meta = CATEGORY_META[category];
   const Icon = meta.icon;
@@ -259,6 +268,31 @@ function UploadSection({ category, dataConfig }: {
     },
     onError: (err: Error) => {
       toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const editMutation = useMutation({
+    mutationFn: async ({ index, data }: { index: number; data: Record<string, string> }) => {
+      const res = await fetch(`/api/uploads/${category}/records/${index}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Update failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/uploads", category] });
+      queryClient.invalidateQueries({ queryKey: ["/api/uploads"] });
+      toast({ title: "Record updated", description: "The record has been updated successfully." });
+      setEditingRow(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -500,6 +534,7 @@ function UploadSection({ category, dataConfig }: {
                     {columns.map((col) => (
                       <TableHead key={col} className="text-xs whitespace-nowrap">{col.replace(/_/g, " ")}</TableHead>
                     ))}
+                    <TableHead className="w-10 text-xs">Edit</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -524,12 +559,27 @@ function UploadSection({ category, dataConfig }: {
                             {String(row[col] ?? "")}
                           </TableCell>
                         ))}
+                        <TableCell className="px-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={() => {
+                              const rowData: Record<string, string> = {};
+                              columns.forEach(col => { rowData[col] = String(row[col] ?? ""); });
+                              setEditingRow({ index: rowIdx, data: rowData });
+                            }}
+                            data-testid={`button-edit-row-${category}-${i}`}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     );
                   })}
                   {paginatedRecords.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={columns.length + 1} className="text-center text-sm text-muted-foreground py-6">
+                      <TableCell colSpan={columns.length + 2} className="text-center text-sm text-muted-foreground py-6">
                         No matching records found.
                       </TableCell>
                     </TableRow>
@@ -592,6 +642,52 @@ function UploadSection({ category, dataConfig }: {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!editingRow} onOpenChange={(open) => { if (!open) setEditingRow(null); }}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Record</DialogTitle>
+          </DialogHeader>
+          {editingRow && (
+            <div className="space-y-3 py-2">
+              {columns.map((col) => (
+                <div key={col} className="space-y-1">
+                  <Label className="text-xs font-medium">{col.replace(/_/g, " ")}</Label>
+                  <Input
+                    value={editingRow.data[col] || ""}
+                    onChange={(e) => {
+                      setEditingRow({
+                        ...editingRow,
+                        data: { ...editingRow.data, [col]: e.target.value },
+                      });
+                    }}
+                    className="h-8 text-sm"
+                    data-testid={`input-edit-${col.replace(/\s+/g, "-")}`}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setEditingRow(null)} data-testid={`button-cancel-edit-${category}`}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (editingRow) {
+                  editMutation.mutate({ index: editingRow.index, data: editingRow.data });
+                }
+              }}
+              disabled={editMutation.isPending}
+              data-testid={`button-save-edit-${category}`}
+            >
+              {editMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

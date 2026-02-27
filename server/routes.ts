@@ -462,6 +462,42 @@ export async function registerRoutes(
     }
   });
 
+  app.put("/api/uploads/:category/records/:index", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const category = req.params.category;
+      const index = Number(req.params.index);
+      const updatedRecord = req.body as Record<string, unknown>;
+
+      if (!Number.isInteger(index) || index < 0) {
+        return res.status(400).json({ error: "Invalid record index" });
+      }
+
+      const existingUpload = await storage.getUploadByCategory(userId, category);
+      if (!existingUpload || !existingUpload.uploadedData) {
+        return res.status(404).json({ error: "No data found for this category" });
+      }
+
+      const records = existingUpload.uploadedData as Record<string, unknown>[];
+      if (index >= records.length) {
+        return res.status(400).json({ error: "Record index out of bounds" });
+      }
+
+      records[index] = updatedRecord;
+
+      await storage.updateUploadData(existingUpload.id, {
+        uploadedData: records,
+        recordCount: records.length,
+        fileName: existingUpload.fileName,
+        fileSize: existingUpload.fileSize,
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update record" });
+    }
+  });
+
   app.delete("/api/uploads/:category/records", isAuthenticated, async (req, res) => {
     try {
       const userId = getUserId(req);
