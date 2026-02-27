@@ -305,7 +305,7 @@ export async function registerRoutes(
   ];
 
   const CONVERSATION_HISTORY_FIELDS = [
-    "customer / account / loan id", "date", "channel", "direction", "message_content",
+    "customer / account / loan id", "date_and_timestamp", "message",
   ];
 
   app.get("/api/uploads/sample/:category", isAuthenticated, async (req, res) => {
@@ -347,10 +347,8 @@ export async function registerRoutes(
         "date_of_payment": "2026-01-10",
         "amount_paid": "5000",
         "payment_status": "paid",
-        "date": "2026-01-12",
-        "channel": "phone",
-        "direction": "inbound",
-        "message_content": "Customer called regarding payment",
+        "date_and_timestamp": "2026-01-12 14:30:00",
+        "message": "Customer called regarding payment",
       };
 
       const header = fields.join(",");

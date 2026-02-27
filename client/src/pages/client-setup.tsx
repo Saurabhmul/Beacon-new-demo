@@ -54,6 +54,10 @@ const MANDATORY_PAYMENT_FIELDS = [
   "customer / account / loan id", "payment_reference", "date_of_payment", "amount_paid", "payment_status",
 ];
 
+const MANDATORY_CONVERSATION_FIELDS = [
+  "customer / account / loan id", "date_and_timestamp", "message",
+];
+
 const OPTIONAL_FIELDS = [
   "conversation_history", "income_and_employment_data",
   "credit_bureau_data", "compliance_policy", "knowledge_base",
@@ -668,6 +672,22 @@ function DataConfigTab() {
                   <Plus className="w-3.5 h-3.5 mr-1" />
                   Add
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Mandatory Conversation History</CardTitle>
+              <CardDescription>These fields are required in every conversation history upload.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2">
+                {MANDATORY_CONVERSATION_FIELDS.map((f) => (
+                  <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
+                    {f.replace(/_/g, " ")}
+                  </Badge>
+                ))}
               </div>
             </CardContent>
           </Card>

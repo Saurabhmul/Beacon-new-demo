@@ -78,7 +78,7 @@ const PAGE_SIZE = 50;
 const FIELD_ORDER: Record<UploadCategory, string[]> = {
   loan_data: ["customer / account / loan id", "dpd_bucket", "amount_due", "minimum_due", "due_date"],
   payment_history: ["customer / account / loan id", "payment_reference", "date_of_payment", "amount_paid", "payment_status"],
-  conversation_history: ["customer / account / loan id", "date", "channel", "direction", "message_content"],
+  conversation_history: ["customer / account / loan id", "date_and_timestamp", "message"],
 };
 
 function UploadHistoryView({ category, onBack }: {
