@@ -678,22 +678,6 @@ function DataConfigTab() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Mandatory Conversation History</CardTitle>
-              <CardDescription>These fields are required in every conversation history upload.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                {MANDATORY_CONVERSATION_FIELDS.map((f) => (
-                  <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
-                    {f.replace(/_/g, " ")}
-                  </Badge>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
               <CardTitle className="text-base">Optional Data Fields</CardTitle>
               <CardDescription>Select additional fields to improve accuracy.</CardDescription>
             </CardHeader>
@@ -710,7 +694,14 @@ function DataConfigTab() {
                       }}
                       data-testid={`checkbox-field-${f}`}
                     />
-                    <span className="text-sm capitalize">{f.replace(/_/g, " ")}</span>
+                    <span className="text-sm capitalize">
+                      {f.replace(/_/g, " ")}
+                      {f === "conversation_history" && (
+                        <span className="text-xs text-muted-foreground normal-case ml-1">
+                          ({MANDATORY_CONVERSATION_FIELDS.map(c => c.replace(/_/g, " ")).join(", ")})
+                        </span>
+                      )}
+                    </span>
                   </label>
                 ))}
                 <div className="flex items-center gap-2 mt-3">
