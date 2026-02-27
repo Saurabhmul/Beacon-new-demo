@@ -301,7 +301,7 @@ export async function registerRoutes(
   ];
 
   const MANDATORY_PAYMENT_FIELDS = [
-    "customer / account / loan id", "date_of_payment", "amount_paid", "payment_status",
+    "customer / account / loan id", "payment_reference", "date_of_payment", "amount_paid", "payment_status",
   ];
 
   const CONVERSATION_HISTORY_FIELDS = [
@@ -343,6 +343,7 @@ export async function registerRoutes(
         "amount_due": "5000",
         "minimum_due": "1500",
         "due_date": "2026-01-15",
+        "payment_reference": "PAY001",
         "date_of_payment": "2026-01-10",
         "amount_paid": "5000",
         "payment_status": "paid",
@@ -370,6 +371,20 @@ export async function registerRoutes(
       const lower = k.toLowerCase();
       return lower.includes("customer") || lower.includes("account") || lower.includes("loan");
     });
+  }
+
+  function findPaymentRefColumn(record: Record<string, unknown>): string | undefined {
+    const keys = Object.keys(record);
+    return keys.find(k => k.toLowerCase().includes("payment_reference") || k.toLowerCase() === "payment reference");
+  }
+
+  function getRecordKey(record: Record<string, unknown>, idCol: string, paymentRefCol?: string): string {
+    const id = String(record[idCol] || "");
+    if (paymentRefCol) {
+      const ref = String(record[paymentRefCol] || "");
+      return `${id}||${ref}`;
+    }
+    return id;
   }
 
   app.get("/api/upload-logs", isAuthenticated, async (req, res) => {
@@ -471,6 +486,10 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Unsupported file type. Use CSV or JSON." });
       }
 
+      if (category === "payment_history" && newRecords.length > 0 && !findPaymentRefColumn(newRecords[0])) {
+        return res.status(400).json({ error: "Payment data must include a 'payment_reference' column" });
+      }
+
       const existingUpload = await storage.getUploadByCategory(userId, category);
       const rowResults: Array<Record<string, unknown> & { _status: string; _message: string }> = [];
       let processedCount = 0;
@@ -479,17 +498,18 @@ export async function registerRoutes(
       if (existingUpload && existingUpload.uploadedData) {
         const existingRecords = existingUpload.uploadedData as Record<string, unknown>[];
         const idCol = newRecords.length > 0 ? findIdColumn(newRecords[0]) : undefined;
+        const paymentRefCol = category === "payment_history" && newRecords.length > 0 ? findPaymentRefColumn(newRecords[0]) : undefined;
 
         let mergedRecords: Record<string, unknown>[];
 
         if (idCol) {
-          const existingIds = new Set<string>();
+          const existingKeys = new Set<string>();
           const recordMap = new Map<string, Record<string, unknown>>();
           for (const r of existingRecords) {
-            const id = String(r[idCol] || "");
-            if (id) {
-              recordMap.set(id, r);
-              existingIds.add(id);
+            const key = getRecordKey(r, idCol, paymentRefCol);
+            if (key && key !== "||" && key !== "") {
+              recordMap.set(key, r);
+              existingKeys.add(key);
             }
           }
           for (const r of newRecords) {
@@ -499,8 +519,17 @@ export async function registerRoutes(
               failedCount++;
               continue;
             }
-            const isUpdate = existingIds.has(id);
-            recordMap.set(id, r);
+            if (paymentRefCol) {
+              const ref = String(r[paymentRefCol] || "");
+              if (!ref) {
+                rowResults.push({ ...r, _status: "failed", _message: "Missing payment reference" });
+                failedCount++;
+                continue;
+              }
+            }
+            const key = getRecordKey(r, idCol, paymentRefCol);
+            const isUpdate = existingKeys.has(key);
+            recordMap.set(key, r);
             rowResults.push({ ...r, _status: isUpdate ? "updated" : "created", _message: isUpdate ? "Updated successfully" : "Created successfully" });
             processedCount++;
           }
