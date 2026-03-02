@@ -324,8 +324,23 @@ function UploadSection({ category, dataConfig }: {
   }, [latestUpload]);
 
   const records = useMemo(() => {
-    return indexedRecords as Record<string, unknown>[];
-  }, [indexedRecords]);
+    const recs = indexedRecords as Record<string, unknown>[];
+    if (category === "payment_history") {
+      return [...recs].sort((a, b) => {
+        const da = String(a["date_of_payment"] || "");
+        const db = String(b["date_of_payment"] || "");
+        return db.localeCompare(da);
+      });
+    }
+    if (category === "conversation_history") {
+      return [...recs].sort((a, b) => {
+        const da = String(a["date_and_timestamp"] || "");
+        const db = String(b["date_and_timestamp"] || "");
+        return db.localeCompare(da);
+      });
+    }
+    return recs;
+  }, [indexedRecords, category]);
 
   const columns = useMemo(() => {
     if (records.length === 0) return [];
