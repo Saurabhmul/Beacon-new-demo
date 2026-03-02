@@ -376,13 +376,15 @@ export async function registerRoutes(
     return keys.find(k => k.toLowerCase().includes("payment_reference") || k.toLowerCase() === "payment reference");
   }
 
-  function getRecordKey(record: Record<string, unknown>, idCol: string, paymentRefCol?: string): string {
-    const id = String(record[idCol] || "");
-    if (paymentRefCol) {
-      const ref = String(record[paymentRefCol] || "");
-      return `${id}||${ref}`;
-    }
-    return id;
+  function findConversationKeyCols(record: Record<string, unknown>): { timestampCol?: string; messageCol?: string } {
+    const keys = Object.keys(record);
+    const timestampCol = keys.find(k => k.toLowerCase() === "date_and_timestamp" || k.toLowerCase() === "date and timestamp");
+    const messageCol = keys.find(k => k.toLowerCase() === "message");
+    return { timestampCol, messageCol };
+  }
+
+  function getRecordKey(record: Record<string, unknown>, keyCols: string[]): string {
+    return keyCols.map(col => String(record[col] || "")).join("||");
   }
 
   app.get("/api/upload-logs", isAuthenticated, async (req, res) => {
@@ -565,7 +567,24 @@ export async function registerRoutes(
       if (existingUpload && existingUpload.uploadedData) {
         const existingRecords = existingUpload.uploadedData as Record<string, unknown>[];
         const idCol = newRecords.length > 0 ? findIdColumn(newRecords[0]) : undefined;
-        const paymentRefCol = category === "payment_history" && newRecords.length > 0 ? findPaymentRefColumn(newRecords[0]) : undefined;
+
+        let keyCols: string[] = [];
+        let keyLabels: string[] = [];
+        if (idCol) {
+          keyCols = [idCol];
+          keyLabels = ["ID"];
+          if (category === "payment_history") {
+            const paymentRefCol = findPaymentRefColumn(newRecords[0]);
+            if (paymentRefCol) {
+              keyCols.push(paymentRefCol);
+              keyLabels.push("payment reference");
+            }
+          } else if (category === "conversation_history") {
+            const { timestampCol, messageCol } = findConversationKeyCols(newRecords[0]);
+            if (timestampCol) { keyCols.push(timestampCol); keyLabels.push("date and timestamp"); }
+            if (messageCol) { keyCols.push(messageCol); keyLabels.push("message"); }
+          }
+        }
 
         let mergedRecords: Record<string, unknown>[];
 
@@ -573,28 +592,27 @@ export async function registerRoutes(
           const existingKeys = new Set<string>();
           const recordMap = new Map<string, Record<string, unknown>>();
           for (const r of existingRecords) {
-            const key = getRecordKey(r, idCol, paymentRefCol);
-            if (key && key !== "||" && key !== "") {
+            const key = getRecordKey(r, keyCols);
+            const emptyKey = keyCols.every(c => !String(r[c] || ""));
+            if (!emptyKey) {
               recordMap.set(key, r);
               existingKeys.add(key);
             }
           }
           for (const r of newRecords) {
-            const id = String(r[idCol] || "");
-            if (!id) {
-              rowResults.push({ ...r, _status: "failed", _message: "Missing ID value" });
+            let missingField: string | null = null;
+            for (let k = 0; k < keyCols.length; k++) {
+              if (!String(r[keyCols[k]] || "")) {
+                missingField = keyLabels[k];
+                break;
+              }
+            }
+            if (missingField) {
+              rowResults.push({ ...r, _status: "failed", _message: `Missing ${missingField} value` });
               failedCount++;
               continue;
             }
-            if (paymentRefCol) {
-              const ref = String(r[paymentRefCol] || "");
-              if (!ref) {
-                rowResults.push({ ...r, _status: "failed", _message: "Missing payment reference" });
-                failedCount++;
-                continue;
-              }
-            }
-            const key = getRecordKey(r, idCol, paymentRefCol);
+            const key = getRecordKey(r, keyCols);
             const isUpdate = existingKeys.has(key);
             recordMap.set(key, r);
             rowResults.push({ ...r, _status: isUpdate ? "updated" : "created", _message: isUpdate ? "Updated successfully" : "Created successfully" });
