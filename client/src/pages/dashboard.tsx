@@ -15,7 +15,7 @@ import {
   AlertCircle,
   Clock,
 } from "lucide-react";
-import type { ClientConfig, Decision } from "@shared/schema";
+import type { ClientConfig } from "@shared/schema";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -28,7 +28,6 @@ export default function DashboardPage() {
     pending: number;
     approved: number;
     total: number;
-    recentDecisions: Decision[];
   }>({
     queryKey: ["/api/decisions/stats"],
   });
@@ -150,38 +149,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {stats && stats.recentDecisions && stats.recentDecisions.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between gap-4 mb-4">
-            <h2 className="text-lg font-semibold">Recent Decisions</h2>
-            <Link href="/review">
-              <Button variant="outline" size="sm" data-testid="button-view-all-history">
-                View All
-                <ArrowRight className="w-3.5 h-3.5 ml-1" />
-              </Button>
-            </Link>
-          </div>
-          <Card>
-            <CardContent className="p-0">
-              <div className="divide-y divide-border">
-                {stats.recentDecisions.slice(0, 5).map((d) => (
-                  <div key={d.id} className="flex items-center justify-between gap-4 p-4">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium truncate" data-testid={`text-decision-id-${d.id}`}>{d.customerGuid}</div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        {d.proposedSolution ? d.proposedSolution.substring(0, 60) + "..." : "Pending analysis"}
-                      </div>
-                    </div>
-                    <Badge variant={d.status === "pending" ? "secondary" : d.status === "approved" ? "default" : "destructive"}>
-                      {d.status}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
     </div>
   );
 }
