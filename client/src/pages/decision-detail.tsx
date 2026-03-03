@@ -87,6 +87,10 @@ export default function DecisionDetailPage() {
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [atpFeedback, setAtpFeedback] = useState<"correct" | "incorrect" | "undetermined" | null>(null);
   const [atpComment, setAtpComment] = useState("");
+  const [solutionFeedback, setSolutionFeedback] = useState<"agree" | "disagree" | null>(null);
+  const [solutionComment, setSolutionComment] = useState("");
+  const [emailFeedback, setEmailFeedback] = useState<"agree" | "disagree" | null>(null);
+  const [emailComment, setEmailComment] = useState("");
 
   const { data: decision, isLoading } = useQuery<Decision>({
     queryKey: ["/api/decisions", params.id],
@@ -111,7 +115,7 @@ export default function DecisionDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-6xl mx-auto space-y-6">
+      <div className="p-6 space-y-6">
         <Skeleton className="h-8 w-48" />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <Skeleton className="h-64" />
@@ -126,7 +130,7 @@ export default function DecisionDetailPage() {
 
   if (!decision) {
     return (
-      <div className="p-6 max-w-6xl mx-auto text-center">
+      <div className="p-6 text-center">
         <p className="text-muted-foreground" data-testid="text-not-found">Decision not found.</p>
       </div>
     );
@@ -156,7 +160,7 @@ export default function DecisionDetailPage() {
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-6 space-y-6">
       <Button
         variant="ghost"
         onClick={() => setLocation("/review")}
@@ -462,6 +466,41 @@ export default function DecisionDetailPage() {
                   </ul>
                 </div>
               )}
+              <Separator />
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">Do you agree with this proposed solution?</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={`gap-1.5 ${solutionFeedback === "agree" ? "border-primary bg-primary/10" : ""}`}
+                    onClick={() => setSolutionFeedback(solutionFeedback === "agree" ? null : "agree")}
+                    data-testid="button-solution-agree"
+                  >
+                    <ThumbsUp className="w-3.5 h-3.5" />
+                    Agree
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={`gap-1.5 ${solutionFeedback === "disagree" ? "border-destructive bg-destructive/10" : ""}`}
+                    onClick={() => setSolutionFeedback(solutionFeedback === "disagree" ? null : "disagree")}
+                    data-testid="button-solution-disagree"
+                  >
+                    <ThumbsDown className="w-3.5 h-3.5" />
+                    Disagree
+                  </Button>
+                </div>
+                {solutionFeedback === "disagree" && (
+                  <Textarea
+                    value={solutionComment}
+                    onChange={(e) => setSolutionComment(e.target.value)}
+                    placeholder="Please explain why you disagree with the proposed solution..."
+                    className="mt-3 min-h-[80px]"
+                    data-testid="textarea-solution-comment"
+                  />
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -472,18 +511,55 @@ export default function DecisionDetailPage() {
                 Proposed Email to Customer
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               {decision.proposedEmailToCustomer === "NO_ACTION" || !decision.proposedEmailToCustomer ? (
                 <div className="text-center py-4">
                   <Mail className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
                   <p className="text-sm text-muted-foreground">AI recommended no email action for this customer.</p>
                 </div>
               ) : (
-                <div className="bg-muted/50 rounded-md p-4">
-                  <pre className="text-sm whitespace-pre-wrap font-sans" data-testid="text-proposed-email">
-                    {decision.proposedEmailToCustomer}
-                  </pre>
-                </div>
+                <>
+                  <div className="bg-muted/50 rounded-md p-4">
+                    <pre className="text-sm whitespace-pre-wrap font-sans" data-testid="text-proposed-email">
+                      {decision.proposedEmailToCustomer}
+                    </pre>
+                  </div>
+                  <Separator />
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-2">Do you agree with this proposed email?</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={`gap-1.5 ${emailFeedback === "agree" ? "border-primary bg-primary/10" : ""}`}
+                        onClick={() => setEmailFeedback(emailFeedback === "agree" ? null : "agree")}
+                        data-testid="button-email-agree"
+                      >
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                        Agree
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={`gap-1.5 ${emailFeedback === "disagree" ? "border-destructive bg-destructive/10" : ""}`}
+                        onClick={() => setEmailFeedback(emailFeedback === "disagree" ? null : "disagree")}
+                        data-testid="button-email-disagree"
+                      >
+                        <ThumbsDown className="w-3.5 h-3.5" />
+                        Disagree
+                      </Button>
+                    </div>
+                    {emailFeedback === "disagree" && (
+                      <Textarea
+                        value={emailComment}
+                        onChange={(e) => setEmailComment(e.target.value)}
+                        placeholder="Please explain why you disagree with this email..."
+                        className="mt-3 min-h-[80px]"
+                        data-testid="textarea-email-comment"
+                      />
+                    )}
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
