@@ -58,6 +58,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 6. Decision Detail page shows: sidebar with customer metrics, Beacon Analysis section, Ability to Pay section, Recommended Action section, approve/reject controls
 
 ## Recent Changes
+- 2026-03-03: Global analysis context (`client/src/hooks/use-analysis.tsx`) — analysis state (progress, SSE connection) persists across page navigation; header shows progress indicator on all pages during analysis; bulk select/delete for review queue decisions
 - 2026-03-03: Added "Start Analyzing" feature with POST /api/analyze endpoint, multi-source data aggregation (loan+payment+conversation per customer), SSE progress streaming, redesigned review queue with pagination, redesigned decision detail page with sidebar layout
 - 2026-02-27: Added Track Uploads feature with upload history view, per-row status tracking (created/updated/failed), CSV download with status columns
 - 2026-02-27: Replaced "Analyze with AI" button with "Download Data" for loans/payments; ordered table columns to match sample CSV; removed column filter (search only)

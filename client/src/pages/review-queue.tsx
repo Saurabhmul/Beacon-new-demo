@@ -1,7 +1,8 @@
-import { useState, useRef, useCallback } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAnalysis } from "@/hooks/use-analysis";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,12 +39,10 @@ export default function ReviewQueuePage() {
   const [activeTab, setActiveTab] = useState<TabType>("pending");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [progress, setProgress] = useState<{ completed: number; failed: number; total: number } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
+  const { analyzing, progress, startAnalysis } = useAnalysis();
 
   const { data: pendingData, isLoading: pendingLoading } = useQuery<Decision[]>({
     queryKey: ["/api/decisions", "pending"],
@@ -129,72 +128,6 @@ export default function ReviewQueuePage() {
     deleteMutation.mutate(Array.from(selectedIds));
   };
 
-  const startAnalysis = useCallback(async () => {
-    setAnalyzing(true);
-    setProgress(null);
-    abortRef.current = new AbortController();
-
-    try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: abortRef.current.signal,
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "Analysis failed");
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response stream");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-            if (event.type === "start") {
-              setProgress({ completed: 0, failed: 0, total: event.total });
-            } else if (event.type === "progress" || event.type === "error") {
-              setProgress({ completed: event.completed, failed: event.failed, total: event.total });
-              queryClient.invalidateQueries({ queryKey: ["/api/decisions"] });
-            } else if (event.type === "complete") {
-              setProgress({ completed: event.completed, failed: event.failed, total: event.total });
-              queryClient.invalidateQueries({ queryKey: ["/api/decisions"] });
-              queryClient.invalidateQueries({ queryKey: ["/api/decisions/stats"] });
-              toast({
-                title: "Analysis complete",
-                description: `${event.completed} customers analyzed${event.failed > 0 ? `, ${event.failed} failed` : ""}.`,
-              });
-            }
-          } catch {}
-        }
-      }
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name !== "AbortError") {
-        toast({
-          title: "Analysis failed",
-          description: err.message || "Something went wrong.",
-          variant: "destructive",
-        });
-      }
-    } finally {
-      setAnalyzing(false);
-      abortRef.current = null;
-    }
-  }, [toast]);
-
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
@@ -220,7 +153,7 @@ export default function ReviewQueuePage() {
       </div>
 
       {analyzing && progress && (
-        <Card>
+        <Card data-testid="card-analysis-progress">
           <CardContent className="p-4 space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">
