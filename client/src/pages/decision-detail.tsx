@@ -23,12 +23,18 @@ import {
   ThumbsUp,
   ThumbsDown,
   CircleDot,
+  MessageSquare,
+  CreditCard,
+  ShieldAlert,
+  TrendingUp,
+  Heart,
+  Mail,
 } from "lucide-react";
 import type { Decision } from "@shared/schema";
 
 function parseEvidence(evidence: string | null | undefined): string[] {
   if (!evidence) return [];
-  const lines = evidence.split(/[\n;•·\-]/);
+  const lines = evidence.split(/[\n;•·]/);
   return lines.map((l) => l.trim()).filter((l) => l.length > 0);
 }
 
@@ -46,12 +52,12 @@ function formatDate(date: string | Date | null | undefined): string {
 
 function extractCustomerMetrics(decision: Decision) {
   const data = decision.customerData || {};
-  const loanData = (data as any).loanData || data;
 
   const findValue = (keys: string[]) => {
     for (const key of keys) {
       const lowerKey = key.toLowerCase();
-      for (const [k, v] of Object.entries(loanData)) {
+      for (const [k, v] of Object.entries(data)) {
+        if (k.startsWith("_")) continue;
         if (k.toLowerCase().includes(lowerKey) && v != null && v !== "") {
           return String(v);
         }
@@ -61,15 +67,15 @@ function extractCustomerMetrics(decision: Decision) {
   };
 
   return {
-    totalDue: findValue(["amount_due", "total_due", "totaldue", "total_amount", "outstanding", "balance"]),
-    dpdBucket: findValue(["dpd", "bucket", "days_past_due", "dpd_bucket"]),
-    lastPayment: findValue(["last_payment", "lastpayment", "recent_payment"]),
-    loanAmount: findValue(["loan_amount", "principal", "sanctioned"]),
-    minimumDue: findValue(["minimum_due", "min_due", "min_payment"]),
+    totalDue: findValue(["amount_due", "total_due", "outstanding", "balance"]),
+    dpdBucket: findValue(["dpd_bucket", "dpd", "days_past_due"]),
+    minimumDue: findValue(["minimum_due", "min_due"]),
     dueDate: findValue(["due_date", "duedate", "payment_due"]),
-    emi: findValue(["emi", "installment", "monthly_payment"]),
-    product: findValue(["product", "loan_type", "category"]),
   };
+}
+
+function getRaw(decision: Decision): Record<string, unknown> {
+  return (decision.aiRawOutput || {}) as Record<string, unknown>;
 }
 
 export default function DecisionDetailPage() {
@@ -128,8 +134,26 @@ export default function DecisionDetailPage() {
 
   const isPending = decision.status === "pending";
   const metrics = extractCustomerMetrics(decision);
+  const raw = getRaw(decision);
   const problemBullets = parseEvidence(decision.problemEvidence);
   const solutionBullets = parseEvidence(decision.solutionEvidence);
+
+  const paymentHistory = String(raw.payment_history || "");
+  const conversationSummary = String(raw.conversation || "");
+  const vulnerability = raw.vulnerability === true || raw.vulnerability === "true";
+  const reasonForVulnerability = String(raw.reason_for_vulnerability || "");
+  const affordability = String(raw.affordability || "not sure");
+  const reasonForAffordability = String(raw.reason_for_affordability || "");
+  const willingness = String(raw.willingness || "not sure");
+  const reasonForWillingness = String(raw.reason_for_willingness || "");
+
+  const levelBadgeVariant = (level: string) => {
+    const l = level.toLowerCase();
+    if (l === "high") return "default" as const;
+    if (l === "medium") return "secondary" as const;
+    if (l === "low" || l === "very low") return "destructive" as const;
+    return "outline" as const;
+  };
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -168,7 +192,7 @@ export default function DecisionDetailPage() {
                 <>
                   <Separator />
                   <div>
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Total Due</p>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Amount Due</p>
                     <p className="text-sm font-semibold" data-testid="text-total-due">{metrics.totalDue}</p>
                   </div>
                 </>
@@ -177,12 +201,6 @@ export default function DecisionDetailPage() {
                 <div>
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">DPD Bucket</p>
                   <p className="text-sm" data-testid="text-dpd-bucket">{metrics.dpdBucket}</p>
-                </div>
-              )}
-              {metrics.lastPayment && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Last Payment</p>
-                  <p className="text-sm" data-testid="text-last-payment">{metrics.lastPayment}</p>
                 </div>
               )}
               {metrics.minimumDue && (
@@ -197,90 +215,92 @@ export default function DecisionDetailPage() {
                   <p className="text-sm" data-testid="text-due-date">{metrics.dueDate}</p>
                 </div>
               )}
-              {metrics.loanAmount && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Loan Amount</p>
-                  <p className="text-sm" data-testid="text-loan-amount">{metrics.loanAmount}</p>
-                </div>
-              )}
-              {metrics.emi && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">EMI</p>
-                  <p className="text-sm" data-testid="text-emi">{metrics.emi}</p>
-                </div>
-              )}
-              {metrics.product && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Product</p>
-                  <p className="text-sm" data-testid="text-product">{metrics.product}</p>
-                </div>
-              )}
-              {decision.combinedCmd != null && (
-                <>
-                  <Separator />
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Combined CMD</p>
-                    <p className="text-sm font-semibold" data-testid="text-cmd">{decision.combinedCmd.toFixed(2)}</p>
-                  </div>
-                </>
-              )}
-              {decision.noOfLatestPaymentsFailed != null && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Failed Payments</p>
-                  <p className="text-sm" data-testid="text-failed-payments">{decision.noOfLatestPaymentsFailed}</p>
-                </div>
-              )}
             </CardContent>
           </Card>
         </div>
 
         <div className="lg:col-span-2 space-y-4">
+
+          {paymentHistory && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <CreditCard className="w-4 h-4" />
+                  Payment History
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm leading-relaxed whitespace-pre-line" data-testid="text-payment-history">{paymentHistory}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {conversationSummary && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4" />
+                  Conversation Summary
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm leading-relaxed whitespace-pre-line" data-testid="text-conversation-summary">{conversationSummary}</p>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
+            <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Brain className="w-4 h-4" />
-                Beacon Analysis
+                <ShieldAlert className="w-4 h-4" />
+                Vulnerability
               </CardTitle>
-              <div className="flex items-center gap-1.5 text-muted-foreground">
-                <Calendar className="w-3.5 h-3.5" />
-                <span className="text-xs" data-testid="text-analyzed-date">Analyzed {formatDate(decision.createdAt)}</span>
-              </div>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {decision.problemDescription && (
-                <div>
-                  <p className="text-sm leading-relaxed" data-testid="text-problem-desc">{decision.problemDescription}</p>
-                  {decision.problemConfidenceScore != null && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-xs text-muted-foreground">Confidence:</span>
-                      <Badge
-                        variant={
-                          decision.problemConfidenceScore >= 7 ? "destructive" :
-                          decision.problemConfidenceScore >= 4 ? "secondary" : "default"
-                        }
-                        data-testid="badge-problem-confidence"
-                      >
-                        {decision.problemConfidenceScore}/10
-                      </Badge>
-                    </div>
-                  )}
-                </div>
-              )}
-              {problemBullets.length > 0 && (
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Key Issues Identified</p>
-                  <ul className="space-y-1.5" data-testid="list-key-issues">
-                    {problemBullets.map((bullet, i) => (
-                      <li key={i} className="flex items-start gap-2 text-sm">
-                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
-                        <span>{bullet}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+            <CardContent className="space-y-2">
+              <Badge variant={vulnerability ? "destructive" : "default"} data-testid="badge-vulnerability">
+                {vulnerability ? "Vulnerable" : "Not Vulnerable"}
+              </Badge>
+              {vulnerability && reasonForVulnerability && (
+                <p className="text-sm text-muted-foreground leading-relaxed mt-2" data-testid="text-vulnerability-reason">{reasonForVulnerability}</p>
               )}
             </CardContent>
           </Card>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4" />
+                  Affordability
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <Badge variant={levelBadgeVariant(affordability)} className="capitalize" data-testid="badge-affordability">
+                  {affordability}
+                </Badge>
+                {reasonForAffordability && (
+                  <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-affordability-reason">{reasonForAffordability}</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Heart className="w-4 h-4" />
+                  Willingness
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <Badge variant={levelBadgeVariant(willingness)} className="capitalize" data-testid="badge-willingness">
+                  {willingness}
+                </Badge>
+                {reasonForWillingness && (
+                  <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-willingness-reason">{reasonForWillingness}</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
 
           <Card>
             <CardHeader className="pb-3">
@@ -307,7 +327,7 @@ export default function DecisionDetailPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className={`gap-1.5 toggle-elevate ${atpFeedback === "correct" ? "toggle-elevated" : ""}`}
+                    className={`gap-1.5 ${atpFeedback === "correct" ? "border-primary bg-primary/10" : ""}`}
                     onClick={() => setAtpFeedback(atpFeedback === "correct" ? null : "correct")}
                     data-testid="button-atp-correct"
                   >
@@ -317,7 +337,7 @@ export default function DecisionDetailPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className={`gap-1.5 toggle-elevate ${atpFeedback === "incorrect" ? "toggle-elevated" : ""}`}
+                    className={`gap-1.5 ${atpFeedback === "incorrect" ? "border-destructive bg-destructive/10" : ""}`}
                     onClick={() => setAtpFeedback(atpFeedback === "incorrect" ? null : "incorrect")}
                     data-testid="button-atp-incorrect"
                   >
@@ -327,7 +347,7 @@ export default function DecisionDetailPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className={`gap-1.5 toggle-elevate ${atpFeedback === "undetermined" ? "toggle-elevated" : ""}`}
+                    className={`gap-1.5 ${atpFeedback === "undetermined" ? "border-muted-foreground bg-muted" : ""}`}
                     onClick={() => setAtpFeedback(atpFeedback === "undetermined" ? null : "undetermined")}
                     data-testid="button-atp-undetermined"
                   >
@@ -349,23 +369,72 @@ export default function DecisionDetailPage() {
           </Card>
 
           <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Brain className="w-4 h-4" />
+                Problem Customer is Facing
+              </CardTitle>
+              <div className="flex items-center gap-1.5 text-muted-foreground shrink-0">
+                <Calendar className="w-3.5 h-3.5" />
+                <span className="text-xs" data-testid="text-analyzed-date">Analyzed {formatDate(decision.createdAt)}</span>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {decision.problemDescription && (
+                <div>
+                  <p className="text-sm leading-relaxed" data-testid="text-problem-desc">{decision.problemDescription}</p>
+                  {decision.problemConfidenceScore != null && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <span className="text-xs text-muted-foreground">Confidence:</span>
+                      <Badge
+                        variant={
+                          decision.problemConfidenceScore >= 7 ? "destructive" :
+                          decision.problemConfidenceScore >= 4 ? "secondary" : "default"
+                        }
+                        data-testid="badge-problem-confidence"
+                      >
+                        {decision.problemConfidenceScore}/10
+                      </Badge>
+                    </div>
+                  )}
+                </div>
+              )}
+              {problemBullets.length > 0 && (
+                <div>
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Evidence</p>
+                  <ul className="space-y-1.5" data-testid="list-problem-evidence">
+                    {problemBullets.map((bullet, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm">
+                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
+                        <span>{bullet}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <Shield className="w-4 h-4" />
-                Recommended Action
+                Proposed Solution
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {decision.internalAction && (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge data-testid="badge-action-type">{decision.internalAction}</Badge>
+                <div className="flex flex-wrap gap-2">
+                  <p className="text-sm leading-relaxed break-words" data-testid="text-internal-action">
+                    <span className="font-medium">Internal Action: </span>{decision.internalAction}
+                  </p>
                 </div>
               )}
               {decision.proposedSolution && (
                 <div>
-                  <p className="text-sm font-medium mb-1" data-testid="text-proposed-solution">{decision.proposedSolution}</p>
+                  <p className="text-sm leading-relaxed" data-testid="text-proposed-solution">{decision.proposedSolution}</p>
                   {decision.solutionConfidenceScore != null && (
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex items-center gap-2 mt-2">
                       <span className="text-xs text-muted-foreground">Confidence:</span>
                       <Badge
                         variant={
@@ -391,6 +460,29 @@ export default function DecisionDetailPage() {
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Mail className="w-4 h-4" />
+                Proposed Email to Customer
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {decision.proposedEmailToCustomer === "NO_ACTION" || !decision.proposedEmailToCustomer ? (
+                <div className="text-center py-4">
+                  <Mail className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">AI recommended no email action for this customer.</p>
+                </div>
+              ) : (
+                <div className="bg-muted/50 rounded-md p-4">
+                  <pre className="text-sm whitespace-pre-wrap font-sans" data-testid="text-proposed-email">
+                    {decision.proposedEmailToCustomer}
+                  </pre>
                 </div>
               )}
             </CardContent>
