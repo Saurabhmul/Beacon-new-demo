@@ -743,9 +743,13 @@ export async function registerRoutes(
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
       res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders();
 
       const sendEvent = (event: { type: string; [key: string]: unknown }) => {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (typeof (res as any).flush === "function") {
+          (res as any).flush();
+        }
       };
 
       sendEvent({ type: "start", total: customers.length });
