@@ -72,7 +72,7 @@ Required JSON output format:
   const userMessage = `Analyze this customer data and provide your decision:\n\n${JSON.stringify(customerData, null, 2)}`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-2.5-pro",
     contents: [
       { role: "user", parts: [{ text: systemPrompt }] },
       { role: "model", parts: [{ text: "I understand. I will analyze customer data against the SOP and respond with valid JSON only." }] },
@@ -182,7 +182,7 @@ Required JSON output format:
 
 export async function extractTextFromImage(base64Data: string, mimeType: string): Promise<string> {
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-2.5-pro",
     contents: [
       {
         role: "user",

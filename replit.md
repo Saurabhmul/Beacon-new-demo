@@ -8,7 +8,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - **Backend**: Express.js + TypeScript
 - **Database**: PostgreSQL (Replit managed) + Drizzle ORM
 - **Auth**: Custom email/password (bcryptjs + express-session)
-- **AI**: Gemini 2.5 Flash via Replit AI Integrations (no API key needed)
+- **AI**: Gemini 2.5 Pro via Replit AI Integrations (no API key needed)
 - **File Processing**: Multer for uploads, PapaParse for CSV parsing
 
 ## Key Pages
