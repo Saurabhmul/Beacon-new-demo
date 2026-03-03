@@ -1,0 +1,26 @@
+{
+  "customer_guid": "string",
+   payment history : last 3 months payment history summarized in <=3 lines
+   conversation: last 6 months conversation summarized in <=3 lines relevant for the next best action in collections
+   Vulnerability: true/false,
+   if vulnerability true then give reason for vulnerability: "string (max 5 lines)",
+   Affordability: high/medium/low/very low/ not sure,
+   reason for affordability: "string (max 5 lines)",
+   Willingness: high/medium/low/very low/ not sure,
+   reason for Willingness: "string (max 5 lines)",
+   "ability_to_pay": value,
+  "reason_for_ability_to_pay": "string (max 5 lines)",
+  "problem_customr is facing": "string (max 5 lines)",
+  "problem_confidence_score": 1-10, (Confidence in problem identification (1-10). High (8-10): Explicit, recent, corroborated by multiple data points. Medium (5-7): Inferred from patterns, partially supported. Low (1-4): Weak evidence or outdated data"
+  "problem_evidence": "string (max 5 lines)",
+  "proposed_solution": "string (max 5 lines)",
+  "solution_confidence_score": 1-10, Confidence in solution (1-10). High (8-10): Directly aligned to confirmed problem, high success likelihood. Medium (5-7): Reasonable standard solution, moderate uncertainty. Low (1-4): Uncertain or speculative approach"
+  "solution_evidence": "string (max 5 lines)",
+
+  "proposed_email_to_customer": "Subject: ... Body: ... OR NO_ACTION" 
+      "type": "string",
+      "description": "Customer email (≤10 lines). If email required to advance solution: output 'Subject: ...' and 'Body: ...'. If no email needed (internal monitoring, escalation): output 'NO_ACTION'. Use communication_guidelines for tone. When to send an email (use judgment): Request info (internship offer letter, bank details, start date); Answer their question plainly and completely; Acknowledge hardship, apologize if we caused frustration, outline help; Share good news (back to 'on schedule', fee waived, promise kept); Reinforce good behavior (keep current payment pattern to stay on track); Inform next steps we're taking and what we need from them; Re-engage a silent customer with clear, respectful nudge to respond; OR use your knowledge of education loan servicing what we can achieve via email with that customer"
+    },
+
+}
+
