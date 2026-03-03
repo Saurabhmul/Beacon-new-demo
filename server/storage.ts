@@ -42,6 +42,7 @@ export interface IStorage {
   createDecision(data: InsertDecision): Promise<Decision>;
   updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string): Promise<Decision>;
   updateDecisionEmailReview(id: number, emailAccepted: boolean, emailRejectReason?: string): Promise<Decision>;
+  deletePendingDecisions(userId: string): Promise<void>;
   getDecisionStats(userId: string): Promise<{ pending: number; approved: number; total: number; recentDecisions: Decision[] }>;
 
   createUploadLog(data: InsertUploadLog): Promise<UploadLog>;
@@ -210,6 +211,10 @@ export class DatabaseStorage implements IStorage {
       .where(eq(decisions.id, id))
       .returning();
     return decision;
+  }
+
+  async deletePendingDecisions(userId: string): Promise<void> {
+    await db.delete(decisions).where(and(eq(decisions.userId, userId), eq(decisions.status, "pending")));
   }
 
   async getDecisionStats(userId: string) {

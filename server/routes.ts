@@ -687,6 +687,134 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/analyze", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+
+      const rbs = await storage.getRulebooks(userId);
+      if (!rbs.length) return res.status(400).json({ error: "No rulebook configured. Please upload an SOP in Client Setup." });
+
+      const loanUpload = await storage.getUploadByCategory(userId, "loan_data");
+      if (!loanUpload || !loanUpload.uploadedData || !(loanUpload.uploadedData as Record<string, unknown>[]).length) {
+        return res.status(400).json({ error: "No loan data uploaded. Please upload loan data first." });
+      }
+
+      const dataConfig = await storage.getDataConfig(userId);
+      const sopText = rbs.map(r => r.sopText || r.extractedText || "").join("\n\n");
+      const loanRecords = loanUpload.uploadedData as Record<string, unknown>[];
+
+      const paymentUpload = await storage.getUploadByCategory(userId, "payment_history");
+      const paymentRecords = (paymentUpload?.uploadedData || []) as Record<string, unknown>[];
+
+      const conversationUpload = await storage.getUploadByCategory(userId, "conversation_history");
+      const conversationRecords = (conversationUpload?.uploadedData || []) as Record<string, unknown>[];
+
+      const customerIdField = "customer / account / loan id";
+      const customerMap = new Map<string, { loan: Record<string, unknown>; payments: Record<string, unknown>[]; conversations: Record<string, unknown>[] }>();
+
+      for (const loan of loanRecords) {
+        const custId = String(loan[customerIdField] || "").trim();
+        if (!custId) continue;
+        if (!customerMap.has(custId)) {
+          customerMap.set(custId, { loan, payments: [], conversations: [] });
+        }
+      }
+
+      for (const payment of paymentRecords) {
+        const custId = String(payment[customerIdField] || "").trim();
+        if (custId && customerMap.has(custId)) {
+          customerMap.get(custId)!.payments.push(payment);
+        }
+      }
+
+      for (const conv of conversationRecords) {
+        const custId = String(conv[customerIdField] || "").trim();
+        if (custId && customerMap.has(custId)) {
+          customerMap.get(custId)!.conversations.push(conv);
+        }
+      }
+
+      const customers = Array.from(customerMap.entries());
+      if (!customers.length) return res.status(400).json({ error: "No valid customers found in loan data." });
+
+      const clientConfig = await storage.getClientConfig(userId);
+
+      await storage.deletePendingDecisions(userId);
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+
+      const sendEvent = (event: { type: string; [key: string]: unknown }) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+
+      sendEvent({ type: "start", total: customers.length });
+
+      let completed = 0;
+      let failed = 0;
+
+      for (const [custId, data] of customers) {
+        try {
+          const combinedData: Record<string, unknown> = {
+            ...data.loan,
+            _payments: data.payments,
+            _conversations: data.conversations,
+            _payment_count: data.payments.length,
+            _conversation_count: data.conversations.length,
+          };
+
+          const result = await analyzeCustomer(
+            combinedData,
+            sopText,
+            dataConfig?.promptTemplate || undefined
+          );
+
+          await storage.createDecision({
+            clientConfigId: clientConfig?.id || 0,
+            dataUploadId: loanUpload.id,
+            userId,
+            customerGuid: result.customer_guid || custId,
+            customerData: combinedData,
+            combinedCmd: result.combined_cmd,
+            problemDescription: result.problem_description,
+            problemConfidenceScore: result.problem_confidence_score,
+            problemEvidence: result.problem_evidence,
+            proposedSolution: result.proposed_solution,
+            solutionConfidenceScore: result.solution_confidence_score,
+            solutionEvidence: result.solution_evidence,
+            internalAction: result.internal_action,
+            abilityToPay: result.ability_to_pay,
+            reasonForAbilityToPay: result.reason_for_ability_to_pay,
+            noOfLatestPaymentsFailed: result.no_of_latest_payments_failed,
+            proposedEmailToCustomer: result.proposed_email_to_customer,
+            aiRawOutput: result as unknown as Record<string, unknown>,
+            status: "pending",
+          });
+
+          completed++;
+          sendEvent({ type: "progress", completed, failed, total: customers.length, customerGuid: custId });
+        } catch (err) {
+          failed++;
+          console.error(`AI analysis failed for customer ${custId}:`, err);
+          sendEvent({ type: "error", completed, failed, total: customers.length, customerGuid: custId, error: String(err) });
+        }
+      }
+
+      sendEvent({ type: "complete", completed, failed, total: customers.length });
+      res.end();
+    } catch (error) {
+      console.error("Analyze error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to start analysis" });
+      } else {
+        res.write(`data: ${JSON.stringify({ type: "error", error: "Analysis failed unexpectedly" })}\n\n`);
+        res.end();
+      }
+    }
+  });
+
   // Process upload with AI
   app.post("/api/uploads/:id/process", isAuthenticated, async (req, res) => {
     try {

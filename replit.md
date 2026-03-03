@@ -49,7 +49,16 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - `decisions` - AI decisions with review status
 - `dpd_stages` - Configurable DPD bucket stages
 
+## AI Analysis Flow
+1. User clicks "Start Analyzing" on Review Queue page
+2. `POST /api/analyze` gathers all uploaded data per unique customer (loan + payments + conversations)
+3. Gemini AI analyzes each customer against SOP rules via SSE streaming
+4. Decisions are created progressively and appear in the review queue in real-time
+5. Review Queue shows: Customer ID, Last AI Run Date, Proposed Action, Review button
+6. Decision Detail page shows: sidebar with customer metrics, Beacon Analysis section, Ability to Pay section, Recommended Action section, approve/reject controls
+
 ## Recent Changes
+- 2026-03-03: Added "Start Analyzing" feature with POST /api/analyze endpoint, multi-source data aggregation (loan+payment+conversation per customer), SSE progress streaming, redesigned review queue with pagination, redesigned decision detail page with sidebar layout
 - 2026-02-27: Added Track Uploads feature with upload history view, per-row status tracking (created/updated/failed), CSV download with status columns
 - 2026-02-27: Replaced "Analyze with AI" button with "Download Data" for loans/payments; ordered table columns to match sample CSV; removed column filter (search only)
 - 2026-02-25: Rebuilt Upload Data page with categorized sections, sample CSV downloads, data table viewers with search/filter/pagination
