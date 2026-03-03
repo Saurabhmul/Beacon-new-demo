@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useRef, useCallback, type ReactNode } from "react";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 interface AnalysisProgress {
@@ -19,75 +19,95 @@ const AnalysisContext = createContext<AnalysisContextType | null>(null);
 export function AnalysisProvider({ children }: { children: ReactNode }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState<AnalysisProgress | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const retryCountRef = useRef(0);
   const { toast } = useToast();
 
+  const cleanup = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    retryCountRef.current = 0;
+  }, []);
+
+  const connectSSE = useCallback(() => {
+    const es = new EventSource("/api/analyze/events");
+    eventSourceRef.current = es;
+
+    es.onmessage = (e) => {
+      retryCountRef.current = 0;
+      try {
+        const event = JSON.parse(e.data);
+        if (event.type === "start") {
+          setProgress({ completed: 0, failed: 0, total: event.total });
+        } else if (event.type === "progress" || event.type === "error") {
+          if (event.total) {
+            setProgress({ completed: event.completed, failed: event.failed, total: event.total });
+          }
+          queryClient.invalidateQueries({ queryKey: ["/api/decisions"] });
+        } else if (event.type === "complete") {
+          setProgress({ completed: event.completed, failed: event.failed, total: event.total });
+          queryClient.invalidateQueries({ queryKey: ["/api/decisions"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/decisions/stats"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/decisions/all"] });
+          toast({
+            title: "Analysis complete",
+            description: `${event.completed} customers analyzed${event.failed > 0 ? `, ${event.failed} failed` : ""}.`,
+          });
+          cleanup();
+          setAnalyzing(false);
+        }
+      } catch {}
+    };
+
+    es.onerror = () => {
+      es.close();
+      eventSourceRef.current = null;
+      retryCountRef.current++;
+
+      if (retryCountRef.current <= 5) {
+        setTimeout(() => {
+          connectSSE();
+        }, 1000 * retryCountRef.current);
+      } else {
+        cleanup();
+        setAnalyzing(false);
+        toast({
+          title: "Connection lost",
+          description: "Lost connection to analysis stream. The analysis may still be running — refresh to check.",
+          variant: "destructive",
+        });
+      }
+    };
+  }, [toast, cleanup]);
+
   const startAnalysis = useCallback(async () => {
-    if (abortRef.current) return;
+    if (eventSourceRef.current) return;
     setAnalyzing(true);
     setProgress(null);
-    abortRef.current = new AbortController();
 
     try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: abortRef.current.signal,
-      });
+      const response = await apiRequest("POST", "/api/analyze");
+      const data = await response.json();
 
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "Analysis failed");
+      if (!data.started) {
+        throw new Error("Failed to start analysis");
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response stream");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-            if (event.type === "start") {
-              setProgress({ completed: 0, failed: 0, total: event.total });
-            } else if (event.type === "progress" || event.type === "error") {
-              setProgress({ completed: event.completed, failed: event.failed, total: event.total });
-              queryClient.invalidateQueries({ queryKey: ["/api/decisions"] });
-            } else if (event.type === "complete") {
-              setProgress({ completed: event.completed, failed: event.failed, total: event.total });
-              queryClient.invalidateQueries({ queryKey: ["/api/decisions"] });
-              queryClient.invalidateQueries({ queryKey: ["/api/decisions/stats"] });
-              toast({
-                title: "Analysis complete",
-                description: `${event.completed} customers analyzed${event.failed > 0 ? `, ${event.failed} failed` : ""}.`,
-              });
-            }
-          } catch {}
-        }
-      }
+      connectSSE();
     } catch (err: unknown) {
-      if (err instanceof Error && err.name !== "AbortError") {
+      cleanup();
+      setAnalyzing(false);
+      if (err instanceof Error) {
         toast({
           title: "Analysis failed",
           description: err.message || "Something went wrong.",
           variant: "destructive",
         });
       }
-    } finally {
-      setAnalyzing(false);
-      abortRef.current = null;
     }
-  }, [toast]);
+  }, [toast, cleanup, connectSSE]);
 
   return (
     <AnalysisContext.Provider value={{ analyzing, progress, startAnalysis }}>

@@ -17,6 +17,13 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
+interface AnalysisJob {
+  events: Array<Record<string, unknown>>;
+  complete: boolean;
+  listeners: Set<(event: Record<string, unknown>) => void>;
+}
+const analysisJobs = new Map<string, AnalysisJob>();
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -691,6 +698,14 @@ export async function registerRoutes(
     try {
       const userId = getUserId(req);
 
+      const existingJob = analysisJobs.get(userId);
+      if (existingJob && !existingJob.complete) {
+        return res.status(409).json({ error: "Analysis already in progress." });
+      }
+      if (existingJob) {
+        analysisJobs.delete(userId);
+      }
+
       const loanUpload = await storage.getUploadByCategory(userId, "loan_data");
       if (!loanUpload || !loanUpload.uploadedData || !(loanUpload.uploadedData as Record<string, unknown>[]).length) {
         return res.status(400).json({ error: "No loan data uploaded. Please upload loan data first." });
@@ -739,82 +754,133 @@ export async function registerRoutes(
 
       await storage.deletePendingDecisions(userId);
 
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no");
-      res.flushHeaders();
+      const job: AnalysisJob = { events: [], complete: false, listeners: new Set() };
+      analysisJobs.set(userId, job);
 
-      const sendEvent = (event: { type: string; [key: string]: unknown }) => {
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
-        if (typeof (res as any).flush === "function") {
-          (res as any).flush();
+      const emitEvent = (event: Record<string, unknown>) => {
+        job.events.push(event);
+        for (const listener of job.listeners) {
+          listener(event);
         }
       };
 
-      sendEvent({ type: "start", total: customers.length });
+      res.json({ started: true, total: customers.length });
 
-      let completed = 0;
-      let failed = 0;
-
-      for (const [custId, data] of customers) {
+      (async () => {
         try {
-          const combinedData: Record<string, unknown> = {
-            ...data.loan,
-            _payments: data.payments,
-            _conversations: data.conversations,
-            _payment_count: data.payments.length,
-            _conversation_count: data.conversations.length,
-          };
+          emitEvent({ type: "start", total: customers.length });
 
-          const result = await analyzeCustomer(
-            combinedData,
-            sopText,
-            dataConfig?.promptTemplate || undefined
-          );
+          let completed = 0;
+          let failed = 0;
 
-          await storage.createDecision({
-            clientConfigId: clientConfig?.id || 0,
-            dataUploadId: loanUpload.id,
-            userId,
-            customerGuid: result.customer_guid || custId,
-            customerData: combinedData,
-            combinedCmd: result.combined_cmd,
-            problemDescription: result.problem_description,
-            problemConfidenceScore: result.problem_confidence_score,
-            problemEvidence: result.problem_evidence,
-            proposedSolution: result.proposed_solution,
-            solutionConfidenceScore: result.solution_confidence_score,
-            solutionEvidence: result.solution_evidence,
-            internalAction: result.internal_action,
-            abilityToPay: result.ability_to_pay,
-            reasonForAbilityToPay: result.reason_for_ability_to_pay,
-            noOfLatestPaymentsFailed: result.no_of_latest_payments_failed,
-            proposedEmailToCustomer: result.proposed_email_to_customer,
-            aiRawOutput: result as unknown as Record<string, unknown>,
-            status: "pending",
-          });
+          for (const [custId, data] of customers) {
+            try {
+              const combinedData: Record<string, unknown> = {
+                ...data.loan,
+                _payments: data.payments,
+                _conversations: data.conversations,
+                _payment_count: data.payments.length,
+                _conversation_count: data.conversations.length,
+              };
 
-          completed++;
-          sendEvent({ type: "progress", completed, failed, total: customers.length, customerGuid: custId });
-        } catch (err) {
-          failed++;
-          console.error(`AI analysis failed for customer ${custId}:`, err);
-          sendEvent({ type: "error", completed, failed, total: customers.length, customerGuid: custId, error: String(err) });
+              const result = await analyzeCustomer(
+                combinedData,
+                sopText,
+                dataConfig?.promptTemplate || undefined
+              );
+
+              await storage.createDecision({
+                clientConfigId: clientConfig?.id || 0,
+                dataUploadId: loanUpload.id,
+                userId,
+                customerGuid: result.customer_guid || custId,
+                customerData: combinedData,
+                combinedCmd: result.combined_cmd,
+                problemDescription: result.problem_description,
+                problemConfidenceScore: result.problem_confidence_score,
+                problemEvidence: result.problem_evidence,
+                proposedSolution: result.proposed_solution,
+                solutionConfidenceScore: result.solution_confidence_score,
+                solutionEvidence: result.solution_evidence,
+                internalAction: result.internal_action,
+                abilityToPay: result.ability_to_pay,
+                reasonForAbilityToPay: result.reason_for_ability_to_pay,
+                noOfLatestPaymentsFailed: result.no_of_latest_payments_failed,
+                proposedEmailToCustomer: result.proposed_email_to_customer,
+                aiRawOutput: result as unknown as Record<string, unknown>,
+                status: "pending",
+              });
+
+              completed++;
+              emitEvent({ type: "progress", completed, failed, total: customers.length, customerGuid: custId });
+            } catch (err) {
+              failed++;
+              console.error(`AI analysis failed for customer ${custId}:`, err);
+              emitEvent({ type: "error", completed, failed, total: customers.length, customerGuid: custId, error: String(err) });
+            }
+          }
+
+          emitEvent({ type: "complete", completed, failed, total: customers.length });
+        } catch (error) {
+          console.error("Background analysis error:", error);
+          emitEvent({ type: "error", error: "Analysis failed unexpectedly" });
+        } finally {
+          job.complete = true;
+          setTimeout(() => analysisJobs.delete(userId), 30000);
         }
-      }
-
-      sendEvent({ type: "complete", completed, failed, total: customers.length });
-      res.end();
+      })();
     } catch (error) {
       console.error("Analyze error:", error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "Failed to start analysis" });
-      } else {
-        res.write(`data: ${JSON.stringify({ type: "error", error: "Analysis failed unexpectedly" })}\n\n`);
-        res.end();
+      res.status(500).json({ error: "Failed to start analysis" });
+    }
+  });
+
+  app.get("/api/analyze/events", isAuthenticated, async (req, res) => {
+    const userId = getUserId(req);
+
+    let job = analysisJobs.get(userId);
+    if (!job) {
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 250));
+        job = analysisJobs.get(userId);
+        if (job) break;
       }
     }
+
+    if (!job) {
+      return res.status(404).json({ error: "No active analysis" });
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const startIdx = parseInt(req.query.lastIndex as string) || 0;
+    for (let i = startIdx; i < job.events.length; i++) {
+      res.write(`id: ${i + 1}\ndata: ${JSON.stringify(job.events[i])}\n\n`);
+    }
+
+    if (job.complete) {
+      res.end();
+      return;
+    }
+
+    let eventIdx = job.events.length;
+    const listener = (event: Record<string, unknown>) => {
+      eventIdx++;
+      res.write(`id: ${eventIdx}\ndata: ${JSON.stringify(event)}\n\n`);
+      if (event.type === "complete" || (event.type === "error" && !event.customerGuid)) {
+        res.end();
+      }
+    };
+
+    job.listeners.add(listener);
+
+    req.on("close", () => {
+      job!.listeners.delete(listener);
+    });
   });
 
   // Process upload with AI
