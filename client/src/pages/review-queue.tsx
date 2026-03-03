@@ -22,7 +22,6 @@ import {
   ClipboardList,
   ArrowRight,
   Search,
-  Upload,
   Play,
   Loader2,
   ChevronLeft,
@@ -337,14 +336,6 @@ export default function ReviewQueuePage() {
                   ? "No pending decisions. Click 'Start Analyzing' to generate recommendations."
                   : "No completed reviews yet."}
               </p>
-              {!searchQuery && activeTab === "pending" && (
-                <Link href="/upload">
-                  <Button variant="outline" size="sm" className="mt-4" data-testid="button-go-upload">
-                    <Upload className="w-3.5 h-3.5 mr-1" />
-                    Upload Data
-                  </Button>
-                </Link>
-              )}
             </div>
           )}
         </CardContent>
