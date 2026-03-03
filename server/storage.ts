@@ -9,7 +9,7 @@ import {
   type UploadLog, type InsertUploadLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, inArray } from "drizzle-orm";
 
 export interface IStorage {
   getClientConfig(userId: string): Promise<ClientConfig | undefined>;
@@ -43,6 +43,7 @@ export interface IStorage {
   updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string): Promise<Decision>;
   updateDecisionEmailReview(id: number, emailAccepted: boolean, emailRejectReason?: string): Promise<Decision>;
   deletePendingDecisions(userId: string): Promise<void>;
+  deleteDecisionsByIds(ids: number[], userId: string): Promise<void>;
   getDecisionStats(userId: string): Promise<{ pending: number; approved: number; total: number; recentDecisions: Decision[] }>;
 
   createUploadLog(data: InsertUploadLog): Promise<UploadLog>;
@@ -215,6 +216,11 @@ export class DatabaseStorage implements IStorage {
 
   async deletePendingDecisions(userId: string): Promise<void> {
     await db.delete(decisions).where(and(eq(decisions.userId, userId), eq(decisions.status, "pending")));
+  }
+
+  async deleteDecisionsByIds(ids: number[], userId: string): Promise<void> {
+    if (ids.length === 0) return;
+    await db.delete(decisions).where(and(inArray(decisions.id, ids), eq(decisions.userId, userId)));
   }
 
   async getDecisionStats(userId: string) {

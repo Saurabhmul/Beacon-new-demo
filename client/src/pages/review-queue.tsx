@@ -1,13 +1,13 @@
 import { useState, useRef, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Link } from "wouter";
 import {
   Table,
@@ -26,6 +26,7 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  Trash2,
 } from "lucide-react";
 import type { Decision } from "@shared/schema";
 
@@ -39,6 +40,8 @@ export default function ReviewQueuePage() {
   const [page, setPage] = useState(1);
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState<{ completed: number; failed: number; total: number } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [deleting, setDeleting] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
 
@@ -69,6 +72,62 @@ export default function ReviewQueuePage() {
   const safePage = Math.min(page, totalPages);
   const startIdx = (safePage - 1) * PAGE_SIZE;
   const pageDecisions = filteredDecisions.slice(startIdx, startIdx + PAGE_SIZE);
+
+  const pageIds = pageDecisions.map((d) => d.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const somePageSelected = pageIds.some((id) => selectedIds.has(id));
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) {
+        pageIds.forEach((id) => next.delete(id));
+      } else {
+        pageIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const deleteMutation = useMutation({
+    mutationFn: async (ids: number[]) => {
+      setDeleting(true);
+      await apiRequest("DELETE", "/api/decisions/bulk", { ids });
+    },
+    onSuccess: () => {
+      clearSelection();
+      queryClient.invalidateQueries({ queryKey: ["/api/decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/decisions/stats"] });
+      toast({ title: "Deleted", description: "Selected decisions have been deleted." });
+    },
+    onError: () => {
+      toast({ title: "Delete failed", description: "Something went wrong.", variant: "destructive" });
+    },
+    onSettled: () => {
+      setDeleting(false);
+    },
+  });
+
+  const handleBulkDelete = () => {
+    const count = selectedIds.size;
+    if (count === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ${count} selected decision${count > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    deleteMutation.mutate(Array.from(selectedIds));
+  };
 
   const startAnalysis = useCallback(async () => {
     setAnalyzing(true);
@@ -182,7 +241,7 @@ export default function ReviewQueuePage() {
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={() => { setActiveTab("pending"); setPage(1); }}
+          onClick={() => { setActiveTab("pending"); setPage(1); clearSelection(); }}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
             activeTab === "pending"
               ? "bg-primary text-primary-foreground shadow-sm"
@@ -194,7 +253,7 @@ export default function ReviewQueuePage() {
         </button>
         <button
           type="button"
-          onClick={() => { setActiveTab("completed"); setPage(1); }}
+          onClick={() => { setActiveTab("completed"); setPage(1); clearSelection(); }}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
             activeTab === "completed"
               ? "bg-primary text-primary-foreground shadow-sm"
@@ -214,11 +273,26 @@ export default function ReviewQueuePage() {
               <Input
                 placeholder="Search by Customer ID or Proposed Action..."
                 value={searchQuery}
-                onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+                onChange={(e) => { setSearchQuery(e.target.value); setPage(1); clearSelection(); }}
                 className="pl-9"
                 data-testid="input-search-decisions"
               />
             </div>
+            {selectedIds.size > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleBulkDelete}
+                disabled={deleting}
+                data-testid="button-bulk-delete"
+              >
+                {deleting ? (
+                  <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Deleting...</>
+                ) : (
+                  <><Trash2 className="w-4 h-4 mr-1" /> Delete Selected ({selectedIds.size})</>
+                )}
+              </Button>
+            )}
           </div>
 
           {isLoading ? (
@@ -232,6 +306,14 @@ export default function ReviewQueuePage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
+                        onCheckedChange={toggleSelectAll}
+                        aria-label="Select all on this page"
+                        data-testid="checkbox-select-all"
+                      />
+                    </TableHead>
                     <TableHead>Customer ID</TableHead>
                     <TableHead>Last AI Run Date</TableHead>
                     <TableHead>Proposed Action</TableHead>
@@ -240,7 +322,15 @@ export default function ReviewQueuePage() {
                 </TableHeader>
                 <TableBody>
                   {pageDecisions.map((d) => (
-                    <TableRow key={d.id}>
+                    <TableRow key={d.id} className={selectedIds.has(d.id) ? "bg-muted/50" : ""}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.has(d.id)}
+                          onCheckedChange={() => toggleSelect(d.id)}
+                          aria-label={`Select ${d.customerGuid}`}
+                          data-testid={`checkbox-select-${d.id}`}
+                        />
+                      </TableCell>
                       <TableCell>
                         <span className="font-medium text-sm font-mono" data-testid={`text-customer-id-${d.id}`}>
                           {d.customerGuid}

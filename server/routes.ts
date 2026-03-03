@@ -921,6 +921,20 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/decisions/bulk", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "number")) {
+        return res.status(400).json({ error: "ids must be a non-empty array of numbers" });
+      }
+      await storage.deleteDecisionsByIds(ids, userId);
+      res.json({ success: true, deleted: ids.length });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete decisions" });
+    }
+  });
+
   app.patch("/api/decisions/:id/review", isAuthenticated, async (req, res) => {
     try {
       const userId = getUserId(req);
