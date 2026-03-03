@@ -37,7 +37,10 @@ export async function analyzeCustomer(
   sopText: string,
   promptTemplate?: string
 ): Promise<AIDecisionOutput> {
+  const currentDate = new Date().toISOString().split('T')[0];
   const systemPrompt = `You are an AI decision engine for early delinquency management. You must analyze customer data against the provided Standard Operating Procedure (SOP) rules.
+
+Current date: ${currentDate}
 
 ${sopText ? `SOP / RULEBOOK:\n${sopText}\n\n` : ""}${promptTemplate || ""}
 
