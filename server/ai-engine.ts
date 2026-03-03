@@ -75,7 +75,7 @@ Required JSON output format:
       { role: "model", parts: [{ text: "I understand. I will analyze customer data against the SOP and respond with valid JSON only." }] },
       { role: "user", parts: [{ text: userMessage }] },
     ],
-    config: { maxOutputTokens: 8192 },
+    config: { maxOutputTokens: 65536 },
   });
 
   const text = response.text || "";
@@ -91,8 +91,42 @@ Required JSON output format:
     }
   }
 
+  function tryParse(str: string): Record<string, unknown> | null {
+    try {
+      return JSON.parse(str);
+    } catch {
+      return null;
+    }
+  }
+
+  function repairAndParse(str: string): Record<string, unknown> | null {
+    let result = tryParse(str);
+    if (result) return result;
+
+    let repaired = str.replace(/,\s*$/, "");
+    const openBraces = (repaired.match(/\{/g) || []).length;
+    const closeBraces = (repaired.match(/\}/g) || []).length;
+    const missing = openBraces - closeBraces;
+
+    if (missing > 0) {
+      const lastQuote = repaired.lastIndexOf('"');
+      const lastColon = repaired.lastIndexOf(":");
+      if (lastColon > lastQuote) {
+        repaired = repaired.substring(0, lastColon) + '": ""';
+      }
+      repaired = repaired.replace(/,\s*$/, "");
+      for (let i = 0; i < missing; i++) repaired += "}";
+      result = tryParse(repaired);
+      if (result) return result;
+    }
+
+    return null;
+  }
+
+  const parsed = repairAndParse(jsonStr);
+
   try {
-    const parsed = JSON.parse(jsonStr);
+    if (!parsed) throw new Error("Could not parse AI response");
     return {
       customer_guid: parsed.customer_guid || String(customerData["customer / account / loan id"] || customerData.customer_id || customerData.account_id || "unknown"),
       payment_history: parsed.payment_history || "",
