@@ -691,16 +691,14 @@ export async function registerRoutes(
     try {
       const userId = getUserId(req);
 
-      const rbs = await storage.getRulebooks(userId);
-      if (!rbs.length) return res.status(400).json({ error: "No rulebook configured. Please upload an SOP in Client Setup." });
-
       const loanUpload = await storage.getUploadByCategory(userId, "loan_data");
       if (!loanUpload || !loanUpload.uploadedData || !(loanUpload.uploadedData as Record<string, unknown>[]).length) {
         return res.status(400).json({ error: "No loan data uploaded. Please upload loan data first." });
       }
 
+      const rbs = await storage.getRulebooks(userId);
       const dataConfig = await storage.getDataConfig(userId);
-      const sopText = rbs.map(r => r.sopText || r.extractedText || "").join("\n\n");
+      const sopText = rbs.length ? rbs.map(r => r.sopText || r.extractedText || "").join("\n\n") : "";
       const loanRecords = loanUpload.uploadedData as Record<string, unknown>[];
 
       const paymentUpload = await storage.getUploadByCategory(userId, "payment_history");
