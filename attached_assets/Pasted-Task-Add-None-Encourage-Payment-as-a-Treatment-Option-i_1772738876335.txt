@@ -1,0 +1,49 @@
+Task: Add "None — Encourage Payment" as a Treatment Option in Decision Rules
+What to do:
+In Section E (Decision Rules), the Treatment dropdown currently only shows treatments from Section D (Forbearance, Loan Modification, Reage, Clear Arrears Plan, etc.).
+Add one new option at the TOP of that dropdown: None — Encourage Payment
+This is a permanent, non-deletable option. It does not come from Section D. It's always available regardless of which treatments the client has enabled. It means "no loan treatment needed, just communicate with the customer."
+When "None — Encourage Payment" is selected, show two extra fields in that rule row:
+Field 1: Payment Target — dropdown with three options:
+
+At or above MAD (default)
+Any amount they can afford
+Specific amount (shows a number input if selected)
+
+Field 2: Communication Tone — dropdown with four options:
+
+Supportive — emphasize credit health benefits, encouragement, long-term wellbeing (default)
+Firm — emphasize consequences of non-payment, need to engage with us, credit report damage
+Urgent — imminent deadline, escalation warning, time-sensitive
+Empathetic — acknowledge hardship, offer to discuss options, reassure
+
+These two fields are ONLY visible when the treatment is "None — Encourage Payment." They hide when any other treatment is selected.
+
+Impact on Prompt Compiler:
+When the compiler encounters a decision rule with treatment = "None — Encourage Payment", generate this text:
+Rule [priority]: IF [conditions]
+  THEN: No loan treatment required — encourage payment.
+  PAYMENT TARGET: [value from Payment Target dropdown]
+  COMMUNICATION TONE: [value from Tone dropdown]
+  
+  Tone guidelines:
+  - If Supportive: Encourage payment, highlight credit health
+    benefits, explain how staying current protects their
+    financial future. Be warm and motivating.
+  - If Firm: Be direct and professional. State that they need
+    to engage with us so we can help. Explain that continued
+    non-payment will damage their credit report and have
+    long-term consequences. Still offer help but create urgency.
+  - If Urgent: Emphasize imminent deadline or escalation.
+    Clear call to action with specific date.
+  - If Empathetic: Acknowledge their situation, express
+    willingness to find solutions together, reassure them
+    that engaging with us is the first step.
+For all other treatments (Forbearance, Loan Modification, etc.), the compiler works exactly as before — no tone field needed because those treatments have their own communication context.
+
+Example: How Prodigy's rules would look in the UI
+#TreatmentAffordabilityWillingnessTonePayment TargetPriority1Agent ReviewANYANY——02Clear Arrears PlanHIGHHIGH, MED, LOW——13None — Encourage PaymentMEDIUMHIGH, MED, LOWSupportiveAt or above MAD24None — Encourage PaymentMEDIUMVERY LOWFirmAt or above MAD35Loan ModificationLOWHIGH, MED, LOW——46None — Encourage PaymentLOWVERY LOWFirmAt or above MAD57ForbearanceVERY LOWHIGH, MED, LOW——68None — Encourage PaymentVERY LOWVERY LOWFirmAt or above MAD7
+Note: Row 1 (Agent Review) should also be a permanent option like "None — Encourage Payment." It fires when vulnerability = TRUE. Add it as another always-available option: Agent Review — Escalate to Human. No extra fields needed for this one.
+
+Output JSON Impact:
+No schema change needed. When the recommended treatment is "None — Encourage Payment," the proposed_solution field describes the communication approach, and the proposed_email_to_customer field contains the actual email written in the selected tone. The existing schema handles this already.
