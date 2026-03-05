@@ -39,6 +39,63 @@ export interface AIDecisionOutput {
   } | null;
 }
 
+function summarizePayments(payments: Array<Record<string, any>>): string {
+  const formatDate = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const sorted = [...payments].sort((a, b) => {
+    const da = new Date(a.date_of_payment || 0).getTime();
+    const db = new Date(b.date_of_payment || 0).getTime();
+    return db - da;
+  });
+
+  const received = sorted.filter(p => String(p.payment_status || "").toLowerCase() === "received");
+  const failed = sorted.filter(p => String(p.payment_status || "").toLowerCase() === "failed");
+  const cancelled = sorted.filter(p => String(p.payment_status || "").toLowerCase() === "cancelled");
+
+  const sumAmounts = (list: Array<Record<string, any>>) =>
+    list.reduce((sum, p) => sum + (parseFloat(p.amount_paid) || 0), 0);
+
+  const parts: string[] = [];
+
+  if (received.length > 0 && failed.length === 0 && cancelled.length === 0) {
+    const amt = sumAmounts(received).toFixed(2);
+    parts.push(`${received.length} successful payment${received.length > 1 ? "s" : ""} totaling $${amt}.`);
+    parts.push(`Most recent: $${parseFloat(received[0].amount_paid).toFixed(2)} on ${formatDate(received[0].date_of_payment)}.`);
+  } else if (received.length === 0 && (failed.length > 0 || cancelled.length > 0)) {
+    if (failed.length > 0) {
+      parts.push(`${failed.length} failed payment${failed.length > 1 ? "s" : ""} totaling $${sumAmounts(failed).toFixed(2)}.`);
+    }
+    if (cancelled.length > 0) {
+      parts.push(`${cancelled.length} cancelled payment${cancelled.length > 1 ? "s" : ""} totaling $${sumAmounts(cancelled).toFixed(2)}.`);
+    }
+    parts.push("No successful payments received.");
+  } else {
+    if (received.length > 0) {
+      parts.push(`${received.length} successful payment${received.length > 1 ? "s" : ""} ($${sumAmounts(received).toFixed(2)}).`);
+    }
+    if (failed.length > 0) {
+      parts.push(`${failed.length} failed ($${sumAmounts(failed).toFixed(2)}).`);
+    }
+    if (cancelled.length > 0) {
+      parts.push(`${cancelled.length} cancelled ($${sumAmounts(cancelled).toFixed(2)}).`);
+    }
+  }
+
+  if (parts.length === 0) {
+    parts.push(`${sorted.length} payment record${sorted.length > 1 ? "s" : ""} found.`);
+  }
+
+  return parts.slice(0, 3).join(" ");
+}
+
 export async function analyzeCustomer(
   customerData: Record<string, unknown>,
   assembledPrompt: string
@@ -244,12 +301,9 @@ REMINDER before you respond:
 
     let paymentHistory = String(parsed.payment_history ?? "");
     if (!paymentHistory) {
-      const payments = (customerData._payments || customerData.payments || []) as Array<Record<string, unknown>>;
+      const payments = (customerData._payments || customerData.payments || []) as Array<Record<string, any>>;
       if (payments.length > 0) {
-        const recent = payments.slice(0, 5);
-        paymentHistory = recent.map((p: Record<string, unknown>) =>
-          `${p.date_of_payment || "unknown date"}: $${p.amount_paid || "?"} (${p.payment_status || "unknown"})`
-        ).join("; ");
+        paymentHistory = summarizePayments(payments);
         console.log("[AI FIX] Generated payment_history from customer data");
       }
     }
