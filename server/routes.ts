@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
-import { assemblePrompt, assemblePreview, formatCustomerData } from "./lib/prompt/assemble-prompt";
+import { assemblePrompt, assemblePreview, formatCustomerData, clearTemplateCache } from "./lib/prompt/assemble-prompt";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -910,6 +910,18 @@ export async function registerRoutes(
           let completed = 0;
           let failed = 0;
 
+          clearTemplateCache();
+          const dpdStagesData = await storage.getDpdStages(userId);
+          const compiled = compilePolicyPrompt({
+            dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
+            vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
+            affordabilityRules: policyConfig?.affordabilityRules,
+            treatments: policyConfig?.availableTreatments,
+            decisionRules: policyConfig?.decisionRules,
+            escalationRules: policyConfig?.escalationRules,
+          });
+          const compiledPolicy = compiled as unknown as Record<string, string>;
+
           for (const [custId, data] of customers) {
             try {
               const combinedData: Record<string, unknown> = {
@@ -919,20 +931,6 @@ export async function registerRoutes(
                 _payment_count: data.payments.length,
                 _conversation_count: data.conversations.length,
               };
-
-              let compiledPolicy = policyConfig?.compiledPolicy as Record<string, string> | null;
-              if (!compiledPolicy) {
-                const dpdStagesData = await storage.getDpdStages(userId);
-                const compiled = compilePolicyPrompt({
-                  dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
-                  vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
-                  affordabilityRules: policyConfig?.affordabilityRules,
-                  treatments: policyConfig?.availableTreatments,
-                  decisionRules: policyConfig?.decisionRules,
-                  escalationRules: policyConfig?.escalationRules,
-                });
-                compiledPolicy = compiled as unknown as Record<string, string>;
-              }
 
               const assembledPrompt = assemblePrompt(
                 compiledPolicy,

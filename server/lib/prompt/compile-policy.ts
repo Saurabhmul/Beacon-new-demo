@@ -39,16 +39,16 @@ export function compileVulnerability(def: string | null | undefined): string {
 
 export function compileAffordability(rules: AffordabilityRule[] | null | undefined): string {
   if (!rules || rules.length === 0) {
-    return 'AFFORDABILITY LABEL RULES:\n- HIGH: NMPC >= 100% of MAD\n- MEDIUM: NMPC >= 60% and < 100% of MAD\n- LOW: NMPC >= 10% and < 60% of MAD\n- VERY LOW: NMPC = 0 OR NMPC < 10% of MAD\n- NOT SURE: Insufficient data to estimate NMPC or MAD missing';
+    return 'AFFORDABILITY LABEL RULES:\n- HIGH: estimated monthly payment capacity >= 100% of minimum amount due\n- MEDIUM: estimated monthly payment capacity >= 60% and < 100% of minimum amount due\n- LOW: estimated monthly payment capacity >= 10% and < 60% of minimum amount due\n- VERY LOW: estimated monthly payment capacity = 0 OR < 10% of minimum amount due\n- NOT SURE: Absolutely no payment data, no conversation data, and no income data exists to estimate capacity';
   }
 
   let text = 'AFFORDABILITY LABEL RULES:\n';
   for (const rule of rules) {
     if (rule.label === 'NOT SURE') {
-      text += `- NOT SURE: ${rule.condition || 'Insufficient data to estimate NMPC or MAD missing'}\n`;
+      text += `- NOT SURE: ${rule.condition || 'Absolutely no payment data, no conversation data, and no income data exists to estimate capacity'}\n`;
     } else {
       const opText = rule.operator === '>=' ? '>=' : rule.operator === '>' ? '>' : rule.operator === '<' ? '<' : rule.operator === '<=' ? '<=' : rule.operator === '=' ? '=' : rule.operator;
-      text += `- ${rule.label}: NMPC ${opText} ${rule.percentage}% of MAD`;
+      text += `- ${rule.label}: estimated monthly payment capacity ${opText} ${rule.percentage}% of minimum amount due`;
       if (rule.condition) {
         text += ` (${rule.condition})`;
       }
@@ -86,14 +86,14 @@ export function compileTreatments(
       const stageList = allowed.length > 0 ? allowed.join(', ') : (dpdStages.length === 0 ? 'all stages' : 'none');
       catalog += `\nTREATMENT: Clear Arrears Plan\n`;
       catalog += `Available in: [${stageList}]\n`;
-      catalog += `Definition: Customer pays above MAD to clear arrears within target window.\n`;
-      catalog += `Eligibility condition: (NMPC - MAD) * ${months} >= Total Arrears\n`;
+      catalog += `Definition: Customer pays above minimum amount due to clear arrears within target window.\n`;
+      catalog += `Eligibility condition: (estimated monthly payment capacity - minimum amount due) * ${months} >= Total Arrears\n`;
       catalog += `  where ${months} = configured maximum months (client-configurable)\n\n`;
       catalog += `When recommending Clear Arrears Plan, you MUST calculate and include:\n`;
-      catalog += `  1. Monthly payment needed = MAD + (Total Arrears / ${months})\n`;
-      catalog += `  2. Actual months to clear = ceiling(Total Arrears / (NMPC - MAD))\n`;
+      catalog += `  1. Monthly payment needed = minimum amount due + (Total Arrears / ${months})\n`;
+      catalog += `  2. Actual months to clear = ceiling(Total Arrears / (estimated monthly payment capacity - minimum amount due))\n`;
       catalog += `  3. Month-by-month projection showing arrears balance reducing to zero\n\n`;
-      catalog += `If (NMPC - MAD) * ${months} < Total Arrears, this treatment\n`;
+      catalog += `If (estimated monthly payment capacity - minimum amount due) * ${months} < Total Arrears, this treatment\n`;
       catalog += `does NOT qualify. Skip to next matching decision rule.\n`;
     } else {
       if (allowed.length > 0) {
@@ -153,10 +153,10 @@ export function compileDecisionRules(rules: DecisionRule[] | null | undefined): 
 
     const treatmentName = r.treatmentName || 'Agent Review';
     if (treatmentName === 'None — Encourage Payment') {
-      const target = r.paymentTarget || 'At or above MAD';
+      const target = r.paymentTarget || 'At or above minimum amount due';
       const targetText = target === 'Specific amount' && r.paymentTargetAmount
         ? `Specific amount: ${r.paymentTargetAmount}`
-        : target;
+        : target.replace(/\bMAD\b/g, 'minimum amount due');
       text += `  THEN: No loan treatment required — encourage payment.\n`;
       text += `  PAYMENT TARGET: ${targetText}\n`;
     } else if (treatmentName === 'Agent Review — Escalate to Human' || treatmentName === 'Agent Review') {

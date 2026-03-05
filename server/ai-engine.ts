@@ -43,15 +43,19 @@ export async function analyzeCustomer(
   customerData: Record<string, unknown>,
   assembledPrompt: string
 ): Promise<AIDecisionOutput> {
-  const systemPrompt = assembledPrompt;
+  const userMessage = `Now analyze the customer data provided in the instructions above and respond with valid JSON only.
 
-  const userMessage = `Analyze this customer data and provide your decision:\n\n${JSON.stringify(customerData, null, 2)}`;
+REMINDER before you respond:
+- The affordability label MUST match the conclusion in reason_for_affordability
+- The willingness label MUST match the conclusion in reason_for_willingness
+- If your calculation shows a specific label (e.g., VERY LOW, MEDIUM), use that label — do NOT default to NOT SURE
+- reason_for_affordability and reason_for_willingness must NOT be empty`;
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-pro",
     contents: [
-      { role: "user", parts: [{ text: systemPrompt }] },
-      { role: "model", parts: [{ text: "I understand. I will analyze customer data against the SOP and respond with valid JSON only." }] },
+      { role: "user", parts: [{ text: assembledPrompt }] },
+      { role: "model", parts: [{ text: "Understood. I will analyze the customer data, calculate affordability and willingness labels following the step-by-step process, and ensure the labels match my calculated conclusions. I will respond with valid JSON only." }] },
       { role: "user", parts: [{ text: userMessage }] },
     ],
     config: { maxOutputTokens: 65536 },
