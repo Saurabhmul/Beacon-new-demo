@@ -40,6 +40,10 @@ export interface AIDecisionOutput {
 }
 
 function summarizePayments(payments: Array<Record<string, any>>): string {
+  const now = new Date();
+  const sixMonthsAgo = new Date(now);
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
   const formatDate = (dateStr: string) => {
     try {
       const d = new Date(dateStr);
@@ -50,47 +54,69 @@ function summarizePayments(payments: Array<Record<string, any>>): string {
     }
   };
 
+  const timeAgo = (dateStr: string) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "";
+    const months = Math.round((now.getTime() - d.getTime()) / (30.44 * 24 * 60 * 60 * 1000));
+    if (months < 1) return "this month";
+    if (months === 1) return "1 month ago";
+    if (months < 12) return `${months} months ago`;
+    const years = Math.floor(months / 12);
+    const rem = months % 12;
+    if (rem === 0) return `${years} year${years > 1 ? "s" : ""} ago`;
+    return `over ${years} year${years > 1 ? "s" : ""} ago`;
+  };
+
   const sorted = [...payments].sort((a, b) => {
     const da = new Date(a.date_of_payment || 0).getTime();
     const db = new Date(b.date_of_payment || 0).getTime();
     return db - da;
   });
 
-  const received = sorted.filter(p => String(p.payment_status || "").toLowerCase() === "received");
-  const failed = sorted.filter(p => String(p.payment_status || "").toLowerCase() === "failed");
-  const cancelled = sorted.filter(p => String(p.payment_status || "").toLowerCase() === "cancelled");
+  const recent = sorted.filter(p => new Date(p.date_of_payment || 0) >= sixMonthsAgo);
+  const older = sorted.filter(p => new Date(p.date_of_payment || 0) < sixMonthsAgo);
 
   const sumAmounts = (list: Array<Record<string, any>>) =>
     list.reduce((sum, p) => sum + (parseFloat(p.amount_paid) || 0), 0);
 
+  const countByStatus = (list: Array<Record<string, any>>) => {
+    const received = list.filter(p => String(p.payment_status || "").toLowerCase() === "received");
+    const failed = list.filter(p => String(p.payment_status || "").toLowerCase() === "failed");
+    const cancelled = list.filter(p => String(p.payment_status || "").toLowerCase() === "cancelled");
+    return { received, failed, cancelled };
+  };
+
   const parts: string[] = [];
 
-  if (received.length > 0 && failed.length === 0 && cancelled.length === 0) {
-    const amt = sumAmounts(received).toFixed(2);
-    parts.push(`${received.length} successful payment${received.length > 1 ? "s" : ""} totaling $${amt}.`);
-    parts.push(`Most recent: $${parseFloat(received[0].amount_paid).toFixed(2)} on ${formatDate(received[0].date_of_payment)}.`);
-  } else if (received.length === 0 && (failed.length > 0 || cancelled.length > 0)) {
-    if (failed.length > 0) {
-      parts.push(`${failed.length} failed payment${failed.length > 1 ? "s" : ""} totaling $${sumAmounts(failed).toFixed(2)}.`);
-    }
-    if (cancelled.length > 0) {
-      parts.push(`${cancelled.length} cancelled payment${cancelled.length > 1 ? "s" : ""} totaling $${sumAmounts(cancelled).toFixed(2)}.`);
-    }
-    parts.push("No successful payments received.");
-  } else {
+  if (recent.length > 0) {
+    const { received, failed, cancelled } = countByStatus(recent);
+    const segments: string[] = [];
     if (received.length > 0) {
-      parts.push(`${received.length} successful payment${received.length > 1 ? "s" : ""} ($${sumAmounts(received).toFixed(2)}).`);
+      segments.push(`${received.length} successful ($${sumAmounts(received).toFixed(2)})`);
     }
     if (failed.length > 0) {
-      parts.push(`${failed.length} failed ($${sumAmounts(failed).toFixed(2)}).`);
+      segments.push(`${failed.length} failed ($${sumAmounts(failed).toFixed(2)})`);
     }
     if (cancelled.length > 0) {
-      parts.push(`${cancelled.length} cancelled ($${sumAmounts(cancelled).toFixed(2)}).`);
+      segments.push(`${cancelled.length} cancelled ($${sumAmounts(cancelled).toFixed(2)})`);
     }
-  }
+    parts.push(`Last 6 months: ${segments.join(", ")}.`);
 
-  if (parts.length === 0) {
-    parts.push(`${sorted.length} payment record${sorted.length > 1 ? "s" : ""} found.`);
+    if (received.length > 0) {
+      parts.push(`Most recent successful: $${parseFloat(received[0].amount_paid).toFixed(2)} on ${formatDate(received[0].date_of_payment)}.`);
+    } else {
+      parts.push("No successful payments in this period.");
+    }
+  } else {
+    parts.push("No payment activity in the last 6 months.");
+    if (older.length > 0) {
+      const { received } = countByStatus(older);
+      if (received.length > 0) {
+        parts.push(`Last successful payment: $${parseFloat(received[0].amount_paid).toFixed(2)} on ${formatDate(received[0].date_of_payment)} (${timeAgo(received[0].date_of_payment)}).`);
+      } else {
+        parts.push(`Last recorded activity: ${formatDate(older[0].date_of_payment)} (${timeAgo(older[0].date_of_payment)}) — ${String(older[0].payment_status || "unknown").toLowerCase()}.`);
+      }
+    }
   }
 
   return parts.slice(0, 3).join(" ");
