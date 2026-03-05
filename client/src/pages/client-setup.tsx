@@ -401,17 +401,6 @@ const DEFAULT_ESCALATION: EscalationRules = {
   otherConditions: [],
 };
 
-const DEFAULT_AFFORDABILITY_RULES = `Affordability label formula (must follow exactly)
-Let MAD = Minimum Amount Due (from case data). Compare NMPC to MAD:
-
-HIGH: NMPC > MAD
-MEDIUM: NMPC >= 60% of MAD and < MAD
-LOW: NMPC < 60% of MAD
-VERY LOW: NMPC = 0 OR NMPC < 10% of MAD
-NOT SURE: Not enough data to estimate NMPC or MAD not provided
-
-Important: If MAD is missing, you must output NOT SURE (and still provide your best NMPC estimate if possible, clearly marked as an estimate).`;
-
 const AFFORDABILITY_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE", "ANY"];
 const WILLINGNESS_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE", "ANY"];
 const ESCALATION_OPERATORS = [">", "<", "=", ">=", "<=", "contains"];
@@ -425,7 +414,6 @@ function PolicyConfigTab() {
   });
   const { data: dpdStages = [] } = useQuery<DpdStage[]>({ queryKey: ["/api/dpd-stages"] });
 
-  const [affordabilityRules, setAffordabilityRules] = useState(DEFAULT_AFFORDABILITY_RULES);
   const [vulnerabilityDefinition, setVulnerabilityDefinition] = useState("");
   const [treatments, setTreatments] = useState<TreatmentOption[]>(DEFAULT_TREATMENTS);
   const [decisionRules, setDecisionRules] = useState<DecisionRule[]>([]);
@@ -449,7 +437,6 @@ function PolicyConfigTab() {
 
   useEffect(() => {
     if (policyConfig && !hydrated) {
-      if (policyConfig.affordabilityRules) setAffordabilityRules(policyConfig.affordabilityRules);
       if (policyConfig.vulnerabilityDefinition) setVulnerabilityDefinition(policyConfig.vulnerabilityDefinition);
       if (policyConfig.availableTreatments && (policyConfig.availableTreatments as TreatmentOption[]).length > 0) {
         const saved = policyConfig.availableTreatments as TreatmentOption[];
@@ -474,7 +461,6 @@ function PolicyConfigTab() {
     mutationFn: async () => {
       const method = policyConfig ? "PATCH" : "POST";
       const res = await apiRequest(method, "/api/policy-config", {
-        affordabilityRules,
         vulnerabilityDefinition,
         availableTreatments: treatments,
         decisionRules,
@@ -693,34 +679,6 @@ function PolicyConfigTab() {
                 })}
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-base">Affordability Rules</CardTitle>
-                <CardDescription>Define how the AI labels affordability by comparing Next-Month Pay Capacity (NMPC) to Minimum Amount Due (MAD).</CardDescription>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setAffordabilityRules(DEFAULT_AFFORDABILITY_RULES)}
-                data-testid="button-reset-affordability"
-              >
-                <RotateCcw className="w-3.5 h-3.5 mr-1" />
-                Reset to Default
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <Textarea
-              value={affordabilityRules}
-              onChange={(e) => setAffordabilityRules(e.target.value)}
-              className="min-h-[220px] text-sm font-mono leading-relaxed whitespace-pre-wrap"
-              data-testid="textarea-affordability-rules"
-            />
           </CardContent>
         </Card>
 

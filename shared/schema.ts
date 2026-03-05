@@ -94,7 +94,6 @@ export const policyConfigs = pgTable("policy_configs", {
   id: serial("id").primaryKey(),
   clientConfigId: integer("client_config_id").notNull(),
   userId: varchar("user_id").notNull(),
-  affordabilityRules: text("affordability_rules"),
   vulnerabilityDefinition: text("vulnerability_definition"),
   availableTreatments: jsonb("available_treatments").$type<TreatmentOption[]>().default([]).notNull(),
   decisionRules: jsonb("decision_rules").$type<DecisionRule[]>().default([]).notNull(),
