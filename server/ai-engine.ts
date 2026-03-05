@@ -38,11 +38,12 @@ export async function analyzeCustomer(
   promptTemplate?: string
 ): Promise<AIDecisionOutput> {
   const currentDate = new Date().toISOString().split('T')[0];
-  const systemPrompt = `You are an AI decision engine for early delinquency management. You must analyze customer data against the provided Standard Operating Procedure (SOP) rules.
+  const promptWithDate = (promptTemplate || "").replace(/\{\{current_date\}\}/g, currentDate);
+  const systemPrompt = `Current date: ${currentDate}
 
-Current date: ${currentDate}
+${promptWithDate}
 
-${sopText ? `SOP / RULEBOOK:\n${sopText}\n\n` : ""}${promptTemplate || ""}
+${sopText ? `ADDITIONAL SOP / RULEBOOK CONTEXT:\n${sopText}\n\n` : ""}CRITICAL INSTRUCTION: You MUST strictly follow the decision matrix provided above. First determine the customer's Vulnerability (true/false), Affordability (high/medium/low/very low/not sure), and Willingness (high/medium/low/very low/not sure). Then match these values to the EXACT corresponding rule in the "Determining the next best action" section and apply ONLY that recommendation. Do NOT deviate from the decision matrix based on conversation history, past agent suggestions, or your own judgment. The decision matrix is authoritative.
 
 IMPORTANT: You MUST respond with valid JSON only. No markdown, no code blocks, no explanation outside the JSON.
 
