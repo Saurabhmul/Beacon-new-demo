@@ -1,27 +1,40 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 import type { CompiledPolicy } from './compile-policy';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+function resolvePromptDir(): string {
+  try {
+    return path.dirname((new URL(import.meta.url)).pathname);
+  } catch {
+    return __dirname;
+  }
+}
 
-const BRAIN_TEMPLATE_PATH = path.join(__dirname, 'brain-template.txt');
-const OUTPUT_SCHEMA_PATH = path.join(__dirname, 'output-schema.json');
+const promptDir = resolvePromptDir();
+const BRAIN_TEMPLATE_PATH = path.join(promptDir, 'brain-template.txt');
+const OUTPUT_SCHEMA_PATH = path.join(promptDir, 'output-schema.json');
 
 let brainTemplateCache: string | null = null;
 let outputSchemaCache: string | null = null;
 
 export function loadBrainTemplate(): string {
   if (!brainTemplateCache) {
-    brainTemplateCache = fs.readFileSync(BRAIN_TEMPLATE_PATH, 'utf-8');
+    try {
+      brainTemplateCache = fs.readFileSync(BRAIN_TEMPLATE_PATH, 'utf-8');
+    } catch {
+      brainTemplateCache = fs.readFileSync(path.join(process.cwd(), 'server/lib/prompt/brain-template.txt'), 'utf-8');
+    }
   }
   return brainTemplateCache;
 }
 
 export function loadOutputSchema(): string {
   if (!outputSchemaCache) {
-    outputSchemaCache = fs.readFileSync(OUTPUT_SCHEMA_PATH, 'utf-8');
+    try {
+      outputSchemaCache = fs.readFileSync(OUTPUT_SCHEMA_PATH, 'utf-8');
+    } catch {
+      outputSchemaCache = fs.readFileSync(path.join(process.cwd(), 'server/lib/prompt/output-schema.json'), 'utf-8');
+    }
   }
   return outputSchemaCache;
 }

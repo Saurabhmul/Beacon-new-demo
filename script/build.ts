@@ -1,11 +1,12 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import { rm, readFile, mkdir, copyFile } from "fs/promises";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
 const allowlist = [
   "@google/generative-ai",
+  "@google/genai",
   "axios",
   "connect-pg-simple",
   "cors",
@@ -54,11 +55,17 @@ async function buildAll() {
     outfile: "dist/index.cjs",
     define: {
       "process.env.NODE_ENV": '"production"',
+      "import.meta.url": '""',
     },
     minify: true,
     external: externals,
     logLevel: "info",
   });
+
+  console.log("copying prompt templates...");
+  await mkdir("dist/server/lib/prompt", { recursive: true });
+  await copyFile("server/lib/prompt/brain-template.txt", "dist/server/lib/prompt/brain-template.txt");
+  await copyFile("server/lib/prompt/output-schema.json", "dist/server/lib/prompt/output-schema.json");
 }
 
 buildAll().catch((err) => {
