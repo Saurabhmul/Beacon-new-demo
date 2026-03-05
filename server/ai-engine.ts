@@ -30,6 +30,13 @@ export interface AIDecisionOutput {
   proposed_email_to_customer: string;
   combined_cmd: number | null;
   no_of_latest_payments_failed: number;
+  arrears_clearance_plan: {
+    monthly_payment_recommended: number;
+    surplus_above_mad: number;
+    total_arrears: number;
+    months_to_clear: number;
+    projected_timeline: Array<{ month: number; payment: number; remaining_arrears: number }>;
+  } | null;
 }
 
 export async function analyzeCustomer(
@@ -121,6 +128,19 @@ export async function analyzeCustomer(
       proposed_email_to_customer: parsed.proposed_email_to_customer || "NO_ACTION",
       combined_cmd: parsed.combined_cmd ?? null,
       no_of_latest_payments_failed: parseInt(parsed.no_of_latest_payments_failed) || 0,
+      arrears_clearance_plan: parsed.arrears_clearance_plan && typeof parsed.arrears_clearance_plan === 'object' ? {
+        monthly_payment_recommended: Number(parsed.arrears_clearance_plan.monthly_payment_recommended) || 0,
+        surplus_above_mad: Number(parsed.arrears_clearance_plan.surplus_above_mad) || 0,
+        total_arrears: Number(parsed.arrears_clearance_plan.total_arrears) || 0,
+        months_to_clear: Number(parsed.arrears_clearance_plan.months_to_clear) || 0,
+        projected_timeline: Array.isArray(parsed.arrears_clearance_plan.projected_timeline)
+          ? parsed.arrears_clearance_plan.projected_timeline.map((r: any) => ({
+              month: Number(r.month) || 0,
+              payment: Number(r.payment) || 0,
+              remaining_arrears: Number(r.remaining_arrears) || 0,
+            }))
+          : [],
+      } : null,
     };
   } catch (e) {
     return {
@@ -145,6 +165,7 @@ export async function analyzeCustomer(
       proposed_email_to_customer: "NO_ACTION",
       combined_cmd: null,
       no_of_latest_payments_failed: 0,
+      arrears_clearance_plan: null,
     };
   }
 }

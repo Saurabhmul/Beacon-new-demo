@@ -389,6 +389,13 @@ const DEFAULT_TREATMENTS: TreatmentOption[] = [
     enabled: false,
     definition: "Specifically for education/student loans, pausing payments entirely because the borrower meets a qualifying condition (still in school, military service, economic hardship). Different from forbearance because it's often interest-free or subsidized.",
   },
+  {
+    name: "Clear Arrears Plan",
+    enabled: false,
+    definition: "Customer is encouraged to pay above the Minimum Amount Due to clear outstanding arrears within a target period. No loan modification or system intervention needed — the arrears clear naturally through consistent overpayment. Communication includes a specific payment amount and timeline showing month-over-month arrears reduction, plus credit report benefits of becoming current.",
+    blockedStages: ["Late"],
+    clearanceMonths: 6,
+  },
 ];
 
 const DEFAULT_ESCALATION: EscalationRules = {
@@ -458,7 +465,7 @@ function PolicyConfigTab() {
         const saved = policyConfig.availableTreatments as TreatmentOption[];
         const merged = DEFAULT_TREATMENTS.map(dt => {
           const found = saved.find(s => s.name === dt.name);
-          return found ? { ...dt, enabled: found.enabled } : dt;
+          return found ? { ...dt, enabled: found.enabled, blockedStages: found.blockedStages ?? dt.blockedStages, clearanceMonths: found.clearanceMonths ?? dt.clearanceMonths } : dt;
         });
         const customs = saved.filter(s => s.isCustom);
         setTreatments([...merged, ...customs]);
@@ -617,8 +624,29 @@ function PolicyConfigTab() {
     setDecisionRules(prev => [...prev, { id: newId, treatmentName: "", affordability: "ANY", willingness: "ANY", otherCondition: "", priority: prev.length + 1 }]);
   }
 
+  function updateClearanceMonths(index: number, value: number) {
+    setTreatments(prev => prev.map((t, i) => i === index ? { ...t, clearanceMonths: value } : t));
+    setDecisionRules(prev => prev.map(r => {
+      if (r.treatmentName !== 'Clear Arrears Plan') return r;
+      const oldPattern = /^\(NMPC - MAD\) \* \d+ >= Total Arrears$/;
+      if (r.otherCondition && oldPattern.test(r.otherCondition)) {
+        return { ...r, otherCondition: `(NMPC - MAD) * ${value} >= Total Arrears` };
+      }
+      return r;
+    }));
+  }
+
   function updateDecisionRule(id: number, field: keyof DecisionRule, value: string | number) {
-    setDecisionRules(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+    setDecisionRules(prev => prev.map(r => {
+      if (r.id !== id) return r;
+      const updated = { ...r, [field]: value };
+      if (field === 'treatmentName' && value === 'Clear Arrears Plan' && !r.otherCondition) {
+        const cap = treatments.find(t => t.name === 'Clear Arrears Plan');
+        const months = cap?.clearanceMonths || 6;
+        updated.otherCondition = `(NMPC - MAD) * ${months} >= Total Arrears`;
+      }
+      return updated;
+    }));
   }
 
   function removeDecisionRule(id: number) {
@@ -871,6 +899,21 @@ function PolicyConfigTab() {
                               <span className="text-xs">{stage.name}</span>
                             </label>
                           ))}
+                        </div>
+                      )}
+                      {treatment.enabled && treatment.name === "Clear Arrears Plan" && (
+                        <div className="mt-3 flex items-center gap-2">
+                          <Label className="text-xs whitespace-nowrap">Maximum months to clear arrears:</Label>
+                          <Input
+                            type="number"
+                            min={2}
+                            max={12}
+                            value={treatment.clearanceMonths || 6}
+                            onChange={(e) => updateClearanceMonths(index, Math.min(12, Math.max(2, parseInt(e.target.value) || 6)))}
+                            className="w-20 h-8 text-sm"
+                            data-testid="input-clearance-months"
+                          />
+                          <span className="text-xs text-muted-foreground">months (2-12)</span>
                         </div>
                       )}
                     </div>

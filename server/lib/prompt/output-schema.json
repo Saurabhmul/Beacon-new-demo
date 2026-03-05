@@ -17,5 +17,6 @@
   "solution_confidence_score": "integer 1-10",
   "solution_evidence": "string (max 5 lines)",
   "internal_action": "string (max 5 lines)",
-  "proposed_email_to_customer": "Subject: ... Body: ... OR NO_ACTION"
+  "proposed_email_to_customer": "Subject: ... Body: ... OR NO_ACTION",
+  "arrears_clearance_plan": "object or null. Only populate when Clear Arrears Plan is the recommended treatment. Contains: monthly_payment_recommended (number), surplus_above_mad (number), total_arrears (number), months_to_clear (number), projected_timeline (array of {month: number, payment: number, remaining_arrears: number}). If recommended treatment is NOT Clear Arrears Plan, set to null."
 }

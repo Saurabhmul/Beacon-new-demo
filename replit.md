@@ -68,6 +68,12 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 7. Review Queue shows: Customer ID, Last AI Run Date, Proposed Action, Review button
 8. Decision Detail page shows: sidebar with customer metrics, Beacon Analysis section, Ability to Pay section, Recommended Action section, approve/reject controls
 
+## Available Treatments
+- Default treatments include: Standard Payment Plan, Forbearance/Payment Holiday, Loan Modification/Restructure, and more
+- **Clear Arrears Plan**: Special treatment where customer pays above MAD to clear arrears within configurable months (2-12, default 6). Has eligibility formula `(NMPC - MAD) * months >= Total Arrears`. Prompt compiler emits special calculation instructions. AI output includes `arrears_clearance_plan` object with monthly payment, surplus, total arrears, months to clear, and projected timeline. Decision detail page renders timeline table when present.
+- Each treatment has per-DPD-stage blocklist (can block in Early/Mid/Late etc.)
+- Decision rules auto-suggest `otherCondition` when Clear Arrears Plan is selected; condition updates when clearanceMonths changes
+
 ## Recent Changes
 - 2026-03-03: Global analysis context (`client/src/hooks/use-analysis.tsx`) — analysis state (progress, SSE connection) persists across page navigation; header shows progress indicator on all pages during analysis; bulk select/delete for review queue decisions
 - 2026-03-03: Added "Start Analyzing" feature with POST /api/analyze endpoint, multi-source data aggregation (loan+payment+conversation per customer), SSE progress streaming, redesigned review queue with pagination, redesigned decision detail page with sidebar layout

@@ -10,6 +10,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   ArrowLeft,
   CheckCircle2,
   XCircle,
@@ -29,6 +37,7 @@ import {
   TrendingUp,
   Heart,
   Mail,
+  BarChart3,
 } from "lucide-react";
 import type { Decision } from "@shared/schema";
 
@@ -503,6 +512,81 @@ export default function DecisionDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          {raw.arrears_clearance_plan && typeof raw.arrears_clearance_plan === 'object' && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4" />
+                  Arrears Clearance Plan
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {(() => {
+                  const plan = raw.arrears_clearance_plan as {
+                    monthly_payment_recommended?: number;
+                    surplus_above_mad?: number;
+                    total_arrears?: number;
+                    months_to_clear?: number;
+                    projected_timeline?: Array<{ month: number; payment: number; remaining_arrears: number }>;
+                  };
+                  return (
+                    <>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-muted/50 rounded-md p-3">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Monthly Payment</p>
+                          <p className="text-lg font-semibold" data-testid="text-cap-monthly-payment">
+                            {plan.monthly_payment_recommended != null ? plan.monthly_payment_recommended.toLocaleString() : 'N/A'}
+                          </p>
+                        </div>
+                        <div className="bg-muted/50 rounded-md p-3">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Surplus Above MAD</p>
+                          <p className="text-lg font-semibold" data-testid="text-cap-surplus">
+                            {plan.surplus_above_mad != null ? plan.surplus_above_mad.toLocaleString() : 'N/A'}
+                          </p>
+                        </div>
+                        <div className="bg-muted/50 rounded-md p-3">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Total Arrears</p>
+                          <p className="text-lg font-semibold" data-testid="text-cap-total-arrears">
+                            {plan.total_arrears != null ? plan.total_arrears.toLocaleString() : 'N/A'}
+                          </p>
+                        </div>
+                        <div className="bg-muted/50 rounded-md p-3">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Months to Clear</p>
+                          <p className="text-lg font-semibold" data-testid="text-cap-months">
+                            {plan.months_to_clear ?? 'N/A'}
+                          </p>
+                        </div>
+                      </div>
+                      {plan.projected_timeline && plan.projected_timeline.length > 0 && (
+                        <div>
+                          <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Projected Timeline</p>
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Month</TableHead>
+                                <TableHead className="text-right">Payment</TableHead>
+                                <TableHead className="text-right">Remaining Arrears</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {plan.projected_timeline.map((row, i) => (
+                                <TableRow key={i}>
+                                  <TableCell className="font-medium" data-testid={`text-cap-timeline-month-${i}`}>Month {row.month}</TableCell>
+                                  <TableCell className="text-right" data-testid={`text-cap-timeline-payment-${i}`}>{row.payment?.toLocaleString()}</TableCell>
+                                  <TableCell className="text-right" data-testid={`text-cap-timeline-remaining-${i}`}>{row.remaining_arrears?.toLocaleString()}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader className="pb-3">

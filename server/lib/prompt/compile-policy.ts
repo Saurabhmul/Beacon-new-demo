@@ -81,15 +81,31 @@ export function compileTreatments(
       .filter(s => !blocked.includes(s.name))
       .map(s => s.name);
 
-    if (allowed.length > 0) {
-      catalog += `- ${t.name}: ALLOWED in [${allowed.join(', ')}]\n`;
-    } else if (dpdStages.length === 0) {
-      catalog += `- ${t.name}: ALLOWED in all stages\n`;
+    if (t.name === 'Clear Arrears Plan') {
+      const months = t.clearanceMonths || 6;
+      const stageList = allowed.length > 0 ? allowed.join(', ') : (dpdStages.length === 0 ? 'all stages' : 'none');
+      catalog += `\nTREATMENT: Clear Arrears Plan\n`;
+      catalog += `Available in: [${stageList}]\n`;
+      catalog += `Definition: Customer pays above MAD to clear arrears within target window.\n`;
+      catalog += `Eligibility condition: (NMPC - MAD) * ${months} >= Total Arrears\n`;
+      catalog += `  where ${months} = configured maximum months (client-configurable)\n\n`;
+      catalog += `When recommending Clear Arrears Plan, you MUST calculate and include:\n`;
+      catalog += `  1. Monthly payment needed = MAD + (Total Arrears / ${months})\n`;
+      catalog += `  2. Actual months to clear = ceiling(Total Arrears / (NMPC - MAD))\n`;
+      catalog += `  3. Month-by-month projection showing arrears balance reducing to zero\n\n`;
+      catalog += `If (NMPC - MAD) * ${months} < Total Arrears, this treatment\n`;
+      catalog += `does NOT qualify. Skip to next matching decision rule.\n`;
     } else {
-      catalog += `- ${t.name}: BLOCKED in all stages\n`;
-    }
-    if (t.definition) {
-      catalog += `  Definition: ${t.definition}\n`;
+      if (allowed.length > 0) {
+        catalog += `- ${t.name}: ALLOWED in [${allowed.join(', ')}]\n`;
+      } else if (dpdStages.length === 0) {
+        catalog += `- ${t.name}: ALLOWED in all stages\n`;
+      } else {
+        catalog += `- ${t.name}: BLOCKED in all stages\n`;
+      }
+      if (t.definition) {
+        catalog += `  Definition: ${t.definition}\n`;
+      }
     }
 
     if (blocked.length > 0) {

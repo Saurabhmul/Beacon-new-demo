@@ -63,6 +63,7 @@ export interface TreatmentOption {
   definition: string;
   isCustom?: boolean;
   blockedStages?: string[];
+  clearanceMonths?: number;
 }
 
 export interface DecisionRule {
