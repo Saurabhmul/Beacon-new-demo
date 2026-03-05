@@ -71,13 +71,16 @@ STEP 3 - Apply the label thresholds below:
   using the percentage rules to assign the label.
 
 CRITICAL RULES:
+- Affordability can NEVER be "NOT SURE". There is always enough data to determine it:
+  * If no payments received in the last 3 months → VERY LOW
+  * If all payments failed → VERY LOW
+  * If customer states they cannot pay → VERY LOW
+  * If there is no payment data at all → VERY LOW (absence of payments = no ability to pay)
 - The affordability and willingness labels MUST match your analysis.
-  If your calculation shows MEDIUM, the label MUST be MEDIUM (not NOT SURE).
-- Capacity = $0 means VERY LOW, NOT "NOT SURE"
-- Failed payments = evidence of $0 capacity, NOT "unknown"
-- Customer stating they cannot pay = capacity = $0 = VERY LOW
-- NOT SURE is ONLY for cases with literally zero data (no payments, no conversations, no income info)
-- NEVER output NOT SURE if you have enough data to calculate a label
+  If your calculation shows MEDIUM, the label MUST be MEDIUM.
+- Capacity = $0 means VERY LOW
+- Failed payments = evidence of $0 capacity
+- NEVER output NOT SURE for affordability under any circumstances
 
 Affordability label thresholds (client-configured):
 {{POLICY_AFFORDABILITY_THRESHOLDS}}

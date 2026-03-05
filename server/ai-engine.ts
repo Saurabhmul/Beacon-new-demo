@@ -210,9 +210,13 @@ REMINDER before you respond:
     if (!text) return null;
     const arrowMatch = text.match(/→\s*(HIGH|MEDIUM|LOW|VERY LOW)/i);
     if (arrowMatch) return arrowMatch[1].toUpperCase();
+    const labelMatch = text.match(/(?:resulting in|rating of|rated as|classified as|is)\s+(?:a\s+)?(VERY LOW|HIGH|MEDIUM|LOW)\b/i);
+    if (labelMatch) return labelMatch[1].toUpperCase();
     const lower = text.toLowerCase();
     if (lower.includes("all payments failed") || lower.includes("zero successful payments") ||
         lower.includes("no successful payments") || lower.includes("capacity = $0") ||
+        lower.includes("capacity is $0") || lower.includes("no payments in the last") ||
+        lower.includes("no payments received") || lower.includes("absence of payments") ||
         lower.includes("nmpc is $0") || lower.includes("nmpc=$0") || lower.includes("nmpc = $0")) {
       return "VERY LOW";
     }
@@ -222,8 +226,8 @@ REMINDER before you respond:
   function extractLabelFromEvidence(evidenceText: string, fieldName: "affordability" | "willingness"): string | null {
     if (!evidenceText) return null;
     const patterns = [
-      new RegExp(`${fieldName}\\s*(?:=|is|:)\\s*'?(VERY LOW|HIGH|MEDIUM|LOW)'?`, "i"),
-      new RegExp(`${fieldName}\\s*(?:=|is|:)\\s*"?(VERY LOW|HIGH|MEDIUM|LOW)"?`, "i"),
+      new RegExp(`${fieldName}\\s*(?:=|is|:)\\s*['"]?(VERY LOW|HIGH|MEDIUM|LOW)['"]?`, "i"),
+      new RegExp(`(VERY LOW|HIGH|MEDIUM|LOW)\\s+${fieldName}`, "i"),
     ];
     for (const pattern of patterns) {
       const match = evidenceText.match(pattern);
@@ -267,6 +271,24 @@ REMINDER before you respond:
       const fromAbility = String(parsed.reason_for_ability_to_pay ?? "");
       const fromText = extractLabelFromText(fromAbility);
       if (fromText) finalAffordability = fromText;
+    }
+
+    if (finalAffordability === "NOT SURE") {
+      const payments = (customerData._payments || customerData.payments || []) as Array<Record<string, any>>;
+      const threeMonthsAgo = new Date();
+      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+      const recentReceived = payments.filter(p => {
+        const status = String(p.payment_status || "").toLowerCase();
+        const date = new Date(p.date_of_payment || 0);
+        return status === "received" && date >= threeMonthsAgo;
+      });
+      if (recentReceived.length === 0) {
+        finalAffordability = "VERY LOW";
+        if (!reasonAffordability) {
+          reasonAffordability = "No successful payments received in the last 3 months. Affordability defaults to VERY LOW per business rules.";
+        }
+        console.log("[AI FIX] Affordability defaulted to VERY LOW — no recent successful payments");
+      }
     }
 
     if (finalWillingness === "NOT SURE") {
@@ -351,8 +373,8 @@ REMINDER before you respond:
       conversation: "",
       vulnerability: false,
       reason_for_vulnerability: "",
-      affordability: "NOT SURE",
-      reason_for_affordability: "",
+      affordability: "VERY LOW",
+      reason_for_affordability: "AI analysis could not be parsed. Affordability defaults to VERY LOW per business rules.",
       willingness: "NOT SURE",
       reason_for_willingness: "",
       ability_to_pay: null,
