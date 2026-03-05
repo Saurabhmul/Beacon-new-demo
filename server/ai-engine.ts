@@ -63,6 +63,9 @@ REMINDER before you respond:
 
   const text = response.text || "";
 
+  console.log("[AI DEBUG] Raw response length:", text.length);
+  console.log("[AI DEBUG] Raw response (first 2000 chars):", text.substring(0, 2000));
+
   let jsonStr = text;
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (jsonMatch) {
@@ -106,7 +109,13 @@ REMINDER before you respond:
     return null;
   }
 
-  const parsed = repairAndParse(jsonStr);
+  const parsed = repairAndParse(jsonStr) as Record<string, any> | null;
+
+  console.log("[AI DEBUG] Parsed affordability:", parsed?.affordability);
+  console.log("[AI DEBUG] Parsed reason_for_affordability:", parsed?.reason_for_affordability);
+  console.log("[AI DEBUG] Parsed willingness:", parsed?.willingness);
+  console.log("[AI DEBUG] Parsed reason_for_willingness:", parsed?.reason_for_willingness);
+  console.log("[AI DEBUG] Parsed payment_history:", parsed?.payment_history);
 
   function normalizeEmail(raw: unknown): string {
     if (!raw) return "NO_ACTION";
@@ -140,20 +149,30 @@ REMINDER before you respond:
     return "NOT SURE";
   }
 
-  function extractLabelFromReason(label: string, reasonText: string): string {
-    if (label !== "NOT SURE" || !reasonText) return label;
-    const arrowMatch = reasonText.match(/→\s*(HIGH|MEDIUM|LOW|VERY LOW)/i);
-    if (arrowMatch) {
-      const extracted = arrowMatch[1].toUpperCase();
-      if (VALID_LABELS.has(extracted)) return extracted;
-    }
-    const lower = reasonText.toLowerCase();
-    if (lower.includes("nmpc is $0") || lower.includes("nmpc=$0") || lower.includes("nmpc = $0") ||
-        lower.includes("all payments failed") || lower.includes("zero successful payments") ||
-        lower.includes("no successful payments")) {
+  function extractLabelFromText(text: string): string | null {
+    if (!text) return null;
+    const arrowMatch = text.match(/→\s*(HIGH|MEDIUM|LOW|VERY LOW)/i);
+    if (arrowMatch) return arrowMatch[1].toUpperCase();
+    const lower = text.toLowerCase();
+    if (lower.includes("all payments failed") || lower.includes("zero successful payments") ||
+        lower.includes("no successful payments") || lower.includes("capacity = $0") ||
+        lower.includes("nmpc is $0") || lower.includes("nmpc=$0") || lower.includes("nmpc = $0")) {
       return "VERY LOW";
     }
-    return label;
+    return null;
+  }
+
+  function extractLabelFromEvidence(evidenceText: string, fieldName: "affordability" | "willingness"): string | null {
+    if (!evidenceText) return null;
+    const patterns = [
+      new RegExp(`${fieldName}\\s*(?:=|is|:)\\s*'?(VERY LOW|HIGH|MEDIUM|LOW)'?`, "i"),
+      new RegExp(`${fieldName}\\s*(?:=|is|:)\\s*"?(VERY LOW|HIGH|MEDIUM|LOW)"?`, "i"),
+    ];
+    for (const pattern of patterns) {
+      const match = evidenceText.match(pattern);
+      if (match) return match[1].toUpperCase();
+    }
+    return null;
   }
 
   function humanizeReasonText(text: string): string {
@@ -168,16 +187,76 @@ REMINDER before you respond:
 
     const rawAffordability = normalizeLabel(parsed.affordability);
     const rawWillingness = normalizeLabel(parsed.willingness);
-    const reasonAffordability = String(parsed.reason_for_affordability ?? "");
-    const reasonWillingness = String(parsed.reason_for_willingness ?? "");
+    let reasonAffordability = String(parsed.reason_for_affordability ?? "");
+    let reasonWillingness = String(parsed.reason_for_willingness ?? "");
     const reasonAbilityToPay = String(parsed.reason_for_ability_to_pay ?? "");
+    const solutionEvidence = String(parsed.solution_evidence ?? "");
 
-    const finalAffordability = extractLabelFromReason(rawAffordability, reasonAffordability);
-    const finalWillingness = extractLabelFromReason(rawWillingness, reasonWillingness);
+    let finalAffordability = rawAffordability;
+    let finalWillingness = rawWillingness;
+
+    if (finalAffordability === "NOT SURE") {
+      const fromReason = extractLabelFromText(reasonAffordability);
+      if (fromReason) finalAffordability = fromReason;
+    }
+    if (finalAffordability === "NOT SURE") {
+      const fromEvidence = extractLabelFromEvidence(solutionEvidence, "affordability");
+      if (fromEvidence) {
+        finalAffordability = fromEvidence;
+        console.log("[AI FIX] Extracted affordability from solution_evidence:", fromEvidence);
+      }
+    }
+    if (finalAffordability === "NOT SURE") {
+      const fromAbility = String(parsed.reason_for_ability_to_pay ?? "");
+      const fromText = extractLabelFromText(fromAbility);
+      if (fromText) finalAffordability = fromText;
+    }
+
+    if (finalWillingness === "NOT SURE") {
+      const fromReason = extractLabelFromText(reasonWillingness);
+      if (fromReason) finalWillingness = fromReason;
+    }
+    if (finalWillingness === "NOT SURE") {
+      const fromEvidence = extractLabelFromEvidence(solutionEvidence, "willingness");
+      if (fromEvidence) {
+        finalWillingness = fromEvidence;
+        console.log("[AI FIX] Extracted willingness from solution_evidence:", fromEvidence);
+      }
+    }
+
+    if (!reasonAffordability && finalAffordability !== "NOT SURE") {
+      const abilityReason = String(parsed.reason_for_ability_to_pay ?? "");
+      if (abilityReason) {
+        reasonAffordability = `${abilityReason} → ${finalAffordability}`;
+        console.log("[AI FIX] Generated reason_for_affordability from ability_to_pay reason");
+      }
+    }
+
+    if (!reasonWillingness && finalWillingness !== "NOT SURE") {
+      const conversation = String(parsed.conversation ?? "");
+      if (conversation) {
+        reasonWillingness = `${conversation} → ${finalWillingness}`;
+        console.log("[AI FIX] Generated reason_for_willingness from conversation summary");
+      }
+    }
+
+    console.log("[AI FINAL] affordability:", finalAffordability, "willingness:", finalWillingness);
+
+    let paymentHistory = String(parsed.payment_history ?? "");
+    if (!paymentHistory) {
+      const payments = (customerData._payments || customerData.payments || []) as Array<Record<string, unknown>>;
+      if (payments.length > 0) {
+        const recent = payments.slice(0, 5);
+        paymentHistory = recent.map((p: Record<string, unknown>) =>
+          `${p.date_of_payment || "unknown date"}: $${p.amount_paid || "?"} (${p.payment_status || "unknown"})`
+        ).join("; ");
+        console.log("[AI FIX] Generated payment_history from customer data");
+      }
+    }
 
     return {
       customer_guid: parsed.customer_guid || String(customerData["customer / account / loan id"] || customerData.customer_id || customerData.account_id || "unknown"),
-      payment_history: parsed.payment_history || "",
+      payment_history: paymentHistory,
       conversation: parsed.conversation || "",
       vulnerability: parsed.vulnerability === true || parsed.vulnerability === "true",
       reason_for_vulnerability: parsed.reason_for_vulnerability || "",

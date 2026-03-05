@@ -129,18 +129,18 @@ Reason: No matching policy rule - human judgment required.
 {{CUSTOMER_DATA}}
 
 === OUTPUT FORMAT ===
-Respond ONLY with valid JSON matching this schema:
+Respond ONLY with a single valid JSON object matching this schema:
 {{OUTPUT_SCHEMA}}
 
-MANDATORY: The fields "reason_for_affordability" and "reason_for_willingness"
-must NEVER be empty. Use plain English (no acronyms like NMPC or MAD).
-Always show your calculation/reasoning:
-- reason_for_affordability: Show calculation (e.g., "Median of last 3 months
-  successful payments = $X. Estimated capacity ($X) vs minimum due ($Y) = Z% → LABEL")
-- reason_for_willingness: Cite specific behavioral evidence from conversations
-  or payment patterns (e.g., "Customer proactively requested help on [date]
-  → HIGH" or "No response to 3 outreach attempts → LOW")
-
-CRITICAL: The label in affordability and willingness fields MUST match
-the conclusion (→ LABEL) in the corresponding reason field. If your
-reason says "→ MEDIUM", affordability MUST be "MEDIUM", not "NOT SURE".
+IMPORTANT RULES FOR FILLING THE JSON:
+1. Every field must have a value. Do not leave any field empty ("").
+2. "affordability" must be one of: HIGH, MEDIUM, LOW, VERY LOW, NOT SURE.
+   Fill it with the label from your Step 3 calculation above.
+3. "reason_for_affordability" must show your calculation. Example:
+   "Median of successful payments = $0 (all failed). Minimum due = $251. 0% → VERY LOW"
+4. "willingness" must be one of: HIGH, MEDIUM, LOW, VERY LOW, NOT SURE.
+5. "reason_for_willingness" must cite evidence. Example:
+   "Customer proactively emailed requesting help on 12/11 → HIGH"
+6. "payment_history" must summarize the last 3 months of payments.
+7. The affordability and willingness labels MUST match what you calculated.
+   Do NOT put NOT SURE if your calculation produced a specific label.
