@@ -62,6 +62,7 @@ export interface TreatmentOption {
   enabled: boolean;
   definition: string;
   isCustom?: boolean;
+  blockedStages?: string[];
 }
 
 export interface DecisionRule {
@@ -108,6 +109,8 @@ export const policyConfigs = pgTable("policy_configs", {
   availableTreatments: jsonb("available_treatments").$type<TreatmentOption[]>().default([]).notNull(),
   decisionRules: jsonb("decision_rules").$type<DecisionRule[]>().default([]).notNull(),
   escalationRules: jsonb("escalation_rules").$type<EscalationRules>(),
+  compiledPolicy: jsonb("compiled_policy").$type<Record<string, string>>(),
+  compiledAt: timestamp("compiled_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

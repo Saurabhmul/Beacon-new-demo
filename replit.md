@@ -50,13 +50,23 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - `dpd_stages` - Configurable DPD bucket stages
 - `policy_configs` - Policy configuration per client (vulnerability definition, affordability rules, available treatments, decision rules, escalation rules)
 
+## Prompt Compiler Architecture (3-Layer System)
+- **Brain (Static)**: `server/lib/prompt/brain-template.txt` — Role, analytical framework, scoring formulas, evidence rules, output format with `{{PLACEHOLDER}}` markers. Rarely changed.
+- **Policy (Dynamic)**: Auto-compiled from Policy Config sections A-F whenever client saves config. Stored as `compiledPolicy` (jsonb) on `policy_configs` table. Compiler: `server/lib/prompt/compile-policy.ts`.
+- **Customer Data (Per-request)**: Formatted from uploaded data at runtime per customer. Formatter: `server/lib/prompt/assemble-prompt.ts`.
+- **Assembler**: `server/lib/prompt/assemble-prompt.ts` — Loads brain template, replaces all `{{PLACEHOLDER}}` markers with compiled policy + customer data + output schema.
+- **Output Schema**: `server/lib/prompt/output-schema.json` — Expected JSON response format.
+- **Prompt Config tab**: Read-only preview of assembled prompt (brain + policy, customer data placeholder). Has Regenerate and Copy buttons. Only the Expected Output Format section is editable.
+
 ## AI Analysis Flow
 1. User clicks "Start Analyzing" on Review Queue page
 2. `POST /api/analyze` gathers all uploaded data per unique customer (loan + payments + conversations)
-3. Gemini AI analyzes each customer against SOP rules via SSE streaming
-4. Decisions are created progressively and appear in the review queue in real-time
-5. Review Queue shows: Customer ID, Last AI Run Date, Proposed Action, Review button
-6. Decision Detail page shows: sidebar with customer metrics, Beacon Analysis section, Ability to Pay section, Recommended Action section, approve/reject controls
+3. Loads compiled policy from `policy_configs.compiledPolicy` (or compiles on-the-fly if not cached)
+4. Assembles full prompt: brain template + compiled policy + customer data + output schema
+5. Gemini AI analyzes each customer via SSE streaming
+6. Decisions are created progressively and appear in the review queue in real-time
+7. Review Queue shows: Customer ID, Last AI Run Date, Proposed Action, Review button
+8. Decision Detail page shows: sidebar with customer metrics, Beacon Analysis section, Ability to Pay section, Recommended Action section, approve/reject controls
 
 ## Recent Changes
 - 2026-03-03: Global analysis context (`client/src/hooks/use-analysis.tsx`) — analysis state (progress, SSE connection) persists across page navigation; header shows progress indicator on all pages during analysis; bulk select/delete for review queue decisions

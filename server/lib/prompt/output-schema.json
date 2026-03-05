@@ -1,0 +1,21 @@
+{
+  "customer_guid": "string",
+  "payment_history": "string (max 3 lines summarizing last 3 months)",
+  "conversation": "string (max 3 lines summarizing relevant conversations)",
+  "vulnerability": "true or false",
+  "reason_for_vulnerability": "string (max 5 lines, only if true)",
+  "affordability": "HIGH|MEDIUM|LOW|VERY LOW|NOT SURE",
+  "reason_for_affordability": "string (max 5 lines)",
+  "willingness": "HIGH|MEDIUM|LOW|VERY LOW|NOT SURE",
+  "reason_for_willingness": "string (max 5 lines)",
+  "ability_to_pay": "number or null",
+  "reason_for_ability_to_pay": "string (max 5 lines)",
+  "problem_description": "string (max 5 lines)",
+  "problem_confidence_score": "integer 1-10",
+  "problem_evidence": "string (max 5 lines citing specific data)",
+  "proposed_solution": "string (max 5 lines)",
+  "solution_confidence_score": "integer 1-10",
+  "solution_evidence": "string (max 5 lines)",
+  "internal_action": "string (max 5 lines)",
+  "proposed_email_to_customer": "Subject: ... Body: ... OR NO_ACTION"
+}

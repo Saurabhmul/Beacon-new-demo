@@ -11,6 +11,8 @@ import { db } from "./db";
 import { eq } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
+import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
+import { assemblePrompt, assemblePreview, formatCustomerData } from "./lib/prompt/assemble-prompt";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -214,13 +216,27 @@ export async function registerRoutes(
       const clientConfig = await storage.getClientConfig(userId);
       if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
 
+      const dpdStagesData = await storage.getDpdStages(userId);
+
+      const compiled = compilePolicyPrompt({
+        dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
+        vulnerabilityDefinition: req.body.vulnerabilityDefinition,
+        affordabilityRules: req.body.affordabilityRules,
+        treatments: req.body.availableTreatments,
+        decisionRules: req.body.decisionRules,
+        escalationRules: req.body.escalationRules,
+      });
+
       const config = await storage.createPolicyConfig({
         ...req.body,
         userId,
         clientConfigId: clientConfig.id,
+        compiledPolicy: compiled as unknown as Record<string, string>,
+        compiledAt: new Date(),
       });
       res.status(201).json(config);
     } catch (error) {
+      console.error("Create policy config error:", error);
       res.status(500).json({ error: "Failed to create policy config" });
     }
   });
@@ -228,10 +244,93 @@ export async function registerRoutes(
   app.patch("/api/policy-config", isAuthenticated, async (req, res) => {
     try {
       const userId = getUserId(req);
-      const config = await storage.updatePolicyConfig(userId, req.body);
+      const dpdStagesData = await storage.getDpdStages(userId);
+
+      const compiled = compilePolicyPrompt({
+        dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
+        vulnerabilityDefinition: req.body.vulnerabilityDefinition,
+        affordabilityRules: req.body.affordabilityRules,
+        treatments: req.body.availableTreatments,
+        decisionRules: req.body.decisionRules,
+        escalationRules: req.body.escalationRules,
+      });
+
+      const config = await storage.updatePolicyConfig(userId, {
+        ...req.body,
+        compiledPolicy: compiled as unknown as Record<string, string>,
+        compiledAt: new Date(),
+      });
       res.json(config);
     } catch (error) {
+      console.error("Update policy config error:", error);
       res.status(500).json({ error: "Failed to update policy config" });
+    }
+  });
+
+  app.get("/api/prompt-preview", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const policyConfig = await storage.getPolicyConfig(userId);
+      const dataConfig = await storage.getDataConfig(userId);
+
+      if (!policyConfig || !policyConfig.compiledPolicy) {
+        const dpdStagesData = await storage.getDpdStages(userId);
+        const compiled = compilePolicyPrompt({
+          dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
+          vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
+          affordabilityRules: policyConfig?.affordabilityRules,
+          treatments: policyConfig?.availableTreatments,
+          decisionRules: policyConfig?.decisionRules,
+          escalationRules: policyConfig?.escalationRules,
+        });
+        const preview = assemblePreview(compiled, dataConfig?.outputFormat || undefined);
+        res.json({ preview, compiledAt: null, isLive: false });
+        return;
+      }
+
+      const preview = assemblePreview(
+        policyConfig.compiledPolicy as Record<string, string>,
+        dataConfig?.outputFormat || undefined
+      );
+      res.json({
+        preview,
+        compiledAt: policyConfig.compiledAt,
+        isLive: true,
+      });
+    } catch (error) {
+      console.error("Prompt preview error:", error);
+      res.status(500).json({ error: "Failed to generate prompt preview" });
+    }
+  });
+
+  app.post("/api/prompt-preview/regenerate", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const policyConfig = await storage.getPolicyConfig(userId);
+      const dpdStagesData = await storage.getDpdStages(userId);
+      const dataConfig = await storage.getDataConfig(userId);
+
+      const compiled = compilePolicyPrompt({
+        dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
+        vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
+        affordabilityRules: policyConfig?.affordabilityRules,
+        treatments: policyConfig?.availableTreatments,
+        decisionRules: policyConfig?.decisionRules,
+        escalationRules: policyConfig?.escalationRules,
+      });
+
+      if (policyConfig) {
+        await storage.updatePolicyConfig(userId, {
+          compiledPolicy: compiled as unknown as Record<string, string>,
+          compiledAt: new Date(),
+        });
+      }
+
+      const preview = assemblePreview(compiled, dataConfig?.outputFormat || undefined);
+      res.json({ preview, compiledAt: new Date(), isLive: true });
+    } catch (error) {
+      console.error("Prompt regenerate error:", error);
+      res.status(500).json({ error: "Failed to regenerate prompt" });
     }
   });
 
@@ -750,9 +849,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No loan data uploaded. Please upload loan data first." });
       }
 
-      const rbs = await storage.getRulebooks(userId);
       const dataConfig = await storage.getDataConfig(userId);
-      const sopText = rbs.length ? rbs.map(r => r.sopText || r.extractedText || "").join("\n\n") : "";
+      const policyConfig = await storage.getPolicyConfig(userId);
       const loanRecords = loanUpload.uploadedData as Record<string, unknown>[];
 
       const paymentUpload = await storage.getUploadByCategory(userId, "payment_history");
@@ -822,10 +920,29 @@ export async function registerRoutes(
                 _conversation_count: data.conversations.length,
               };
 
+              let compiledPolicy = policyConfig?.compiledPolicy as Record<string, string> | null;
+              if (!compiledPolicy) {
+                const dpdStagesData = await storage.getDpdStages(userId);
+                const compiled = compilePolicyPrompt({
+                  dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
+                  vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
+                  affordabilityRules: policyConfig?.affordabilityRules,
+                  treatments: policyConfig?.availableTreatments,
+                  decisionRules: policyConfig?.decisionRules,
+                  escalationRules: policyConfig?.escalationRules,
+                });
+                compiledPolicy = compiled as unknown as Record<string, string>;
+              }
+
+              const assembledPrompt = assemblePrompt(
+                compiledPolicy,
+                combinedData,
+                dataConfig?.outputFormat || undefined
+              );
+
               const result = await analyzeCustomer(
                 combinedData,
-                sopText,
-                dataConfig?.promptTemplate || undefined
+                assembledPrompt
               );
 
               await storage.createDecision({

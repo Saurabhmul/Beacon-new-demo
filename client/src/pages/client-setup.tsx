@@ -42,6 +42,7 @@ import {
   Building2, Mail, Phone, User, Save, Loader2,
   BookOpen, Upload, FileText, Trash2, Plus, File as FileIcon,
   Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
+  Copy, RefreshCw, Info, Eye,
 } from "lucide-react";
 import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule } from "@shared/schema";
 
@@ -486,6 +487,7 @@ function PolicyConfigTab() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policy-config"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/prompt-preview"] });
       toast({ title: "Policy configuration saved" });
     },
     onError: () => {
@@ -597,6 +599,17 @@ function PolicyConfigTab() {
 
   function removeCustomTreatment(index: number) {
     setTreatments(prev => prev.filter((_, i) => i !== index));
+  }
+
+  function toggleBlockedStage(treatmentIndex: number, stageName: string) {
+    setTreatments(prev => prev.map((t, i) => {
+      if (i !== treatmentIndex) return t;
+      const blocked = t.blockedStages || [];
+      const updated = blocked.includes(stageName)
+        ? blocked.filter(s => s !== stageName)
+        : [...blocked, stageName];
+      return { ...t, blockedStages: updated };
+    }));
   }
 
   function addDecisionRule() {
@@ -844,6 +857,22 @@ function PolicyConfigTab() {
                         {treatment.isCustom && <Badge variant="secondary" className="text-[10px]">Custom</Badge>}
                       </div>
                       <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{treatment.definition}</p>
+                      {treatment.enabled && dpdStages.length > 0 && (
+                        <div className="mt-2 flex items-center gap-3 flex-wrap">
+                          <span className="text-xs text-muted-foreground">Blocked in:</span>
+                          {dpdStages.map(stage => (
+                            <label key={stage.id} className="flex items-center gap-1.5 cursor-pointer">
+                              <Checkbox
+                                checked={(treatment.blockedStages || []).includes(stage.name)}
+                                onCheckedChange={() => toggleBlockedStage(index, stage.name)}
+                                className="h-3.5 w-3.5"
+                                data-testid={`checkbox-block-${index}-${stage.name}`}
+                              />
+                              <span className="text-xs">{stage.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                   {treatment.isCustom && (
@@ -1380,16 +1409,17 @@ function PromptConfigTab() {
   const { toast } = useToast();
 
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
+  const { data: previewData, isLoading: previewLoading, refetch: refetchPreview } = useQuery<{
+    preview: string;
+    compiledAt: string | null;
+    isLive: boolean;
+  }>({ queryKey: ["/api/prompt-preview"] });
 
-  const [promptTemplate, setPromptTemplate] = useState(DEFAULT_PROMPT);
   const [outputFormat, setOutputFormat] = useState(DEFAULT_OUTPUT);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     if (dataConfig && !hydrated) {
-      if (dataConfig.promptTemplate) {
-        setPromptTemplate(dataConfig.promptTemplate);
-      }
       if (dataConfig.outputFormat) {
         setOutputFormat(dataConfig.outputFormat);
       }
@@ -1397,56 +1427,114 @@ function PromptConfigTab() {
     }
   }, [dataConfig, hydrated]);
 
-  const saveMutation = useMutation({
+  const regenerateMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/prompt-preview/regenerate");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/prompt-preview"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-config"] });
+      toast({ title: "Prompt regenerated", description: "The prompt has been recompiled from your latest Policy Config." });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to regenerate prompt.", variant: "destructive" });
+    },
+  });
+
+  const saveOutputMutation = useMutation({
     mutationFn: async () => {
       const method = dataConfig ? "PATCH" : "POST";
       const res = await apiRequest(method, "/api/data-config", {
-        promptTemplate,
         outputFormat,
       });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/data-config"] });
-      toast({ title: "Prompt configuration saved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/prompt-preview"] });
+      toast({ title: "Output format saved" });
     },
     onError: () => {
-      toast({ title: "Error", description: "Failed to save.", variant: "destructive" });
+      toast({ title: "Error", description: "Failed to save output format.", variant: "destructive" });
     },
   });
 
+  const copyToClipboard = () => {
+    if (previewData?.preview) {
+      navigator.clipboard.writeText(previewData.preview);
+      toast({ title: "Copied", description: "Full prompt copied to clipboard." });
+    }
+  };
+
+  const compiledAtText = previewData?.compiledAt
+    ? `Last compiled: ${new Date(previewData.compiledAt).toLocaleString()}`
+    : "Not yet compiled";
+
   return (
     <div className="space-y-6">
+      <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/20 p-4 flex items-start gap-3">
+        <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+        <div className="text-sm text-blue-800 dark:text-blue-300">
+          <p className="font-medium">Auto-generated prompt</p>
+          <p className="mt-1">
+            This prompt is auto-generated from your Policy Config. To change rules, edit the Policy Config tab.
+            {" "}<span className="font-medium">{compiledAtText}</span>
+          </p>
+        </div>
+      </div>
+
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <CardTitle className="text-base">AI Prompt Template</CardTitle>
-            <CardDescription>Customize the prompt sent to AI along with customer data and SOP rules.</CardDescription>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Eye className="w-4 h-4" />
+              Assembled Prompt Preview
+            </CardTitle>
+            <CardDescription>Read-only view of the full prompt (Brain + Policy Config). Customer data is injected at runtime.</CardDescription>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setPromptTemplate(DEFAULT_PROMPT)}
-            data-testid="button-reset-prompt"
-          >
-            <RotateCcw className="w-3.5 h-3.5 mr-1" />
-            Reset to Default
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => regenerateMutation.mutate()}
+              disabled={regenerateMutation.isPending}
+              data-testid="button-regenerate-preview"
+            >
+              {regenerateMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
+              Regenerate
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={copyToClipboard}
+              data-testid="button-copy-prompt"
+            >
+              <Copy className="w-3.5 h-3.5 mr-1" />
+              Copy
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
-          <Textarea
-            value={promptTemplate}
-            onChange={(e) => setPromptTemplate(e.target.value)}
-            className="min-h-[500px] text-sm font-mono leading-relaxed whitespace-pre-wrap"
-            data-testid="textarea-prompt"
-          />
+          {previewLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
+            </div>
+          ) : (
+            <pre
+              className="min-h-[500px] max-h-[700px] overflow-auto text-sm font-mono leading-relaxed whitespace-pre-wrap bg-muted/50 dark:bg-muted/20 rounded-lg p-4 border"
+              data-testid="text-prompt-preview"
+            >
+              {previewData?.preview || "No prompt generated yet. Save your Policy Config first."}
+            </pre>
+          )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Expected Output Format</CardTitle>
-          <CardDescription>Define the JSON structure expected from AI responses.</CardDescription>
+          <CardDescription>Define the JSON structure expected from AI responses. This section is editable.</CardDescription>
         </CardHeader>
         <CardContent>
           <Textarea
@@ -1459,9 +1547,9 @@ function PromptConfigTab() {
       </Card>
 
       <div className="pt-2 pb-8">
-        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-prompt-config">
-          {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-          Save Configuration
+        <Button onClick={() => saveOutputMutation.mutate()} disabled={saveOutputMutation.isPending} data-testid="button-save-prompt-config">
+          {saveOutputMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+          Save Output Format
         </Button>
       </div>
     </div>

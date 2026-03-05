@@ -34,41 +34,9 @@ export interface AIDecisionOutput {
 
 export async function analyzeCustomer(
   customerData: Record<string, unknown>,
-  sopText: string,
-  promptTemplate?: string
+  assembledPrompt: string
 ): Promise<AIDecisionOutput> {
-  const currentDate = new Date().toISOString().split('T')[0];
-  const promptWithDate = (promptTemplate || "").replace(/\{\{current_date\}\}/g, currentDate);
-  const systemPrompt = `Current date: ${currentDate}
-
-${promptWithDate}
-
-${sopText ? `ADDITIONAL SOP / RULEBOOK CONTEXT:\n${sopText}\n\n` : ""}CRITICAL INSTRUCTION: You MUST strictly follow the decision matrix provided above. First determine the customer's Vulnerability (true/false), Affordability (high/medium/low/very low/not sure), and Willingness (high/medium/low/very low/not sure). Then match these values to the EXACT corresponding rule in the "Determining the next best action" section and apply ONLY that recommendation. Do NOT deviate from the decision matrix based on conversation history, past agent suggestions, or your own judgment. The decision matrix is authoritative.
-
-IMPORTANT: You MUST respond with valid JSON only. No markdown, no code blocks, no explanation outside the JSON.
-
-Required JSON output format:
-{
-  "customer_guid": "the customer ID from the input data",
-  "payment_history": "<last 3 months payment history summarized in <=3 lines>",
-  "conversation": "<last 6 months conversation summarized in <=3 lines relevant for the next best action in collections>",
-  "vulnerability": <true or false>,
-  "reason_for_vulnerability": "<if vulnerable, string max 5 lines explaining why, otherwise empty string>",
-  "affordability": "<high/medium/low/very low/not sure>",
-  "reason_for_affordability": "<string max 5 lines>",
-  "willingness": "<high/medium/low/very low/not sure>",
-  "reason_for_willingness": "<string max 5 lines>",
-  "ability_to_pay": <number or null>,
-  "reason_for_ability_to_pay": "<string max 5 lines justification>",
-  "problem_description": "<max 5 lines describing the problem customer is facing>",
-  "problem_confidence_score": <integer 1-10>,
-  "problem_evidence": "<max 5 lines citing specific data>",
-  "proposed_solution": "<max 5 lines>",
-  "solution_confidence_score": <integer 1-10>,
-  "solution_evidence": "<max 5 lines>",
-  "internal_action": "<max 5 lines>",
-  "proposed_email_to_customer": "<full email text with Subject: and Body: OR 'NO_ACTION'>"
-}`;
+  const systemPrompt = assembledPrompt;
 
   const userMessage = `Analyze this customer data and provide your decision:\n\n${JSON.stringify(customerData, null, 2)}`;
 
