@@ -104,6 +104,26 @@ export async function analyzeCustomer(
 
   const parsed = repairAndParse(jsonStr);
 
+  function normalizeEmail(raw: unknown): string {
+    if (!raw) return "NO_ACTION";
+    if (typeof raw === "object" && raw !== null) {
+      const obj = raw as Record<string, unknown>;
+      const desc = obj.description || obj.text || obj.body || obj.content || "";
+      if (typeof desc === "string" && desc.length > 0) return desc;
+      return JSON.stringify(raw);
+    }
+    if (typeof raw !== "string") return "NO_ACTION";
+    let str = raw.trim();
+    if (str.startsWith("{")) {
+      try {
+        const obj = JSON.parse(str);
+        const desc = obj.description || obj.text || obj.body || obj.content || "";
+        if (typeof desc === "string" && desc.length > 0) return desc;
+      } catch {}
+    }
+    return str || "NO_ACTION";
+  }
+
   const VALID_LABELS = new Set(["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE"]);
 
   function normalizeLabel(raw: unknown): string {
@@ -137,7 +157,7 @@ export async function analyzeCustomer(
       solution_confidence_score: Math.min(10, Math.max(1, parseInt(parsed.solution_confidence_score) || 5)),
       solution_evidence: parsed.solution_evidence || "",
       internal_action: parsed.internal_action || "",
-      proposed_email_to_customer: parsed.proposed_email_to_customer || "NO_ACTION",
+      proposed_email_to_customer: normalizeEmail(parsed.proposed_email_to_customer),
       combined_cmd: parsed.combined_cmd ?? null,
       no_of_latest_payments_failed: parseInt(parsed.no_of_latest_payments_failed) || 0,
       arrears_clearance_plan: parsed.arrears_clearance_plan && typeof parsed.arrears_clearance_plan === 'object' ? {

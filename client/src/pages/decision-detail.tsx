@@ -603,10 +603,49 @@ export default function DecisionDetailPage() {
                 </div>
               ) : (
                 <>
-                  <div className="bg-muted/50 rounded-md p-4">
-                    <pre className="text-sm whitespace-pre-wrap font-sans" data-testid="text-proposed-email">
-                      {decision.proposedEmailToCustomer}
-                    </pre>
+                  <div className="bg-muted/50 rounded-md p-4" data-testid="text-proposed-email">
+                    {(() => {
+                      let emailText = decision.proposedEmailToCustomer || "";
+                      if (typeof emailText === "object") {
+                        const obj = emailText as any;
+                        emailText = obj.description || obj.text || obj.body || obj.content || JSON.stringify(emailText);
+                      }
+                      if (typeof emailText === "string" && emailText.startsWith("{")) {
+                        try {
+                          const obj = JSON.parse(emailText);
+                          emailText = obj.description || obj.text || obj.body || obj.content || emailText;
+                        } catch {}
+                      }
+                      emailText = String(emailText).replace(/\\n/g, "\n");
+                      const subjectMatch = emailText.match(/^Subject:\s*(.+?)(?:\n|$)/im);
+                      const bodyMatch = emailText.match(/(?:^|\n)Body:\s*([\s\S]*)/im);
+                      if (subjectMatch && bodyMatch) {
+                        return (
+                          <div className="space-y-3">
+                            <div>
+                              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Subject</span>
+                              <p className="text-sm font-semibold mt-1">{subjectMatch[1].trim()}</p>
+                            </div>
+                            <Separator />
+                            <div>
+                              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Body</span>
+                              <div className="text-sm mt-1 space-y-2">
+                                {bodyMatch[1].trim().split(/\n\n+/).map((para, i) => (
+                                  <p key={i}>{para.replace(/\n/g, " ").trim()}</p>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="text-sm space-y-2">
+                          {emailText.split(/\n\n+/).map((para, i) => (
+                            <p key={i}>{para.replace(/\n/g, " ").trim()}</p>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <Separator />
                   <div>
