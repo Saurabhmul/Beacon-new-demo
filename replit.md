@@ -13,7 +13,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 
 ## Key Pages
 - `/` - Landing page (unauthenticated) or Dashboard (authenticated)
-- `/config` - Client Configuration (4 tabs: Company Details, Action Rulebook, Data Configuration, Prompt Config)
+- `/config` - Client Configuration (4 tabs: Company Details, Policy Config, Data Configuration, Prompt Config)
 - `/upload` - Upload Data (tabbed: Loan Data, Payment History, Conversation History if enabled)
 - `/review` - Pending decisions review queue
 - `/review/:id` - Individual decision detail with approve/reject
@@ -48,6 +48,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - `upload_logs` - Upload history with per-row status tracking (created/updated/failed) and download capability
 - `decisions` - AI decisions with review status
 - `dpd_stages` - Configurable DPD bucket stages
+- `policy_configs` - Policy configuration per client (vulnerability definition, affordability rules, available treatments, decision rules, escalation rules)
 
 ## AI Analysis Flow
 1. User clicks "Start Analyzing" on Review Queue page

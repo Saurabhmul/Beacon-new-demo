@@ -73,6 +73,15 @@ export interface DecisionRule {
   priority: number;
 }
 
+export interface AffordabilityRule {
+  id: number;
+  label: string;
+  operator: string;
+  percentage: number | null;
+  condition: string;
+  isDefault?: boolean;
+}
+
 export interface EscalationCustomCondition {
   field: string;
   operator: string;
@@ -95,6 +104,7 @@ export const policyConfigs = pgTable("policy_configs", {
   clientConfigId: integer("client_config_id").notNull(),
   userId: varchar("user_id").notNull(),
   vulnerabilityDefinition: text("vulnerability_definition"),
+  affordabilityRules: jsonb("affordability_rules").$type<AffordabilityRule[]>().default([]).notNull(),
   availableTreatments: jsonb("available_treatments").$type<TreatmentOption[]>().default([]).notNull(),
   decisionRules: jsonb("decision_rules").$type<DecisionRule[]>().default([]).notNull(),
   escalationRules: jsonb("escalation_rules").$type<EscalationRules>(),

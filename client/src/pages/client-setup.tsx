@@ -43,7 +43,7 @@ import {
   BookOpen, Upload, FileText, Trash2, Plus, File as FileIcon,
   Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
 } from "lucide-react";
-import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition } from "@shared/schema";
+import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule } from "@shared/schema";
 
 const companyFormSchema = z.object({
   companyName: z.string().min(2, "Company name must be at least 2 characters"),
@@ -405,6 +405,17 @@ const AFFORDABILITY_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE", 
 const WILLINGNESS_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE", "ANY"];
 const ESCALATION_OPERATORS = [">", "<", "=", ">=", "<=", "contains"];
 
+const AFFORDABILITY_OPERATORS = [">", ">=", "<", "<=", "="];
+const AFFORDABILITY_LABELS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE"];
+
+const DEFAULT_AFFORDABILITY_RULES: AffordabilityRule[] = [
+  { id: 1, label: "HIGH", operator: ">", percentage: 100, condition: "", isDefault: true },
+  { id: 2, label: "MEDIUM", operator: ">=", percentage: 60, condition: "and < Minimum Amount Due", isDefault: true },
+  { id: 3, label: "LOW", operator: "<", percentage: 60, condition: "", isDefault: true },
+  { id: 4, label: "VERY LOW", operator: "<", percentage: 10, condition: "NMPC = 0 OR NMPC < 10% of MAD", isDefault: true },
+  { id: 5, label: "NOT SURE", operator: "=", percentage: null, condition: "Not enough data to estimate NMPC or Minimum Amount Due not provided", isDefault: true },
+];
+
 function PolicyConfigTab() {
   const { toast } = useToast();
 
@@ -415,6 +426,7 @@ function PolicyConfigTab() {
   const { data: dpdStages = [] } = useQuery<DpdStage[]>({ queryKey: ["/api/dpd-stages"] });
 
   const [vulnerabilityDefinition, setVulnerabilityDefinition] = useState("");
+  const [affordabilityRules, setAffordabilityRules] = useState<AffordabilityRule[]>(DEFAULT_AFFORDABILITY_RULES);
   const [treatments, setTreatments] = useState<TreatmentOption[]>(DEFAULT_TREATMENTS);
   const [decisionRules, setDecisionRules] = useState<DecisionRule[]>([]);
   const [escalation, setEscalation] = useState<EscalationRules>(DEFAULT_ESCALATION);
@@ -438,6 +450,9 @@ function PolicyConfigTab() {
   useEffect(() => {
     if (policyConfig && !hydrated) {
       if (policyConfig.vulnerabilityDefinition) setVulnerabilityDefinition(policyConfig.vulnerabilityDefinition);
+      if (policyConfig.affordabilityRules && (policyConfig.affordabilityRules as AffordabilityRule[]).length > 0) {
+        setAffordabilityRules(policyConfig.affordabilityRules as AffordabilityRule[]);
+      }
       if (policyConfig.availableTreatments && (policyConfig.availableTreatments as TreatmentOption[]).length > 0) {
         const saved = policyConfig.availableTreatments as TreatmentOption[];
         const merged = DEFAULT_TREATMENTS.map(dt => {
@@ -462,6 +477,7 @@ function PolicyConfigTab() {
       const method = policyConfig ? "PATCH" : "POST";
       const res = await apiRequest(method, "/api/policy-config", {
         vulnerabilityDefinition,
+        affordabilityRules,
         availableTreatments: treatments,
         decisionRules,
         escalationRules: escalation,
@@ -614,6 +630,19 @@ function PolicyConfigTab() {
     }));
   }
 
+  function updateAffordabilityRule(id: number, field: keyof AffordabilityRule, value: string | number | null) {
+    setAffordabilityRules(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+  }
+
+  function addAffordabilityRule() {
+    const newId = affordabilityRules.length > 0 ? Math.max(...affordabilityRules.map(r => r.id)) + 1 : 1;
+    setAffordabilityRules(prev => [...prev, { id: newId, label: "HIGH", operator: ">", percentage: 100, condition: "", isDefault: false }]);
+  }
+
+  function removeAffordabilityRule(id: number) {
+    setAffordabilityRules(prev => prev.filter(r => r.id !== id));
+  }
+
   const enabledTreatments = treatments.filter(t => t.enabled);
 
   if (policyLoading) {
@@ -679,6 +708,101 @@ function PolicyConfigTab() {
                 })}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Affordability Rules</CardTitle>
+                <CardDescription>Define how Next Month Pay Capability (NMPC) is compared to Minimum Amount Due (MAD) to determine affordability.</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={addAffordabilityRule} data-testid="button-add-affordability-rule">
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                Add Rule
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm" data-testid="table-affordability-rules">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2 px-2 font-medium text-muted-foreground w-36">Label</th>
+                    <th className="text-left py-2 px-2 font-medium text-muted-foreground w-24">Operator</th>
+                    <th className="text-left py-2 px-2 font-medium text-muted-foreground w-28">% of MAD</th>
+                    <th className="text-left py-2 px-2 font-medium text-muted-foreground">Additional Condition</th>
+                    <th className="w-10"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {affordabilityRules.map((rule) => (
+                    <tr key={rule.id} className="border-b last:border-0" data-testid={`row-affordability-rule-${rule.id}`}>
+                      <td className="py-2 px-2">
+                        <Select value={rule.label} onValueChange={(v) => updateAffordabilityRule(rule.id, "label", v)}>
+                          <SelectTrigger className="h-9 text-xs" data-testid={`select-aff-label-${rule.id}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {AFFORDABILITY_LABELS.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="py-2 px-2">
+                        <Select value={rule.operator} onValueChange={(v) => updateAffordabilityRule(rule.id, "operator", v)}>
+                          <SelectTrigger className="h-9 text-xs font-mono" data-testid={`select-aff-op-${rule.id}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {AFFORDABILITY_OPERATORS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="py-2 px-2">
+                        {rule.label === "NOT SURE" ? (
+                          <span className="text-xs text-muted-foreground italic px-2">N/A</span>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              type="number"
+                              value={rule.percentage ?? ""}
+                              onChange={(e) => updateAffordabilityRule(rule.id, "percentage", e.target.value ? parseInt(e.target.value) : null)}
+                              className="h-9 text-xs w-16"
+                              placeholder="0"
+                              data-testid={`input-aff-pct-${rule.id}`}
+                            />
+                            <span className="text-xs text-muted-foreground">%</span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2 px-2">
+                        <Input
+                          value={rule.condition}
+                          onChange={(e) => updateAffordabilityRule(rule.id, "condition", e.target.value)}
+                          placeholder="Additional condition (optional)"
+                          className="h-9 text-xs"
+                          data-testid={`input-aff-condition-${rule.id}`}
+                        />
+                      </td>
+                      <td className="py-2 px-2">
+                        {!rule.isDefault && (
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeAffordabilityRule(rule.id)} data-testid={`button-remove-aff-rule-${rule.id}`}>
+                            <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                <p className="text-xs text-amber-800 dark:text-amber-300">If Minimum Amount Due is missing, output <strong>NOT SURE</strong> (and still provide best NMPC estimate if possible, clearly marked as an estimate).</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
