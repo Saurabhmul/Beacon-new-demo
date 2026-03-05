@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -419,9 +419,19 @@ function MultiSelectDropdown({ values, options, onChange, testIdPrefix }: {
   testIdPrefix: string;
 }) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
   const isAny = values.includes("ANY") || values.length === 0;
 
   const displayText = isAny ? "ANY" : values.join(", ");
+
+  const handleOpen = () => {
+    if (!open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(!open);
+  };
 
   const toggleOption = (option: string) => {
     if (values.includes(option)) {
@@ -440,8 +450,9 @@ function MultiSelectDropdown({ values, options, onChange, testIdPrefix }: {
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={handleOpen}
         className="flex items-center justify-between w-full h-9 px-3 text-xs border rounded-md bg-background hover:bg-accent/50 transition-colors text-left"
         data-testid={`${testIdPrefix}-trigger`}
       >
@@ -451,7 +462,11 @@ function MultiSelectDropdown({ values, options, onChange, testIdPrefix }: {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute z-50 mt-1 w-44 bg-popover border rounded-md shadow-md p-1.5 space-y-0.5" data-testid={`${testIdPrefix}-dropdown`}>
+          <div
+            className="fixed z-50 w-44 bg-popover border rounded-md shadow-md p-1.5 space-y-0.5"
+            style={{ top: pos.top, left: pos.left }}
+            data-testid={`${testIdPrefix}-dropdown`}
+          >
             <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-accent cursor-pointer">
               <Checkbox
                 checked={isAny}
