@@ -134,10 +134,16 @@ export function compileDecisionRules(rules: DecisionRule[] | null | undefined): 
   for (const r of sorted) {
     let conditions: string[] = [];
     if (r.otherCondition) conditions.push(r.otherCondition);
-    if (r.affordability && r.affordability !== 'ANY')
-      conditions.push(`affordability = ${r.affordability}`);
-    if (r.willingness && r.willingness !== 'ANY')
-      conditions.push(`willingness IN [${r.willingness}]`);
+    const affArr = Array.isArray(r.affordability) ? r.affordability : (r.affordability ? [r.affordability as string] : ['ANY']);
+    const willArr = Array.isArray(r.willingness) ? r.willingness : (r.willingness ? [r.willingness as string] : ['ANY']);
+    const affFiltered = affArr.filter(v => v !== 'ANY');
+    const willFiltered = willArr.filter(v => v !== 'ANY');
+    if (affFiltered.length > 0 && !affArr.includes('ANY')) {
+      conditions.push(affFiltered.length === 1 ? `affordability = ${affFiltered[0]}` : `affordability IN [${affFiltered.join(', ')}]`);
+    }
+    if (willFiltered.length > 0 && !willArr.includes('ANY')) {
+      conditions.push(willFiltered.length === 1 ? `willingness = ${willFiltered[0]}` : `willingness IN [${willFiltered.join(', ')}]`);
+    }
 
     if (conditions.length > 0) {
       text += `\nRule ${r.priority ?? '?'}: IF ${conditions.join(' AND ')}\n`;

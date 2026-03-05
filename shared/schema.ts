@@ -69,8 +69,8 @@ export interface TreatmentOption {
 export interface DecisionRule {
   id: number;
   treatmentName: string;
-  affordability: string;
-  willingness: string;
+  affordability: string[];
+  willingness: string[];
   otherCondition: string;
   priority: number;
 }

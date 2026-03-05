@@ -409,8 +409,76 @@ const DEFAULT_ESCALATION: EscalationRules = {
   otherConditions: [],
 };
 
-const AFFORDABILITY_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE", "ANY"];
-const WILLINGNESS_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE", "ANY"];
+const AFFORDABILITY_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE"];
+const WILLINGNESS_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE"];
+
+function MultiSelectDropdown({ values, options, onChange, testIdPrefix }: {
+  values: string[];
+  options: string[];
+  onChange: (newValues: string[]) => void;
+  testIdPrefix: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const isAny = values.includes("ANY") || values.length === 0;
+
+  const displayText = isAny ? "ANY" : values.join(", ");
+
+  const toggleOption = (option: string) => {
+    if (values.includes(option)) {
+      const next = values.filter(v => v !== option);
+      onChange(next.length === 0 ? ["ANY"] : next);
+    } else {
+      const next = [...values.filter(v => v !== "ANY"), option];
+      onChange(next);
+    }
+  };
+
+  const toggleAny = () => {
+    onChange(["ANY"]);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center justify-between w-full h-9 px-3 text-xs border rounded-md bg-background hover:bg-accent/50 transition-colors text-left"
+        data-testid={`${testIdPrefix}-trigger`}
+      >
+        <span className={`truncate ${isAny ? "text-muted-foreground" : ""}`}>{displayText}</span>
+        <svg className="w-3 h-3 ml-1 shrink-0 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute z-50 mt-1 w-44 bg-popover border rounded-md shadow-md p-1.5 space-y-0.5" data-testid={`${testIdPrefix}-dropdown`}>
+            <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-accent cursor-pointer">
+              <Checkbox
+                checked={isAny}
+                onCheckedChange={toggleAny}
+                className="h-3.5 w-3.5"
+                data-testid={`${testIdPrefix}-any`}
+              />
+              <span className="text-xs font-medium">ANY (all)</span>
+            </label>
+            <div className="border-t my-1" />
+            {options.map(option => (
+              <label key={option} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-accent cursor-pointer">
+                <Checkbox
+                  checked={!isAny && values.includes(option)}
+                  onCheckedChange={() => toggleOption(option)}
+                  className="h-3.5 w-3.5"
+                  data-testid={`${testIdPrefix}-${option.toLowerCase().replace(/\s+/g, '-')}`}
+                />
+                <span className="text-xs">{option}</span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 const ESCALATION_OPERATORS = [">", "<", "=", ">=", "<=", "contains"];
 
 const AFFORDABILITY_OPERATORS = [">", ">=", "<", "<=", "="];
@@ -470,8 +538,13 @@ function PolicyConfigTab() {
         const customs = saved.filter(s => s.isCustom);
         setTreatments([...merged, ...customs]);
       }
-      if (policyConfig.decisionRules && (policyConfig.decisionRules as DecisionRule[]).length > 0) {
-        setDecisionRules(policyConfig.decisionRules as DecisionRule[]);
+      if (policyConfig.decisionRules && (policyConfig.decisionRules as any[]).length > 0) {
+        const migratedRules = (policyConfig.decisionRules as any[]).map((r: any) => ({
+          ...r,
+          affordability: Array.isArray(r.affordability) ? r.affordability : [r.affordability || "ANY"],
+          willingness: Array.isArray(r.willingness) ? r.willingness : [r.willingness || "ANY"],
+        })) as DecisionRule[];
+        setDecisionRules(migratedRules);
       }
       if (policyConfig.escalationRules) {
         setEscalation({ ...DEFAULT_ESCALATION, ...(policyConfig.escalationRules as EscalationRules), vulnerabilityDetected: true });
@@ -621,7 +694,7 @@ function PolicyConfigTab() {
 
   function addDecisionRule() {
     const newId = decisionRules.length > 0 ? Math.max(...decisionRules.map(r => r.id)) + 1 : 1;
-    setDecisionRules(prev => [...prev, { id: newId, treatmentName: "", affordability: "ANY", willingness: "ANY", otherCondition: "", priority: prev.length + 1 }]);
+    setDecisionRules(prev => [...prev, { id: newId, treatmentName: "", affordability: ["ANY"], willingness: ["ANY"], otherCondition: "", priority: prev.length + 1 }]);
   }
 
   function updateClearanceMonths(index: number, value: number) {
@@ -636,7 +709,7 @@ function PolicyConfigTab() {
     }));
   }
 
-  function updateDecisionRule(id: number, field: keyof DecisionRule, value: string | number) {
+  function updateDecisionRule(id: number, field: keyof DecisionRule, value: string | number | string[]) {
     setDecisionRules(prev => prev.map(r => {
       if (r.id !== id) return r;
       const updated = { ...r, [field]: value };
@@ -992,24 +1065,20 @@ function PolicyConfigTab() {
                           </Select>
                         </td>
                         <td className="py-2 px-2">
-                          <Select value={rule.affordability} onValueChange={(v) => updateDecisionRule(rule.id, "affordability", v)}>
-                            <SelectTrigger className="h-9 text-xs" data-testid={`select-affordability-${rule.id}`}>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {AFFORDABILITY_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
+                          <MultiSelectDropdown
+                            values={Array.isArray(rule.affordability) ? rule.affordability : [rule.affordability || "ANY"]}
+                            options={AFFORDABILITY_OPTIONS}
+                            onChange={(v) => updateDecisionRule(rule.id, "affordability", v)}
+                            testIdPrefix={`select-affordability-${rule.id}`}
+                          />
                         </td>
                         <td className="py-2 px-2">
-                          <Select value={rule.willingness} onValueChange={(v) => updateDecisionRule(rule.id, "willingness", v)}>
-                            <SelectTrigger className="h-9 text-xs" data-testid={`select-willingness-${rule.id}`}>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {WILLINGNESS_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
+                          <MultiSelectDropdown
+                            values={Array.isArray(rule.willingness) ? rule.willingness : [rule.willingness || "ANY"]}
+                            options={WILLINGNESS_OPTIONS}
+                            onChange={(v) => updateDecisionRule(rule.id, "willingness", v)}
+                            testIdPrefix={`select-willingness-${rule.id}`}
+                          />
                         </td>
                         <td className="py-2 px-2">
                           <Input
