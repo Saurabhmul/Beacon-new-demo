@@ -56,6 +56,8 @@ Estimate Next Month Pay Capability (NMPC):
 - If no payment history, use stated income or conversation clues.
 - If completely unknown, mark as NOT SURE.
 
+CRITICAL: You MUST calculate NMPC and apply the thresholds below to determine the correct label. Do NOT default to NOT SURE if you have any payment data or income signals. If NMPC = 0, use VERY LOW, not NOT SURE.
+
 Affordability label thresholds (client-configured):
 {{POLICY_AFFORDABILITY_THRESHOLDS}}
 
@@ -66,6 +68,8 @@ Assess behavioral signals to determine willingness:
 - LOW: Avoids contact, breaks promises-to-pay, inconsistent engagement.
 - VERY LOW: Hostile, refuses to engage, disputes without basis, no payment attempts.
 - NOT SURE: Insufficient interaction data to assess.
+
+CRITICAL: You MUST output one of: HIGH, MEDIUM, LOW, VERY LOW, NOT SURE (uppercase). Base your label on observable behavior. Only use NOT SURE when there is genuinely zero interaction or behavioral data available.
 
 --- ABILITY TO PAY (numeric estimate) ---
 Estimate the dollar/currency amount the customer can realistically pay next month.

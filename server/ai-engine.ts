@@ -104,6 +104,18 @@ export async function analyzeCustomer(
 
   const parsed = repairAndParse(jsonStr);
 
+  const VALID_LABELS = new Set(["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE"]);
+
+  function normalizeLabel(raw: unknown): string {
+    if (!raw || typeof raw !== "string") return "NOT SURE";
+    let val = raw.trim().toUpperCase();
+    val = val.replace(/_/g, " ");
+    if (val === "NOTSURE" || val === "N/A" || val === "UNKNOWN") val = "NOT SURE";
+    if (val === "VERYLOW") val = "VERY LOW";
+    if (VALID_LABELS.has(val)) return val;
+    return "NOT SURE";
+  }
+
   try {
     if (!parsed) throw new Error("Could not parse AI response");
     return {
@@ -112,9 +124,9 @@ export async function analyzeCustomer(
       conversation: parsed.conversation || "",
       vulnerability: parsed.vulnerability === true || parsed.vulnerability === "true",
       reason_for_vulnerability: parsed.reason_for_vulnerability || "",
-      affordability: parsed.affordability || "not sure",
+      affordability: normalizeLabel(parsed.affordability),
       reason_for_affordability: parsed.reason_for_affordability || "",
-      willingness: parsed.willingness || "not sure",
+      willingness: normalizeLabel(parsed.willingness),
       reason_for_willingness: parsed.reason_for_willingness || "",
       ability_to_pay: parsed.ability_to_pay ?? null,
       reason_for_ability_to_pay: parsed.reason_for_ability_to_pay || "",
@@ -149,9 +161,9 @@ export async function analyzeCustomer(
       conversation: "",
       vulnerability: false,
       reason_for_vulnerability: "",
-      affordability: "not sure",
+      affordability: "NOT SURE",
       reason_for_affordability: "",
-      willingness: "not sure",
+      willingness: "NOT SURE",
       reason_for_willingness: "",
       ability_to_pay: null,
       reason_for_ability_to_pay: "",
