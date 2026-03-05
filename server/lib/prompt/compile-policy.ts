@@ -157,32 +157,33 @@ export function compileDecisionRules(rules: DecisionRule[] | null | undefined): 
       const targetText = target === 'Specific amount' && r.paymentTargetAmount
         ? `Specific amount: ${r.paymentTargetAmount}`
         : target;
-      const tone = r.communicationTone || 'Supportive';
       text += `  THEN: No loan treatment required — encourage payment.\n`;
       text += `  PAYMENT TARGET: ${targetText}\n`;
-      text += `  COMMUNICATION TONE: ${tone}\n\n`;
-      text += `  Tone guidelines:\n`;
-      if (tone === 'Supportive') {
-        text += `  - Encourage payment, highlight credit health benefits,\n`;
-        text += `    explain how staying current protects their financial\n`;
-        text += `    future. Be warm and motivating.\n`;
-      } else if (tone === 'Firm') {
-        text += `  - Be direct and professional. State that they need to\n`;
-        text += `    engage with us so we can help. Explain that continued\n`;
-        text += `    non-payment will damage their credit report and have\n`;
-        text += `    long-term consequences. Still offer help but create urgency.\n`;
-      } else if (tone === 'Urgent') {
-        text += `  - Emphasize imminent deadline or escalation. Clear call\n`;
-        text += `    to action with specific date.\n`;
-      } else if (tone === 'Empathetic') {
-        text += `  - Acknowledge their situation, express willingness to find\n`;
-        text += `    solutions together, reassure them that engaging with us\n`;
-        text += `    is the first step.\n`;
-      }
     } else if (treatmentName === 'Agent Review — Escalate to Human' || treatmentName === 'Agent Review') {
       text += `  THEN recommend: Agent Review — Escalate to Human\n`;
     } else {
       text += `  THEN recommend: ${treatmentName}\n`;
+    }
+
+    const tone = r.communicationTone || 'Supportive';
+    text += `  COMMUNICATION TONE: ${tone}\n`;
+    text += `  Tone guidelines:\n`;
+    if (tone === 'Supportive') {
+      text += `  - Encourage payment, highlight credit health benefits,\n`;
+      text += `    explain how staying current protects their financial\n`;
+      text += `    future. Be warm and motivating.\n`;
+    } else if (tone === 'Firm') {
+      text += `  - Be direct and professional. State that they need to\n`;
+      text += `    engage with us so we can help. Explain that continued\n`;
+      text += `    non-payment will damage their credit report and have\n`;
+      text += `    long-term consequences. Still offer help but create urgency.\n`;
+    } else if (tone === 'Urgent') {
+      text += `  - Emphasize imminent deadline or escalation. Clear call\n`;
+      text += `    to action with specific date.\n`;
+    } else if (tone === 'Empathetic') {
+      text += `  - Acknowledge their situation, express willingness to find\n`;
+      text += `    solutions together, reassure them that engaging with us\n`;
+      text += `    is the first step.\n`;
     }
   }
 

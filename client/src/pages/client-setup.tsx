@@ -710,7 +710,7 @@ function PolicyConfigTab() {
 
   function addDecisionRule() {
     const newId = decisionRules.length > 0 ? Math.max(...decisionRules.map(r => r.id)) + 1 : 1;
-    setDecisionRules(prev => [...prev, { id: newId, treatmentName: "", affordability: ["ANY"], willingness: ["ANY"], otherCondition: "", priority: prev.length + 1 }]);
+    setDecisionRules(prev => [...prev, { id: newId, treatmentName: "", affordability: ["ANY"], willingness: ["ANY"], otherCondition: "", communicationTone: "Supportive", priority: prev.length + 1 }]);
   }
 
   function updateClearanceMonths(index: number, value: number) {
@@ -1066,6 +1066,7 @@ function PolicyConfigTab() {
                       <th className="text-left py-2 px-2 font-medium text-muted-foreground">Affordability</th>
                       <th className="text-left py-2 px-2 font-medium text-muted-foreground">Willingness</th>
                       <th className="text-left py-2 px-2 font-medium text-muted-foreground">Other Condition</th>
+                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Tone</th>
                       <th className="text-left py-2 px-2 font-medium text-muted-foreground w-20">Priority</th>
                       <th className="w-10"></th>
                     </tr>
@@ -1116,6 +1117,22 @@ function PolicyConfigTab() {
                           />
                         </td>
                         <td className="py-2 px-2">
+                          <Select
+                            value={rule.communicationTone || "Supportive"}
+                            onValueChange={(v) => updateDecisionRule(rule.id, "communicationTone", v)}
+                          >
+                            <SelectTrigger className="h-9 text-xs" data-testid={`select-tone-${rule.id}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Supportive">Supportive</SelectItem>
+                              <SelectItem value="Firm">Firm</SelectItem>
+                              <SelectItem value="Urgent">Urgent</SelectItem>
+                              <SelectItem value="Empathetic">Empathetic</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="py-2 px-2">
                           <Input
                             type="number"
                             value={rule.priority}
@@ -1132,7 +1149,7 @@ function PolicyConfigTab() {
                       </tr>
                       {isEncourage && (
                         <tr className="border-b last:border-0" data-testid={`row-encourage-fields-${rule.id}`}>
-                          <td colSpan={6} className="py-2 px-2">
+                          <td colSpan={7} className="py-2 px-2">
                             <div className="flex items-center gap-4 pl-2 py-1 bg-muted/30 rounded-md px-3">
                               <div className="flex items-center gap-2">
                                 <Label className="text-xs whitespace-nowrap text-muted-foreground">Payment Target:</Label>
@@ -1159,23 +1176,6 @@ function PolicyConfigTab() {
                                     data-testid={`input-payment-amount-${rule.id}`}
                                   />
                                 )}
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Label className="text-xs whitespace-nowrap text-muted-foreground">Tone:</Label>
-                                <Select
-                                  value={rule.communicationTone || "Supportive"}
-                                  onValueChange={(v) => updateDecisionRule(rule.id, "communicationTone", v)}
-                                >
-                                  <SelectTrigger className="h-8 text-xs w-36" data-testid={`select-tone-${rule.id}`}>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="Supportive">Supportive</SelectItem>
-                                    <SelectItem value="Firm">Firm</SelectItem>
-                                    <SelectItem value="Urgent">Urgent</SelectItem>
-                                    <SelectItem value="Empathetic">Empathetic</SelectItem>
-                                  </SelectContent>
-                                </Select>
                               </div>
                             </div>
                           </td>
