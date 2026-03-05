@@ -1,0 +1,74 @@
+Task: Add "Clear Arrears Plan" to Available Treatments + Update Prompt Compiler
+Part A: UI Changes (Section D: Available Treatments)
+Add a new pre-built treatment card called "Clear Arrears Plan" to the available treatments list, same format as Forbearance, Loan Modification, etc.
+Treatment name: Clear Arrears Plan
+Definition text: Customer is encouraged to pay above the Minimum Amount Due to clear outstanding arrears within a target period. No loan modification or system intervention needed — the arrears clear naturally through consistent overpayment. Communication includes a specific payment amount and timeline showing month-over-month arrears reduction, plus credit report benefits of becoming current.
+Blocked in: Late should be checked by default (arrears typically too large at 91+ DPD for this approach to work within the target window).
+One extra field unique to this treatment: Add a number input field that appears when this treatment is checked. Label: Maximum months to clear arrears. Default value: 6. Min: 2, Max: 12. This field does NOT appear for other treatments. Store this value as clearance_months in the treatment config.
+
+Part B: Decision Rules Impact (Section D: Decision Rules)
+When a user creates a decision rule and selects "Clear Arrears Plan" as the treatment, the "Other Condition" field should auto-suggest or pre-fill with: (NMPC - MAD) * [clearance_months] >= Total Arrears
+The clearance_months value should pull from whatever the user set in Part A. If they set it to 6, the condition reads (NMPC - MAD) * 6 >= Total Arrears.
+
+Part C: Prompt Compiler Impact (compile-policy.js)
+When the compiler encounters Clear Arrears Plan as an enabled treatment, it should generate this text block:
+TREATMENT: Clear Arrears Plan
+Available in: [Early, Mid] (or whatever stages are not blocked)
+Definition: Customer pays above MAD to clear arrears within target window.
+Eligibility condition: (NMPC - MAD) * 6 >= Total Arrears
+  where 6 = configured maximum months (client-configurable)
+
+When recommending Clear Arrears Plan, you MUST calculate and include:
+  1. Monthly payment needed = MAD + (Total Arrears / clearance_months)
+  2. Actual months to clear = ceiling(Total Arrears / (NMPC - MAD))
+  3. Month-by-month projection showing arrears balance reducing to zero
+
+If (NMPC - MAD) * clearance_months < Total Arrears, this treatment
+does NOT qualify. Skip to next matching decision rule.
+The key difference from other treatments: Clear Arrears Plan has a math eligibility check that the LLM must evaluate at runtime using the customer's actual numbers. Other treatments are based purely on label matching (affordability = X, willingness = Y). This one requires the LLM to do arithmetic with the customer's NMPC, MAD, and Total Arrears.
+
+Part D: Output JSON Schema Impact
+Add an optional field to the output JSON that only gets populated when Clear Arrears Plan is the recommended treatment:
+json"arrears_clearance_plan": {
+  "monthly_payment_recommended": number,
+  "surplus_above_mad": number,
+  "total_arrears": number,
+  "months_to_clear": number,
+  "projected_timeline": [
+    { "month": 1, "payment": number, "remaining_arrears": number },
+    { "month": 2, "payment": number, "remaining_arrears": number }
+  ]
+}
+```
+
+If the recommended treatment is NOT Clear Arrears Plan, this field should be `null`.
+
+---
+
+**Part E: Test Case**
+
+Use this to verify it works:
+```
+Customer: NMPC = $700, MAD = $500, Total Arrears = $1,000
+clearance_months = 6
+
+Step 1: Check eligibility
+  ($700 - $500) * 6 = $1,200 >= $1,000 ✓ ELIGIBLE
+
+Step 2: Calculate plan
+  Surplus per month = $200
+  Months to clear = ceiling(1000 / 200) = 5 months
+  Monthly payment = $700
+
+Step 3: Output timeline
+  Month 1: pay $700, arrears remaining = $800
+  Month 2: pay $700, arrears remaining = $600
+  Month 3: pay $700, arrears remaining = $400
+  Month 4: pay $700, arrears remaining = $200
+  Month 5: pay $700, arrears remaining = $0 ← CLEARED
+
+Step 4: Proposed email should say
+  "Pay $700/month for the next 5 months and your arrears
+   will be fully cleared, bringing your account current
+   and improving your credit standing."
+Negative test: Customer with NMPC = $550, MAD = $500, Total Arrears = $1,000. Surplus = $50. $50 * 6 = $300 < $1,000. Clear Arrears Plan should NOT be recommended. System should fall through to next matching decision rule.
