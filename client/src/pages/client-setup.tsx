@@ -715,7 +715,7 @@ function PolicyConfigTab() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle className="text-base">Affordability Rules</CardTitle>
+                <CardTitle className="text-base">Section B: Affordability Rules</CardTitle>
                 <CardDescription>Define how Next Month Pay Capability (NMPC) is compared to Minimum Amount Due (MAD) to determine affordability.</CardDescription>
               </div>
               <Button variant="outline" size="sm" onClick={addAffordabilityRule} data-testid="button-add-affordability-rule">
@@ -808,7 +808,7 @@ function PolicyConfigTab() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Section B: Vulnerability Definition</CardTitle>
+            <CardTitle className="text-base">Section C: Vulnerability Definition</CardTitle>
             <CardDescription>Define what counts as vulnerable for your customers. This definition will guide how the AI identifies vulnerability.</CardDescription>
           </CardHeader>
           <CardContent>
@@ -824,7 +824,7 @@ function PolicyConfigTab() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Section C: Available Treatments</CardTitle>
+            <CardTitle className="text-base">Section D: Available Treatments</CardTitle>
             <CardDescription>Select which treatments Beacon is allowed to recommend. Toggle on the treatments applicable to your business.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -882,7 +882,7 @@ function PolicyConfigTab() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Section D: Decision Rules</CardTitle>
+            <CardTitle className="text-base">Section E: Decision Rules</CardTitle>
             <CardDescription>Define structured rules for when Beacon should recommend each treatment. Rules are evaluated by priority (lower number = higher priority).</CardDescription>
           </CardHeader>
           <CardContent>
@@ -979,7 +979,7 @@ function PolicyConfigTab() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Section E: Escalation & Guardrails</CardTitle>
+            <CardTitle className="text-base">Section F: Escalation & Guardrails</CardTitle>
             <CardDescription>Define conditions that should automatically escalate a case to a human reviewer.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
