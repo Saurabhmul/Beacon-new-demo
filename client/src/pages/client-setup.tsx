@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -556,6 +556,7 @@ function PolicyConfigTab() {
       if (policyConfig.decisionRules && (policyConfig.decisionRules as any[]).length > 0) {
         const migratedRules = (policyConfig.decisionRules as any[]).map((r: any) => ({
           ...r,
+          treatmentName: r.treatmentName === "Agent Review" ? "Agent Review — Escalate to Human" : r.treatmentName,
           affordability: Array.isArray(r.affordability) ? r.affordability : [r.affordability || "ANY"],
           willingness: Array.isArray(r.willingness) ? r.willingness : [r.willingness || "ANY"],
         })) as DecisionRule[];
@@ -728,10 +729,16 @@ function PolicyConfigTab() {
     setDecisionRules(prev => prev.map(r => {
       if (r.id !== id) return r;
       const updated = { ...r, [field]: value };
-      if (field === 'treatmentName' && value === 'Clear Arrears Plan' && !r.otherCondition) {
-        const cap = treatments.find(t => t.name === 'Clear Arrears Plan');
-        const months = cap?.clearanceMonths || 6;
-        updated.otherCondition = `(NMPC - MAD) * ${months} >= Total Arrears`;
+      if (field === 'treatmentName') {
+        if (value === 'Clear Arrears Plan' && !r.otherCondition) {
+          const cap = treatments.find(t => t.name === 'Clear Arrears Plan');
+          const months = cap?.clearanceMonths || 6;
+          updated.otherCondition = `(NMPC - MAD) * ${months} >= Total Arrears`;
+        }
+        if (value === 'None — Encourage Payment') {
+          if (!r.paymentTarget) updated.paymentTarget = 'At or above MAD';
+          if (!r.communicationTone) updated.communicationTone = 'Supportive';
+        }
       }
       return updated;
     }));
@@ -1064,18 +1071,22 @@ function PolicyConfigTab() {
                     </tr>
                   </thead>
                   <tbody>
-                    {decisionRules.map((rule) => (
-                      <tr key={rule.id} className="border-b last:border-0" data-testid={`row-decision-rule-${rule.id}`}>
+                    {decisionRules.map((rule) => {
+                      const isEncourage = rule.treatmentName === "None — Encourage Payment";
+                      return (
+                      <React.Fragment key={rule.id}>
+                      <tr className={isEncourage ? "" : "border-b last:border-0"} data-testid={`row-decision-rule-${rule.id}`}>
                         <td className="py-2 px-2">
                           <Select value={rule.treatmentName} onValueChange={(v) => updateDecisionRule(rule.id, "treatmentName", v)}>
                             <SelectTrigger className="h-9 text-xs" data-testid={`select-treatment-${rule.id}`}>
                               <SelectValue placeholder="Select treatment" />
                             </SelectTrigger>
                             <SelectContent>
+                              <SelectItem value="None — Encourage Payment">None — Encourage Payment</SelectItem>
                               {enabledTreatments.map(t => (
                                 <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
                               ))}
-                              <SelectItem value="Agent Review">Agent Review</SelectItem>
+                              <SelectItem value="Agent Review — Escalate to Human">Agent Review — Escalate to Human</SelectItem>
                             </SelectContent>
                           </Select>
                         </td>
@@ -1119,7 +1130,60 @@ function PolicyConfigTab() {
                           </Button>
                         </td>
                       </tr>
-                    ))}
+                      {isEncourage && (
+                        <tr className="border-b last:border-0" data-testid={`row-encourage-fields-${rule.id}`}>
+                          <td colSpan={6} className="py-2 px-2">
+                            <div className="flex items-center gap-4 pl-2 py-1 bg-muted/30 rounded-md px-3">
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs whitespace-nowrap text-muted-foreground">Payment Target:</Label>
+                                <Select
+                                  value={rule.paymentTarget || "At or above MAD"}
+                                  onValueChange={(v) => updateDecisionRule(rule.id, "paymentTarget", v)}
+                                >
+                                  <SelectTrigger className="h-8 text-xs w-48" data-testid={`select-payment-target-${rule.id}`}>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="At or above MAD">At or above MAD</SelectItem>
+                                    <SelectItem value="Any amount they can afford">Any amount they can afford</SelectItem>
+                                    <SelectItem value="Specific amount">Specific amount</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                {rule.paymentTarget === "Specific amount" && (
+                                  <Input
+                                    type="number"
+                                    value={rule.paymentTargetAmount || ""}
+                                    onChange={(e) => updateDecisionRule(rule.id, "paymentTargetAmount", parseFloat(e.target.value) || 0)}
+                                    placeholder="Amount"
+                                    className="h-8 text-xs w-24"
+                                    data-testid={`input-payment-amount-${rule.id}`}
+                                  />
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs whitespace-nowrap text-muted-foreground">Tone:</Label>
+                                <Select
+                                  value={rule.communicationTone || "Supportive"}
+                                  onValueChange={(v) => updateDecisionRule(rule.id, "communicationTone", v)}
+                                >
+                                  <SelectTrigger className="h-8 text-xs w-36" data-testid={`select-tone-${rule.id}`}>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="Supportive">Supportive</SelectItem>
+                                    <SelectItem value="Firm">Firm</SelectItem>
+                                    <SelectItem value="Urgent">Urgent</SelectItem>
+                                    <SelectItem value="Empathetic">Empathetic</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

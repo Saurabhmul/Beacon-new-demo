@@ -73,6 +73,9 @@ export interface DecisionRule {
   willingness: string[];
   otherCondition: string;
   priority: number;
+  paymentTarget?: string;
+  paymentTargetAmount?: number;
+  communicationTone?: string;
 }
 
 export interface AffordabilityRule {
