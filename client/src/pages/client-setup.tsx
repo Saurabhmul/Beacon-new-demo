@@ -940,7 +940,7 @@ function PromptConfigTab() {
           <Textarea
             value={promptTemplate}
             onChange={(e) => setPromptTemplate(e.target.value)}
-            className="min-h-[200px] text-sm font-mono"
+            className="min-h-[500px] text-sm font-mono leading-relaxed whitespace-pre-wrap"
             data-testid="textarea-prompt"
           />
         </CardContent>
