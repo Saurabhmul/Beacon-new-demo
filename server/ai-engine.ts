@@ -136,20 +136,53 @@ export async function analyzeCustomer(
     return "NOT SURE";
   }
 
+  function extractLabelFromReason(label: string, reasonText: string): string {
+    if (label !== "NOT SURE" || !reasonText) return label;
+    const arrowMatch = reasonText.match(/→\s*(HIGH|MEDIUM|LOW|VERY LOW)/i);
+    if (arrowMatch) {
+      const extracted = arrowMatch[1].toUpperCase();
+      if (VALID_LABELS.has(extracted)) return extracted;
+    }
+    const lower = reasonText.toLowerCase();
+    if (lower.includes("nmpc is $0") || lower.includes("nmpc=$0") || lower.includes("nmpc = $0") ||
+        lower.includes("all payments failed") || lower.includes("zero successful payments") ||
+        lower.includes("no successful payments")) {
+      return "VERY LOW";
+    }
+    return label;
+  }
+
+  function humanizeReasonText(text: string): string {
+    if (!text) return text;
+    return text
+      .replace(/\bNMPC\b/gi, "estimated monthly payment capacity")
+      .replace(/\bMAD\b/g, "minimum amount due");
+  }
+
   try {
     if (!parsed) throw new Error("Could not parse AI response");
+
+    const rawAffordability = normalizeLabel(parsed.affordability);
+    const rawWillingness = normalizeLabel(parsed.willingness);
+    const reasonAffordability = String(parsed.reason_for_affordability ?? "");
+    const reasonWillingness = String(parsed.reason_for_willingness ?? "");
+    const reasonAbilityToPay = String(parsed.reason_for_ability_to_pay ?? "");
+
+    const finalAffordability = extractLabelFromReason(rawAffordability, reasonAffordability);
+    const finalWillingness = extractLabelFromReason(rawWillingness, reasonWillingness);
+
     return {
       customer_guid: parsed.customer_guid || String(customerData["customer / account / loan id"] || customerData.customer_id || customerData.account_id || "unknown"),
       payment_history: parsed.payment_history || "",
       conversation: parsed.conversation || "",
       vulnerability: parsed.vulnerability === true || parsed.vulnerability === "true",
       reason_for_vulnerability: parsed.reason_for_vulnerability || "",
-      affordability: normalizeLabel(parsed.affordability),
-      reason_for_affordability: parsed.reason_for_affordability || "",
-      willingness: normalizeLabel(parsed.willingness),
-      reason_for_willingness: parsed.reason_for_willingness || "",
+      affordability: finalAffordability,
+      reason_for_affordability: humanizeReasonText(reasonAffordability),
+      willingness: finalWillingness,
+      reason_for_willingness: humanizeReasonText(reasonWillingness),
       ability_to_pay: parsed.ability_to_pay ?? null,
-      reason_for_ability_to_pay: parsed.reason_for_ability_to_pay || "",
+      reason_for_ability_to_pay: humanizeReasonText(reasonAbilityToPay),
       problem_description: parsed.problem_description || parsed["problem_customer is facing"] || parsed.problem_customer_is_facing || "",
       problem_confidence_score: Math.min(10, Math.max(1, parseInt(parsed.problem_confidence_score) || 5)),
       problem_evidence: parsed.problem_evidence || "",

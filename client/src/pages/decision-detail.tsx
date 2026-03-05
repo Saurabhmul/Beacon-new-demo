@@ -540,7 +540,7 @@ export default function DecisionDetailPage() {
                           </p>
                         </div>
                         <div className="bg-muted/50 rounded-md p-3">
-                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Surplus Above MAD</p>
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Surplus Above Minimum Due</p>
                           <p className="text-lg font-semibold" data-testid="text-cap-surplus">
                             {plan.surplus_above_mad != null ? plan.surplus_above_mad.toLocaleString() : 'N/A'}
                           </p>
