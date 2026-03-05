@@ -30,11 +30,20 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
   Building2, Mail, Phone, User, Save, Loader2,
   BookOpen, Upload, FileText, Trash2, Plus, File as FileIcon,
-  Database, Pencil, MessageSquare, RotateCcw,
+  Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
 } from "lucide-react";
-import type { ClientConfig, Rulebook, DataConfig, DpdStage } from "@shared/schema";
+import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition } from "@shared/schema";
 
 const companyFormSchema = z.object({
   companyName: z.string().min(2, "Company name must be at least 2 characters"),
@@ -348,237 +357,75 @@ function CompanyDetailsTab() {
   );
 }
 
-function ActionRulebookTab() {
-  const { toast } = useToast();
-  const [title, setTitle] = useState("Default Rulebook");
-  const [sopText, setSopText] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [activeTab, setActiveTab] = useState("text");
+const DEFAULT_TREATMENTS: TreatmentOption[] = [
+  {
+    name: "Forbearance / Payment Holiday",
+    enabled: false,
+    definition: "Temporarily pausing or reducing payments for a set period (typically 1-6 months). The loan still accrues interest usually, but the customer gets breathing room. Used when the customer genuinely can't pay right now but the situation is temporary.",
+  },
+  {
+    name: "Loan Modification / Restructure",
+    enabled: false,
+    definition: "Permanently changing the loan terms: extending tenor, reducing interest rate, reducing EMI amount, or some combination. Used when the customer's financial situation has fundamentally changed and the original terms are no longer realistic.",
+  },
+  {
+    name: "Reaging / Re-amortization",
+    enabled: false,
+    definition: "Resetting the delinquency clock back to current after the customer demonstrates good behavior (e.g., 3 consecutive on-time payments). The past-due status is wiped. Sometimes combined with capitalizing the arrears into the remaining loan balance.",
+  },
+  {
+    name: "Interest Rate Reduction",
+    enabled: false,
+    definition: "Specifically lowering the rate, either temporarily or permanently, to make payments more affordable. Sometimes a standalone action, sometimes part of a broader modification.",
+  },
+  {
+    name: "Capitalization of Arrears",
+    enabled: false,
+    definition: "Rolling the missed payment amounts into the remaining principal balance and recalculating the EMI. The customer doesn't have to \"catch up\" separately — the arrears just become part of the loan going forward.",
+  },
+  {
+    name: "Deferment",
+    enabled: false,
+    definition: "Specifically for education/student loans, pausing payments entirely because the borrower meets a qualifying condition (still in school, military service, economic hardship). Different from forbearance because it's often interest-free or subsidized.",
+  },
+];
 
-  const { data: rulebooks, isLoading } = useQuery<Rulebook[]>({
-    queryKey: ["/api/rulebooks"],
-  });
+const DEFAULT_ESCALATION: EscalationRules = {
+  vulnerabilityDetected: true,
+  legalAction: false,
+  debtDispute: false,
+  balanceAbove: null,
+  dpdAbove: null,
+  managerRequest: false,
+  brokenPtps: null,
+  otherConditions: [],
+};
 
-  const createMutation = useMutation({
-    mutationFn: async () => {
-      if (activeTab === "upload" && selectedFile) {
-        const formData = new FormData();
-        formData.append("title", title);
-        formData.append("file", selectedFile);
-        const res = await fetch("/api/rulebooks/upload", {
-          method: "POST",
-          body: formData,
-          credentials: "include",
-        });
-        if (!res.ok) throw new Error("Upload failed");
-        return res.json();
-      } else {
-        const res = await apiRequest("POST", "/api/rulebooks", { title, sopText });
-        return res.json();
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rulebooks"] });
-      toast({ title: "Rulebook saved", description: "Your SOP has been stored successfully." });
-      setTitle("Default Rulebook");
-      setSopText("");
-      setSelectedFile(null);
-    },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to save rulebook.", variant: "destructive" });
-    },
-  });
+const AFFORDABILITY_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE", "ANY"];
+const WILLINGNESS_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE", "ANY"];
+const ESCALATION_OPERATORS = [">", "<", "=", ">=", "<=", "contains"];
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: number) => {
-      await apiRequest("DELETE", `/api/rulebooks/${id}`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rulebooks"] });
-      toast({ title: "Deleted", description: "Rulebook removed." });
-    },
-  });
-
-  const handleFileDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file && (file.type === "application/pdf" || file.type.startsWith("image/"))) {
-      setSelectedFile(file);
-    } else {
-      toast({ title: "Invalid file", description: "Please upload a PDF or image file.", variant: "destructive" });
-    }
-  }, [toast]);
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Add New Rulebook / SOP</CardTitle>
-          <CardDescription>Enter rules as text or upload a PDF/image document. AI will extract and use these rules.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <label className="text-sm font-medium mb-1.5 block">Title</label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g., Early Delinquency Playbook v2"
-              data-testid="input-rulebook-title"
-            />
-          </div>
-
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList>
-              <TabsTrigger value="text" data-testid="tab-text">
-                <FileText className="w-3.5 h-3.5 mr-1.5" />
-                Free Text
-              </TabsTrigger>
-              <TabsTrigger value="upload" data-testid="tab-upload">
-                <Upload className="w-3.5 h-3.5 mr-1.5" />
-                Upload Document
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="text" className="mt-4">
-              <Textarea
-                value={sopText}
-                onChange={(e) => setSopText(e.target.value)}
-                placeholder="Enter your SOP rules here. For example:&#10;&#10;If customer CMD < 0.3 and mentions employment loss -> offer forbearance&#10;If DPD > 60 and no payment in 3 months -> escalate to legal&#10;If customer has made 2+ partial payments -> offer restructured plan"
-                className="min-h-[200px] text-sm"
-                data-testid="textarea-sop"
-              />
-            </TabsContent>
-
-            <TabsContent value="upload" className="mt-4">
-              <div
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleFileDrop}
-                className="border-2 border-dashed border-border rounded-md p-8 text-center transition-colors"
-              >
-                {selectedFile ? (
-                  <div className="space-y-2">
-                    <FileIcon className="w-8 h-8 text-primary mx-auto" />
-                    <p className="text-sm font-medium">{selectedFile.name}</p>
-                    <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
-                    <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)} data-testid="button-remove-file">
-                      Remove
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <Upload className="w-8 h-8 text-muted-foreground mx-auto" />
-                    <p className="text-sm text-muted-foreground">Drag & drop a PDF or image here</p>
-                    <label>
-                      <input
-                        type="file"
-                        accept=".pdf,.jpg,.jpeg,.png"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) setSelectedFile(file);
-                        }}
-                        data-testid="input-file-upload"
-                      />
-                      <Button variant="outline" size="sm" asChild>
-                        <span>Browse Files</span>
-                      </Button>
-                    </label>
-                  </div>
-                )}
-              </div>
-            </TabsContent>
-          </Tabs>
-
-          <div className="pt-2">
-            <Button
-              onClick={() => createMutation.mutate()}
-              disabled={createMutation.isPending || (!sopText && !selectedFile)}
-              data-testid="button-save-rulebook"
-            >
-              {createMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-              Save Rulebook
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div>
-        <h2 className="text-lg font-semibold mb-3">Existing Rulebooks</h2>
-        {isLoading ? (
-          <div className="space-y-3">
-            {Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
-          </div>
-        ) : rulebooks && rulebooks.length > 0 ? (
-          <div className="space-y-3">
-            {rulebooks.map((rb) => (
-              <Card key={rb.id} className="hover-elevate">
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium text-sm" data-testid={`text-rulebook-title-${rb.id}`}>{rb.title}</span>
-                        <Badge variant="secondary" className="text-[10px]">
-                          {rb.sopFileUrl ? "Document" : "Text"}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground line-clamp-2">
-                        {rb.sopText ? rb.sopText.substring(0, 150) + "..." : rb.sopFileName || "Uploaded document"}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground mt-1">
-                        Created {new Date(rb.createdAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => deleteMutation.mutate(rb.id)}
-                      disabled={deleteMutation.isPending}
-                      data-testid={`button-delete-rulebook-${rb.id}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <Card>
-            <CardContent className="p-8 text-center">
-              <BookOpen className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">No rulebooks configured yet. Add your first SOP above.</p>
-            </CardContent>
-          </Card>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DataConfigTab() {
+function PolicyConfigTab() {
   const { toast } = useToast();
 
-  const { data: dataConfig, isLoading } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
+  const { data: policyConfig, isLoading: policyLoading } = useQuery<PolicyConfig>({
+    queryKey: ["/api/policy-config"],
+    retry: false,
+  });
   const { data: dpdStages = [] } = useQuery<DpdStage[]>({ queryKey: ["/api/dpd-stages"] });
 
-  const [mandatoryFields] = useState<string[]>(MANDATORY_LOAN_FIELDS);
-  const [paymentAdditionalFields, setPaymentAdditionalFields] = useState<string[]>([]);
-  const [customPaymentField, setCustomPaymentField] = useState("");
-  const [optionalFields, setOptionalFields] = useState<string[]>([]);
-  const [customField, setCustomField] = useState("");
+  const [vulnerabilityDefinition, setVulnerabilityDefinition] = useState("");
+  const [treatments, setTreatments] = useState<TreatmentOption[]>(DEFAULT_TREATMENTS);
+  const [decisionRules, setDecisionRules] = useState<DecisionRule[]>([]);
+  const [escalation, setEscalation] = useState<EscalationRules>(DEFAULT_ESCALATION);
   const [hydrated, setHydrated] = useState(false);
 
-  useEffect(() => {
-    if (dataConfig && !hydrated) {
-      if (dataConfig.optionalFields && (dataConfig.optionalFields as string[]).length > 0) {
-        setOptionalFields(dataConfig.optionalFields as string[]);
-      }
-      if (dataConfig.paymentAdditionalFields && (dataConfig.paymentAdditionalFields as string[]).length > 0) {
-        setPaymentAdditionalFields(dataConfig.paymentAdditionalFields as string[]);
-      }
-      setHydrated(true);
-    }
-  }, [dataConfig, hydrated]);
+  const [customTreatmentName, setCustomTreatmentName] = useState("");
+  const [customTreatmentDef, setCustomTreatmentDef] = useState("");
+
+  const [customEscField, setCustomEscField] = useState("");
+  const [customEscOp, setCustomEscOp] = useState(">");
+  const [customEscValue, setCustomEscValue] = useState("");
 
   const [stageDialogOpen, setStageDialogOpen] = useState(false);
   const [editingStage, setEditingStage] = useState<DpdStage | null>(null);
@@ -588,23 +435,45 @@ function DataConfigTab() {
   const [stageTo, setStageTo] = useState("");
   const [stageColor, setStageColor] = useState("blue");
 
-  const saveMutation = useMutation({
+  useEffect(() => {
+    if (policyConfig && !hydrated) {
+      if (policyConfig.vulnerabilityDefinition) setVulnerabilityDefinition(policyConfig.vulnerabilityDefinition);
+      if (policyConfig.availableTreatments && (policyConfig.availableTreatments as TreatmentOption[]).length > 0) {
+        const saved = policyConfig.availableTreatments as TreatmentOption[];
+        const merged = DEFAULT_TREATMENTS.map(dt => {
+          const found = saved.find(s => s.name === dt.name);
+          return found ? { ...dt, enabled: found.enabled } : dt;
+        });
+        const customs = saved.filter(s => s.isCustom);
+        setTreatments([...merged, ...customs]);
+      }
+      if (policyConfig.decisionRules && (policyConfig.decisionRules as DecisionRule[]).length > 0) {
+        setDecisionRules(policyConfig.decisionRules as DecisionRule[]);
+      }
+      if (policyConfig.escalationRules) {
+        setEscalation({ ...DEFAULT_ESCALATION, ...(policyConfig.escalationRules as EscalationRules), vulnerabilityDetected: true });
+      }
+      setHydrated(true);
+    }
+  }, [policyConfig, hydrated]);
+
+  const savePolicyMutation = useMutation({
     mutationFn: async () => {
-      const method = dataConfig ? "PATCH" : "POST";
-      const res = await apiRequest(method, "/api/data-config", {
-        mandatoryFields,
-        optionalFields,
-        paymentAdditionalFields,
-        dpdBuckets: [],
+      const method = policyConfig ? "PATCH" : "POST";
+      const res = await apiRequest(method, "/api/policy-config", {
+        vulnerabilityDefinition,
+        availableTreatments: treatments,
+        decisionRules,
+        escalationRules: escalation,
       });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/data-config"] });
-      toast({ title: "Data configuration saved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-config"] });
+      toast({ title: "Policy configuration saved" });
     },
     onError: () => {
-      toast({ title: "Error", description: "Failed to save.", variant: "destructive" });
+      toast({ title: "Error", description: "Failed to save policy config.", variant: "destructive" });
     },
   });
 
@@ -691,9 +560,7 @@ function DataConfigTab() {
       toast({ title: "Error", description: "From days must be less than To days.", variant: "destructive" });
       return;
     }
-
     const payload = { name: stageName.trim(), description: stageDesc.trim(), fromDays, toDays, color: stageColor };
-
     if (editingStage) {
       updateStageMutation.mutate({ id: editingStage.id, ...payload });
     } else {
@@ -701,209 +568,463 @@ function DataConfigTab() {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="space-y-6">
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
+  function toggleTreatment(index: number) {
+    setTreatments(prev => prev.map((t, i) => i === index ? { ...t, enabled: !t.enabled } : t));
+  }
+
+  function addCustomTreatment() {
+    if (!customTreatmentName.trim()) return;
+    setTreatments(prev => [...prev, { name: customTreatmentName.trim(), enabled: true, definition: customTreatmentDef.trim(), isCustom: true }]);
+    setCustomTreatmentName("");
+    setCustomTreatmentDef("");
+  }
+
+  function removeCustomTreatment(index: number) {
+    setTreatments(prev => prev.filter((_, i) => i !== index));
+  }
+
+  function addDecisionRule() {
+    const newId = decisionRules.length > 0 ? Math.max(...decisionRules.map(r => r.id)) + 1 : 1;
+    setDecisionRules(prev => [...prev, { id: newId, treatmentName: "", affordability: "ANY", willingness: "ANY", otherCondition: "", priority: prev.length + 1 }]);
+  }
+
+  function updateDecisionRule(id: number, field: keyof DecisionRule, value: string | number) {
+    setDecisionRules(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+  }
+
+  function removeDecisionRule(id: number) {
+    setDecisionRules(prev => prev.filter(r => r.id !== id));
+  }
+
+  function addCustomEscalation() {
+    if (!customEscField.trim() || !customEscValue.trim()) return;
+    setEscalation(prev => ({
+      ...prev,
+      otherConditions: [...prev.otherConditions, { field: customEscField.trim(), operator: customEscOp, value: customEscValue.trim() }],
+    }));
+    setCustomEscField("");
+    setCustomEscOp(">");
+    setCustomEscValue("");
+  }
+
+  function removeCustomEscalation(index: number) {
+    setEscalation(prev => ({
+      ...prev,
+      otherConditions: prev.otherConditions.filter((_, i) => i !== index),
+    }));
+  }
+
+  const enabledTreatments = treatments.filter(t => t.enabled);
+
+  if (policyLoading) {
+    return <div className="space-y-6"><Skeleton className="h-64 w-full" /></div>;
   }
 
   return (
     <>
       <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Mandatory Loan Data</CardTitle>
-              <CardDescription>These fields are required in every loan data upload.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                {mandatoryFields.map((f) => (
-                  <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
-                    {f.replace(/_/g, " ")}
-                  </Badge>
-                ))}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Section A: DPD Configuration</CardTitle>
+                <CardDescription>Configure Days Past Due (DPD) stages for your collection workflow.</CardDescription>
               </div>
-            </CardContent>
-          </Card>
+              <Button variant="outline" size="sm" onClick={openAddStageDialog} data-testid="button-add-stage">
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                Add Stage
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {dpdStages.length > 0 && (
+              <p className="text-sm text-muted-foreground mb-4">{dpdStages.length} DPD Stages Configured</p>
+            )}
+            {dpdStages.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <p className="text-sm">No DPD stages configured yet. Click "Add Stage" to create your first one.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {dpdStages.map((stage) => {
+                  const colors = getColorClasses(stage.color);
+                  return (
+                    <div
+                      key={stage.id}
+                      className={`rounded-lg border p-4 ${colors.bg} ${colors.border}`}
+                      data-testid={`card-dpd-stage-${stage.id}`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${colors.dot}`} />
+                          <span className="font-semibold text-sm">{stage.name}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEditStageDialog(stage)} data-testid={`button-edit-stage-${stage.id}`}>
+                            <Pencil className="w-3.5 h-3.5 text-primary" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteStageMutation.mutate(stage.id)} data-testid={`button-delete-stage-${stage.id}`}>
+                            <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                      {stage.description && (
+                        <p className="text-xs text-muted-foreground mt-1 ml-4.5">{stage.description}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-2 ml-4.5">
+                        From <span className="font-medium text-foreground">{stage.fromDays}</span> days &nbsp; To <span className="font-medium text-foreground">{stage.toDays}</span> days
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Mandatory Payment History</CardTitle>
-              <CardDescription>These fields are required in every payment history upload.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {MANDATORY_PAYMENT_FIELDS.map((f) => (
-                  <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
-                    {f.replace(/_/g, " ")}
-                  </Badge>
-                ))}
-                {paymentAdditionalFields.map((f) => (
-                  <Badge key={f} variant="secondary" className="text-xs py-1 px-2.5">
-                    {f.replace(/_/g, " ")}
-                  </Badge>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Section B: Vulnerability Definition</CardTitle>
+            <CardDescription>Define what counts as vulnerable for your customers. This definition will guide how the AI identifies vulnerability.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Textarea
+              value={vulnerabilityDefinition}
+              onChange={(e) => setVulnerabilityDefinition(e.target.value)}
+              placeholder="Define what counts as vulnerable for your customers...&#10;&#10;For example:&#10;- Health / mental capacity issues (mental health crisis, serious illness, cognitive impairment)&#10;- Bereavement (customer deceased or death of close family member)&#10;- Severe accident / safety risk (major injury, domestic violence disclosure)&#10;- Legal / exceptional service status (active military deployment, incarceration)&#10;- Exploitation / loss of control (fraud/scam victim, coerced payments)"
+              className="min-h-[180px] text-sm"
+              data-testid="textarea-vulnerability-definition"
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Section C: Available Treatments</CardTitle>
+            <CardDescription>Select which treatments Beacon is allowed to recommend. Toggle on the treatments applicable to your business.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {treatments.map((treatment, index) => (
+              <div key={treatment.name} className={`rounded-lg border p-4 ${treatment.enabled ? "bg-primary/5 border-primary/20" : "bg-muted/30"}`} data-testid={`card-treatment-${index}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3 flex-1">
+                    <Checkbox
+                      checked={treatment.enabled}
+                      onCheckedChange={() => toggleTreatment(index)}
+                      className="mt-0.5"
+                      data-testid={`checkbox-treatment-${index}`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm">{treatment.name}</span>
+                        {treatment.isCustom && <Badge variant="secondary" className="text-[10px]">Custom</Badge>}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{treatment.definition}</p>
+                    </div>
+                  </div>
+                  {treatment.isCustom && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => removeCustomTreatment(index)} data-testid={`button-remove-treatment-${index}`}>
+                      <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            <div className="border-t pt-4 mt-4">
+              <p className="text-sm font-medium mb-3">Add Custom Treatment</p>
+              <div className="space-y-3">
+                <Input
+                  value={customTreatmentName}
+                  onChange={(e) => setCustomTreatmentName(e.target.value)}
+                  placeholder="Treatment name"
+                  data-testid="input-custom-treatment-name"
+                />
+                <Textarea
+                  value={customTreatmentDef}
+                  onChange={(e) => setCustomTreatmentDef(e.target.value)}
+                  placeholder="Treatment definition — describe when and how this treatment should be applied..."
+                  className="min-h-[80px] text-sm"
+                  data-testid="textarea-custom-treatment-def"
+                />
+                <Button variant="outline" size="sm" onClick={addCustomTreatment} disabled={!customTreatmentName.trim()} data-testid="button-add-custom-treatment">
+                  <Plus className="w-3.5 h-3.5 mr-1" />
+                  Add Treatment
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Section D: Decision Rules</CardTitle>
+            <CardDescription>Define structured rules for when Beacon should recommend each treatment. Rules are evaluated by priority (lower number = higher priority).</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {decisionRules.length === 0 ? (
+              <div className="text-center py-6 text-muted-foreground">
+                <p className="text-sm mb-3">No decision rules configured yet.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm" data-testid="table-decision-rules">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Treatment</th>
+                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Affordability</th>
+                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Willingness</th>
+                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Other Condition</th>
+                      <th className="text-left py-2 px-2 font-medium text-muted-foreground w-20">Priority</th>
+                      <th className="w-10"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {decisionRules.map((rule) => (
+                      <tr key={rule.id} className="border-b last:border-0" data-testid={`row-decision-rule-${rule.id}`}>
+                        <td className="py-2 px-2">
+                          <Select value={rule.treatmentName} onValueChange={(v) => updateDecisionRule(rule.id, "treatmentName", v)}>
+                            <SelectTrigger className="h-9 text-xs" data-testid={`select-treatment-${rule.id}`}>
+                              <SelectValue placeholder="Select treatment" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {enabledTreatments.map(t => (
+                                <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
+                              ))}
+                              <SelectItem value="Agent Review">Agent Review</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="py-2 px-2">
+                          <Select value={rule.affordability} onValueChange={(v) => updateDecisionRule(rule.id, "affordability", v)}>
+                            <SelectTrigger className="h-9 text-xs" data-testid={`select-affordability-${rule.id}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {AFFORDABILITY_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="py-2 px-2">
+                          <Select value={rule.willingness} onValueChange={(v) => updateDecisionRule(rule.id, "willingness", v)}>
+                            <SelectTrigger className="h-9 text-xs" data-testid={`select-willingness-${rule.id}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {WILLINGNESS_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="py-2 px-2">
+                          <Input
+                            value={rule.otherCondition}
+                            onChange={(e) => updateDecisionRule(rule.id, "otherCondition", e.target.value)}
+                            placeholder="e.g., consecutive payments >= 3"
+                            className="h-9 text-xs"
+                            data-testid={`input-other-condition-${rule.id}`}
+                          />
+                        </td>
+                        <td className="py-2 px-2">
+                          <Input
+                            type="number"
+                            value={rule.priority}
+                            onChange={(e) => updateDecisionRule(rule.id, "priority", parseInt(e.target.value) || 0)}
+                            className="h-9 text-xs w-16"
+                            data-testid={`input-priority-${rule.id}`}
+                          />
+                        </td>
+                        <td className="py-2 px-2">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeDecisionRule(rule.id)} data-testid={`button-remove-rule-${rule.id}`}>
+                            <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="pt-3">
+              <Button variant="outline" size="sm" onClick={addDecisionRule} data-testid="button-add-rule">
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                Add Rule
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Section E: Escalation & Guardrails</CardTitle>
+            <CardDescription>Define conditions that should automatically escalate a case to a human reviewer.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-lg border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800 p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-amber-600" />
+                  <Checkbox checked={true} disabled className="opacity-70" />
+                </div>
+                <div>
+                  <span className="font-medium text-sm">Vulnerability detected</span>
+                  <span className="text-xs text-amber-600 dark:text-amber-400 ml-2">Always enabled</span>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1 ml-10">Cases with detected vulnerability are always escalated for human review.</p>
+            </div>
+
+            <div className="space-y-3">
+              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                <Checkbox
+                  checked={escalation.legalAction}
+                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, legalAction: !!c }))}
+                  data-testid="checkbox-esc-legal"
+                />
+                <span className="text-sm">Customer mentions legal action</span>
+              </label>
+
+              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                <Checkbox
+                  checked={escalation.debtDispute}
+                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, debtDispute: !!c }))}
+                  data-testid="checkbox-esc-dispute"
+                />
+                <span className="text-sm">Customer disputes the debt</span>
+              </label>
+
+              <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                <Checkbox
+                  checked={escalation.balanceAbove !== null}
+                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, balanceAbove: c ? 0 : null }))}
+                  data-testid="checkbox-esc-balance"
+                />
+                <span className="text-sm whitespace-nowrap">Balance above</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-muted-foreground">$</span>
+                  <Input
+                    type="number"
+                    value={escalation.balanceAbove ?? ""}
+                    onChange={(e) => setEscalation(prev => ({ ...prev, balanceAbove: e.target.value ? parseFloat(e.target.value) : null }))}
+                    disabled={escalation.balanceAbove === null}
+                    className="h-8 w-28 text-sm"
+                    placeholder="Amount"
+                    data-testid="input-esc-balance"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                <Checkbox
+                  checked={escalation.dpdAbove !== null}
+                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, dpdAbove: c ? 0 : null }))}
+                  data-testid="checkbox-esc-dpd"
+                />
+                <span className="text-sm whitespace-nowrap">DPD above</span>
+                <Input
+                  type="number"
+                  value={escalation.dpdAbove ?? ""}
+                  onChange={(e) => setEscalation(prev => ({ ...prev, dpdAbove: e.target.value ? parseInt(e.target.value) : null }))}
+                  disabled={escalation.dpdAbove === null}
+                  className="h-8 w-28 text-sm"
+                  placeholder="Days"
+                  data-testid="input-esc-dpd"
+                />
+                <span className="text-sm text-muted-foreground">days</span>
+              </div>
+
+              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                <Checkbox
+                  checked={escalation.managerRequest}
+                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, managerRequest: !!c }))}
+                  data-testid="checkbox-esc-manager"
+                />
+                <span className="text-sm">Customer requests to speak to a manager</span>
+              </label>
+
+              <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                <Checkbox
+                  checked={escalation.brokenPtps !== null}
+                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, brokenPtps: c ? 0 : null }))}
+                  data-testid="checkbox-esc-ptps"
+                />
+                <span className="text-sm whitespace-nowrap">Broken PTPs in last 90 days &ge;</span>
+                <Input
+                  type="number"
+                  value={escalation.brokenPtps ?? ""}
+                  onChange={(e) => setEscalation(prev => ({ ...prev, brokenPtps: e.target.value ? parseInt(e.target.value) : null }))}
+                  disabled={escalation.brokenPtps === null}
+                  className="h-8 w-20 text-sm"
+                  placeholder="Count"
+                  data-testid="input-esc-ptps"
+                />
+              </div>
+            </div>
+
+            {escalation.otherConditions.length > 0 && (
+              <div className="space-y-2 pt-2">
+                <p className="text-xs font-medium text-muted-foreground">Custom Conditions</p>
+                {escalation.otherConditions.map((cond, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 rounded border bg-muted/20" data-testid={`card-esc-custom-${i}`}>
+                    <Badge variant="outline" className="text-xs">{cond.field}</Badge>
+                    <span className="text-xs font-mono text-muted-foreground">{cond.operator}</span>
+                    <Badge variant="secondary" className="text-xs">{cond.value}</Badge>
+                    <Button variant="ghost" size="icon" className="h-6 w-6 ml-auto" onClick={() => removeCustomEscalation(i)} data-testid={`button-remove-esc-${i}`}>
+                      <Trash2 className="w-3 h-3 text-destructive" />
+                    </Button>
+                  </div>
                 ))}
               </div>
-              <div className="flex items-center gap-2">
-                <Input
-                  value={customPaymentField}
-                  onChange={(e) => setCustomPaymentField(e.target.value)}
-                  placeholder="Add additional field (e.g. payment method)"
-                  className="max-w-[280px]"
-                  data-testid="input-custom-payment-field"
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (customPaymentField.trim()) {
-                      setPaymentAdditionalFields((prev) => [...prev, customPaymentField.trim().replace(/\s+/g, "_")]);
-                      setCustomPaymentField("");
-                    }
-                  }}
-                  data-testid="button-add-payment-field"
-                >
+            )}
+
+            <div className="border-t pt-4">
+              <p className="text-sm font-medium mb-3">Add Custom Condition</p>
+              <div className="flex items-end gap-2 flex-wrap">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Data Field</label>
+                  <Input
+                    value={customEscField}
+                    onChange={(e) => setCustomEscField(e.target.value)}
+                    placeholder="e.g., income"
+                    className="h-9 w-40 text-sm"
+                    data-testid="input-custom-esc-field"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Operator</label>
+                  <Select value={customEscOp} onValueChange={setCustomEscOp}>
+                    <SelectTrigger className="h-9 w-24 text-sm" data-testid="select-custom-esc-op">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ESCALATION_OPERATORS.map(op => <SelectItem key={op} value={op}>{op}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Value</label>
+                  <Input
+                    value={customEscValue}
+                    onChange={(e) => setCustomEscValue(e.target.value)}
+                    placeholder="e.g., 5000"
+                    className="h-9 w-32 text-sm"
+                    data-testid="input-custom-esc-value"
+                  />
+                </div>
+                <Button variant="outline" size="sm" onClick={addCustomEscalation} disabled={!customEscField.trim() || !customEscValue.trim()} data-testid="button-add-custom-esc">
                   <Plus className="w-3.5 h-3.5 mr-1" />
                   Add
                 </Button>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Optional Data Fields</CardTitle>
-              <CardDescription>Select additional fields to improve accuracy.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {OPTIONAL_FIELDS.map((f) => (
-                  <label key={f} className="flex items-center gap-3 cursor-pointer">
-                    <Checkbox
-                      checked={optionalFields.includes(f)}
-                      onCheckedChange={(checked) => {
-                        setOptionalFields((prev) =>
-                          checked ? [...prev, f] : prev.filter((x) => x !== f)
-                        );
-                      }}
-                      data-testid={`checkbox-field-${f}`}
-                    />
-                    <span className="text-sm capitalize">
-                      {f.replace(/_/g, " ")}
-                      {f === "conversation_history" && (
-                        <span className="text-xs text-muted-foreground normal-case ml-1">
-                          ({MANDATORY_CONVERSATION_FIELDS.map(c => c.replace(/_/g, " ")).join(", ")})
-                        </span>
-                      )}
-                    </span>
-                  </label>
-                ))}
-                <div className="flex items-center gap-2 mt-3">
-                  <Input
-                    value={customField}
-                    onChange={(e) => setCustomField(e.target.value)}
-                    placeholder="Add custom field"
-                    className="max-w-[200px]"
-                    data-testid="input-custom-field"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      if (customField.trim()) {
-                        setOptionalFields((prev) => [...prev, customField.trim().replace(/\s+/g, "_")]);
-                        setCustomField("");
-                      }
-                    }}
-                    data-testid="button-add-field"
-                  >
-                    <Plus className="w-3.5 h-3.5 mr-1" />
-                    Add
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base">DPD Configuration</CardTitle>
-                  <CardDescription>Configure Days Past Due (DPD) stages for your collection workflow.</CardDescription>
-                </div>
-                <Button variant="outline" size="sm" onClick={openAddStageDialog} data-testid="button-add-stage">
-                  <Plus className="w-3.5 h-3.5 mr-1" />
-                  Add Stage
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {dpdStages.length > 0 && (
-                <p className="text-sm text-muted-foreground mb-4">{dpdStages.length} DPD Stages Configured</p>
-              )}
-              {dpdStages.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <p className="text-sm">No DPD stages configured yet. Click "Add Stage" to create your first one.</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {dpdStages.map((stage) => {
-                    const colors = getColorClasses(stage.color);
-                    return (
-                      <div
-                        key={stage.id}
-                        className={`rounded-lg border p-4 ${colors.bg} ${colors.border}`}
-                        data-testid={`card-dpd-stage-${stage.id}`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className={`w-2.5 h-2.5 rounded-full ${colors.dot}`} />
-                            <span className="font-semibold text-sm">{stage.name}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => openEditStageDialog(stage)}
-                              data-testid={`button-edit-stage-${stage.id}`}
-                            >
-                              <Pencil className="w-3.5 h-3.5 text-primary" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => deleteStageMutation.mutate(stage.id)}
-                              data-testid={`button-delete-stage-${stage.id}`}
-                            >
-                              <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                            </Button>
-                          </div>
-                        </div>
-                        {stage.description && (
-                          <p className="text-xs text-muted-foreground mt-1 ml-4.5">{stage.description}</p>
-                        )}
-                        <p className="text-xs text-muted-foreground mt-2 ml-4.5">
-                          From <span className="font-medium text-foreground">{stage.fromDays}</span> days &nbsp; To <span className="font-medium text-foreground">{stage.toDays}</span> days
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <div className="pt-2 pb-8">
-            <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-dataconfig">
-              {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-              Save Configuration
-            </Button>
-          </div>
+        <div className="pt-2 pb-8">
+          <Button onClick={() => savePolicyMutation.mutate()} disabled={savePolicyMutation.isPending} data-testid="button-save-policy-config">
+            {savePolicyMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+            Save Policy Configuration
+          </Button>
+        </div>
       </div>
 
       <Dialog open={stageDialogOpen} onOpenChange={setStageDialogOpen}>
@@ -914,75 +1035,220 @@ function DataConfigTab() {
           <div className="space-y-4 py-2">
             <div>
               <label className="text-sm font-medium mb-1.5 block">Stage Name</label>
-              <Input
-                value={stageName}
-                onChange={(e) => setStageName(e.target.value)}
-                placeholder="e.g. Pre Due, Grace, Early"
-                data-testid="input-stage-name"
-              />
+              <Input value={stageName} onChange={(e) => setStageName(e.target.value)} placeholder="e.g. Pre Due, Grace, Early" data-testid="input-stage-name" />
             </div>
             <div>
               <label className="text-sm font-medium mb-1.5 block">Description</label>
-              <Input
-                value={stageDesc}
-                onChange={(e) => setStageDesc(e.target.value)}
-                placeholder="e.g. Accounts approaching due date"
-                data-testid="input-stage-description"
-              />
+              <Input value={stageDesc} onChange={(e) => setStageDesc(e.target.value)} placeholder="e.g. Accounts approaching due date" data-testid="input-stage-description" />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium mb-1.5 block">From (days)</label>
-                <Input
-                  type="number"
-                  value={stageFrom}
-                  onChange={(e) => setStageFrom(e.target.value)}
-                  placeholder="-5"
-                  data-testid="input-stage-from"
-                />
+                <Input type="number" value={stageFrom} onChange={(e) => setStageFrom(e.target.value)} placeholder="-5" data-testid="input-stage-from" />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1.5 block">To (days)</label>
-                <Input
-                  type="number"
-                  value={stageTo}
-                  onChange={(e) => setStageTo(e.target.value)}
-                  placeholder="0"
-                  data-testid="input-stage-to"
-                />
+                <Input type="number" value={stageTo} onChange={(e) => setStageTo(e.target.value)} placeholder="0" data-testid="input-stage-to" />
               </div>
             </div>
             <div>
               <label className="text-sm font-medium mb-1.5 block">Color</label>
               <div className="flex gap-2 flex-wrap">
                 {STAGE_COLORS.map((c) => (
-                  <button
-                    key={c.name}
-                    type="button"
-                    className={`w-8 h-8 rounded-full ${c.dot} ${stageColor === c.name ? "ring-2 ring-offset-2 ring-primary" : ""}`}
-                    onClick={() => setStageColor(c.name)}
-                    data-testid={`button-color-${c.name}`}
-                  />
+                  <button key={c.name} type="button" className={`w-8 h-8 rounded-full ${c.dot} ${stageColor === c.name ? "ring-2 ring-offset-2 ring-primary" : ""}`} onClick={() => setStageColor(c.name)} data-testid={`button-color-${c.name}`} />
                 ))}
               </div>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeStageDialog}>Cancel</Button>
-            <Button
-              onClick={handleSaveStage}
-              disabled={createStageMutation.isPending || updateStageMutation.isPending}
-              data-testid="button-save-stage"
-            >
-              {(createStageMutation.isPending || updateStageMutation.isPending) && (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              )}
+            <Button onClick={handleSaveStage} disabled={createStageMutation.isPending || updateStageMutation.isPending} data-testid="button-save-stage">
+              {(createStageMutation.isPending || updateStageMutation.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               {editingStage ? "Update Stage" : "Add Stage"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function DataConfigTab() {
+  const { toast } = useToast();
+
+  const { data: dataConfig, isLoading } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
+
+  const [mandatoryFields] = useState<string[]>(MANDATORY_LOAN_FIELDS);
+  const [paymentAdditionalFields, setPaymentAdditionalFields] = useState<string[]>([]);
+  const [customPaymentField, setCustomPaymentField] = useState("");
+  const [optionalFields, setOptionalFields] = useState<string[]>([]);
+  const [customField, setCustomField] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    if (dataConfig && !hydrated) {
+      if (dataConfig.optionalFields && (dataConfig.optionalFields as string[]).length > 0) {
+        setOptionalFields(dataConfig.optionalFields as string[]);
+      }
+      if (dataConfig.paymentAdditionalFields && (dataConfig.paymentAdditionalFields as string[]).length > 0) {
+        setPaymentAdditionalFields(dataConfig.paymentAdditionalFields as string[]);
+      }
+      setHydrated(true);
+    }
+  }, [dataConfig, hydrated]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const method = dataConfig ? "PATCH" : "POST";
+      const res = await apiRequest(method, "/api/data-config", {
+        mandatoryFields,
+        optionalFields,
+        paymentAdditionalFields,
+        dpdBuckets: [],
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/data-config"] });
+      toast({ title: "Data configuration saved" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save.", variant: "destructive" });
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Mandatory Loan Data</CardTitle>
+            <CardDescription>These fields are required in every loan data upload.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {mandatoryFields.map((f) => (
+                <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
+                  {f.replace(/_/g, " ")}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Mandatory Payment History</CardTitle>
+            <CardDescription>These fields are required in every payment history upload.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {MANDATORY_PAYMENT_FIELDS.map((f) => (
+                <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
+                  {f.replace(/_/g, " ")}
+                </Badge>
+              ))}
+              {paymentAdditionalFields.map((f) => (
+                <Badge key={f} variant="secondary" className="text-xs py-1 px-2.5">
+                  {f.replace(/_/g, " ")}
+                </Badge>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                value={customPaymentField}
+                onChange={(e) => setCustomPaymentField(e.target.value)}
+                placeholder="Add additional field (e.g. payment method)"
+                className="max-w-[280px]"
+                data-testid="input-custom-payment-field"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (customPaymentField.trim()) {
+                    setPaymentAdditionalFields((prev) => [...prev, customPaymentField.trim().replace(/\s+/g, "_")]);
+                    setCustomPaymentField("");
+                  }
+                }}
+                data-testid="button-add-payment-field"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                Add
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Optional Data Fields</CardTitle>
+            <CardDescription>Select additional fields to improve accuracy.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {OPTIONAL_FIELDS.map((f) => (
+                <label key={f} className="flex items-center gap-3 cursor-pointer">
+                  <Checkbox
+                    checked={optionalFields.includes(f)}
+                    onCheckedChange={(checked) => {
+                      setOptionalFields((prev) =>
+                        checked ? [...prev, f] : prev.filter((x) => x !== f)
+                      );
+                    }}
+                    data-testid={`checkbox-field-${f}`}
+                  />
+                  <span className="text-sm capitalize">
+                    {f.replace(/_/g, " ")}
+                    {f === "conversation_history" && (
+                      <span className="text-xs text-muted-foreground normal-case ml-1">
+                        ({MANDATORY_CONVERSATION_FIELDS.map(c => c.replace(/_/g, " ")).join(", ")})
+                      </span>
+                    )}
+                  </span>
+                </label>
+              ))}
+              <div className="flex items-center gap-2 mt-3">
+                <Input
+                  value={customField}
+                  onChange={(e) => setCustomField(e.target.value)}
+                  placeholder="Add custom field"
+                  className="max-w-[200px]"
+                  data-testid="input-custom-field"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (customField.trim()) {
+                      setOptionalFields((prev) => [...prev, customField.trim().replace(/\s+/g, "_")]);
+                      setCustomField("");
+                    }
+                  }}
+                  data-testid="button-add-field"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" />
+                  Add
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="pt-2 pb-8">
+          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-dataconfig">
+            {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+            Save Configuration
+          </Button>
+        </div>
+    </div>
   );
 }
 
@@ -1098,9 +1364,9 @@ export default function ClientSetupPage() {
             <Building2 className="w-3.5 h-3.5 mr-1.5" />
             Company Details
           </TabsTrigger>
-          <TabsTrigger value="rulebook" data-testid="tab-action-rulebook" disabled={!config}>
-            <BookOpen className="w-3.5 h-3.5 mr-1.5" />
-            Action Rulebook
+          <TabsTrigger value="policy" data-testid="tab-policy-config" disabled={!config}>
+            <Shield className="w-3.5 h-3.5 mr-1.5" />
+            Policy Config
           </TabsTrigger>
           <TabsTrigger value="data-config" data-testid="tab-data-config" disabled={!config}>
             <Database className="w-3.5 h-3.5 mr-1.5" />
@@ -1116,8 +1382,8 @@ export default function ClientSetupPage() {
           <CompanyDetailsTab />
         </TabsContent>
 
-        <TabsContent value="rulebook">
-          <ActionRulebookTab />
+        <TabsContent value="policy">
+          <PolicyConfigTab />
         </TabsContent>
 
         <TabsContent value="data-config">

@@ -57,6 +57,51 @@ export const dpdStages = pgTable("dpd_stages", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export interface TreatmentOption {
+  name: string;
+  enabled: boolean;
+  definition: string;
+  isCustom?: boolean;
+}
+
+export interface DecisionRule {
+  id: number;
+  treatmentName: string;
+  affordability: string;
+  willingness: string;
+  otherCondition: string;
+  priority: number;
+}
+
+export interface EscalationCustomCondition {
+  field: string;
+  operator: string;
+  value: string;
+}
+
+export interface EscalationRules {
+  vulnerabilityDetected: true;
+  legalAction: boolean;
+  debtDispute: boolean;
+  balanceAbove: number | null;
+  dpdAbove: number | null;
+  managerRequest: boolean;
+  brokenPtps: number | null;
+  otherConditions: EscalationCustomCondition[];
+}
+
+export const policyConfigs = pgTable("policy_configs", {
+  id: serial("id").primaryKey(),
+  clientConfigId: integer("client_config_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  vulnerabilityDefinition: text("vulnerability_definition"),
+  availableTreatments: jsonb("available_treatments").$type<TreatmentOption[]>().default([]).notNull(),
+  decisionRules: jsonb("decision_rules").$type<DecisionRule[]>().default([]).notNull(),
+  escalationRules: jsonb("escalation_rules").$type<EscalationRules>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const dataUploads = pgTable("data_uploads", {
   id: serial("id").primaryKey(),
   clientConfigId: integer("client_config_id").notNull(),
@@ -185,6 +230,12 @@ export const insertDpdStageSchema = createInsertSchema(dpdStages).omit({
   createdAt: true,
 });
 
+export const insertPolicyConfigSchema = createInsertSchema(policyConfigs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertDataUploadSchema = createInsertSchema(dataUploads).omit({
   id: true,
   createdAt: true,
@@ -212,5 +263,7 @@ export type DataUpload = typeof dataUploads.$inferSelect;
 export type InsertDataUpload = z.infer<typeof insertDataUploadSchema>;
 export type Decision = typeof decisions.$inferSelect;
 export type InsertDecision = z.infer<typeof insertDecisionSchema>;
+export type PolicyConfig = typeof policyConfigs.$inferSelect;
+export type InsertPolicyConfig = z.infer<typeof insertPolicyConfigSchema>;
 export type UploadLog = typeof uploadLogs.$inferSelect;
 export type InsertUploadLog = z.infer<typeof insertUploadLogSchema>;

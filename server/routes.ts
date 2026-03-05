@@ -196,6 +196,45 @@ export async function registerRoutes(
     }
   });
 
+  // Policy Config
+  app.get("/api/policy-config", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const config = await storage.getPolicyConfig(userId);
+      if (!config) return res.status(404).json({ error: "Not configured" });
+      res.json(config);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch policy config" });
+    }
+  });
+
+  app.post("/api/policy-config", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const clientConfig = await storage.getClientConfig(userId);
+      if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
+
+      const config = await storage.createPolicyConfig({
+        ...req.body,
+        userId,
+        clientConfigId: clientConfig.id,
+      });
+      res.status(201).json(config);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create policy config" });
+    }
+  });
+
+  app.patch("/api/policy-config", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const config = await storage.updatePolicyConfig(userId, req.body);
+      res.json(config);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update policy config" });
+    }
+  });
+
   // DPD Stages
   app.get("/api/dpd-stages", isAuthenticated, async (req, res) => {
     try {

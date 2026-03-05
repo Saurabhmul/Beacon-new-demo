@@ -1,5 +1,5 @@
 import {
-  clientConfigs, rulebooks, dataConfigs, dataUploads, decisions, dpdStages, uploadLogs,
+  clientConfigs, rulebooks, dataConfigs, dataUploads, decisions, dpdStages, uploadLogs, policyConfigs,
   type ClientConfig, type InsertClientConfig,
   type Rulebook, type InsertRulebook,
   type DataConfig, type InsertDataConfig,
@@ -7,6 +7,7 @@ import {
   type DataUpload, type InsertDataUpload,
   type Decision, type InsertDecision,
   type UploadLog, type InsertUploadLog,
+  type PolicyConfig, type InsertPolicyConfig,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
@@ -49,6 +50,10 @@ export interface IStorage {
   createUploadLog(data: InsertUploadLog): Promise<UploadLog>;
   getUploadLogs(userId: string, category: string): Promise<UploadLog[]>;
   getUploadLog(id: number): Promise<UploadLog | undefined>;
+
+  getPolicyConfig(userId: string): Promise<PolicyConfig | undefined>;
+  createPolicyConfig(data: InsertPolicyConfig): Promise<PolicyConfig>;
+  updatePolicyConfig(userId: string, data: Partial<InsertPolicyConfig>): Promise<PolicyConfig>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -249,6 +254,25 @@ export class DatabaseStorage implements IStorage {
   async getUploadLog(id: number): Promise<UploadLog | undefined> {
     const [log] = await db.select().from(uploadLogs).where(eq(uploadLogs.id, id));
     return log || undefined;
+  }
+
+  async getPolicyConfig(userId: string): Promise<PolicyConfig | undefined> {
+    const [config] = await db.select().from(policyConfigs).where(eq(policyConfigs.userId, userId));
+    return config || undefined;
+  }
+
+  async createPolicyConfig(data: InsertPolicyConfig): Promise<PolicyConfig> {
+    const [config] = await db.insert(policyConfigs).values(data).returning();
+    return config;
+  }
+
+  async updatePolicyConfig(userId: string, data: Partial<InsertPolicyConfig>): Promise<PolicyConfig> {
+    const [config] = await db
+      .update(policyConfigs)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(policyConfigs.userId, userId))
+      .returning();
+    return config;
   }
 }
 
