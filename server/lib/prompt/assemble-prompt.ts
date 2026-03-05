@@ -37,29 +37,39 @@ export function formatCustomerData(customerData: Record<string, unknown>): strin
   const id = customerData['customer / account / loan id'] || customerData.customer_id || customerData.account_id || 'unknown';
   text += `Customer ID: ${id}\n`;
 
-  const skipKeys = new Set(['customer / account / loan id', 'customer_id', 'account_id', 'payments', 'conversations', 'income', 'bureau']);
+  const skipKeys = new Set([
+    'customer / account / loan id', 'customer_id', 'account_id',
+    'payments', 'conversations', 'income', 'bureau',
+    '_payments', '_conversations', '_payment_count', '_conversation_count',
+  ]);
 
   for (const [key, value] of Object.entries(customerData)) {
     if (skipKeys.has(key)) continue;
     if (value === null || value === undefined || value === '') continue;
-    if (typeof value === 'object' && !Array.isArray(value)) continue;
+    if (typeof value === 'object') continue;
     text += `${key}: ${value}\n`;
   }
 
-  if (customerData.payments && Array.isArray(customerData.payments)) {
+  const payments = (customerData._payments || customerData.payments) as Record<string, unknown>[] | undefined;
+  if (payments && Array.isArray(payments) && payments.length > 0) {
     text += '\nPAYMENT HISTORY:\n';
-    for (const p of customerData.payments as Record<string, unknown>[]) {
+    for (const p of payments) {
       const parts = Object.entries(p).map(([k, v]) => `${k}: ${v}`);
       text += `  ${parts.join(' | ')}\n`;
     }
+  } else {
+    text += '\nPAYMENT HISTORY:\n  No payment records available.\n';
   }
 
-  if (customerData.conversations && Array.isArray(customerData.conversations)) {
+  const conversations = (customerData._conversations || customerData.conversations) as Record<string, unknown>[] | undefined;
+  if (conversations && Array.isArray(conversations) && conversations.length > 0) {
     text += '\nCONVERSATION HISTORY:\n';
-    for (const c of customerData.conversations as Record<string, unknown>[]) {
+    for (const c of conversations) {
       const parts = Object.entries(c).map(([k, v]) => `${k}: ${v}`);
       text += `  ${parts.join(' | ')}\n`;
     }
+  } else {
+    text += '\nCONVERSATION HISTORY:\n  No conversation records available.\n';
   }
 
   if (customerData.income && typeof customerData.income === 'object') {

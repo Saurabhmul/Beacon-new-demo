@@ -50,26 +50,48 @@ conditions defined in the CLIENT VULNERABILITY POLICY below.
 {{POLICY_VULNERABILITY_DEFINITIONS}}
 
 --- PILLAR 2: AFFORDABILITY ---
-Estimate Next Month Pay Capability (NMPC):
-- Use median of last 3 months of actual repayments as baseline.
-- Adjust upward/downward based on conversation signals (e.g., stated income change, job loss, new employment).
-- If no payment history, use stated income or conversation clues.
-- If completely unknown, mark as NOT SURE.
+You MUST follow these steps to determine affordability:
 
-CRITICAL: You MUST calculate NMPC and apply the thresholds below to determine the correct label. Do NOT default to NOT SURE if you have any payment data or income signals. If NMPC = 0, use VERY LOW, not NOT SURE.
+STEP 1 - Calculate NMPC (Next Month Pay Capability):
+  a) Look at PAYMENT HISTORY for the last 3 months.
+  b) Consider ONLY payments with status "Received" (successful).
+     Payments with status "Failed" contribute $0.
+  c) Calculate the median of successful payment amounts in the last 3 months.
+  d) If ALL payments in last 3 months are Failed → NMPC = 0
+  e) If there are NO payment records at all in last 3 months → check conversations
+     for stated income/capacity. If customer states inability to pay → NMPC = 0.
+  f) Only if there is absolutely NO payment data AND NO conversation data
+     AND NO income data → NMPC is unknown.
+
+STEP 2 - Determine the Minimum Amount Due (MAD):
+  Look for "minimum_due" or similar field in the customer data.
+
+STEP 3 - Apply the label thresholds below:
+  Compare NMPC to MAD using the percentage rules to assign the label.
+
+IMPORTANT:
+- NMPC = 0 means VERY LOW, NOT "NOT SURE"
+- Failed payments = evidence of $0 capacity, NOT "unknown"
+- Customer stating they cannot pay = NMPC = 0 = VERY LOW
+- NOT SURE is ONLY for cases with literally zero data (no payments, no conversations, no income info)
 
 Affordability label thresholds (client-configured):
 {{POLICY_AFFORDABILITY_THRESHOLDS}}
 
 --- PILLAR 3: WILLINGNESS TO PAY ---
 Assess behavioral signals to determine willingness:
-- HIGH: Proactive communication, keeps promises, partial payments when unable to pay full.
+- HIGH: Proactive communication, keeps promises, partial payments when unable to pay full, requests help.
 - MEDIUM: Responsive when contacted, some missed promises but generally cooperative.
 - LOW: Avoids contact, breaks promises-to-pay, inconsistent engagement.
 - VERY LOW: Hostile, refuses to engage, disputes without basis, no payment attempts.
-- NOT SURE: Insufficient interaction data to assess.
+- NOT SURE: Absolutely no interaction data exists (no conversations, no payment attempts).
 
-CRITICAL: You MUST output one of: HIGH, MEDIUM, LOW, VERY LOW, NOT SURE (uppercase). Base your label on observable behavior. Only use NOT SURE when there is genuinely zero interaction or behavioral data available.
+IMPORTANT:
+- If customer proactively reached out asking for help → HIGH willingness
+- If customer made a promise-to-pay but broke it → LOW willingness
+- If customer has failed payment attempts (they tried but failed) → at least MEDIUM
+- If customer is unresponsive to multiple outreach attempts → LOW or VERY LOW
+- NOT SURE only when there are ZERO conversations AND ZERO payment attempts
 
 --- ABILITY TO PAY (numeric estimate) ---
 Estimate the dollar/currency amount the customer can realistically pay next month.
@@ -105,3 +127,11 @@ Reason: No matching policy rule - human judgment required.
 === OUTPUT FORMAT ===
 Respond ONLY with valid JSON matching this schema:
 {{OUTPUT_SCHEMA}}
+
+MANDATORY: The fields "reason_for_affordability" and "reason_for_willingness"
+must NEVER be empty. Always show your calculation/reasoning:
+- reason_for_affordability: Show NMPC calculation (e.g., "Median of last 3 months
+  successful payments = $X. NMPC ($X) vs MAD ($Y) = Z% → LABEL")
+- reason_for_willingness: Cite specific behavioral evidence from conversations
+  or payment patterns (e.g., "Customer proactively requested help on [date]
+  → HIGH" or "No response to 3 outreach attempts → LOW")
