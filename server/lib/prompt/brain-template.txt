@@ -89,16 +89,18 @@ Affordability label thresholds (client-configured):
 Assess behavioral signals to determine willingness:
 - HIGH: Proactive communication, keeps promises, partial payments when unable to pay full, requests help.
 - MEDIUM: Responsive when contacted, some missed promises but generally cooperative.
-- LOW: Avoids contact, breaks promises-to-pay, inconsistent engagement.
-- VERY LOW: Hostile, refuses to engage, disputes without basis, no payment attempts.
-- NOT SURE: Absolutely no interaction data exists (no conversations, no payment attempts).
+- LOW: Avoids contact, breaks promises-to-pay, inconsistent engagement, payment attempts but no conversations.
+- VERY LOW: Hostile, refuses to engage, disputes without basis, no payment attempts, no conversations at all.
 
-IMPORTANT:
+CRITICAL RULES:
+- Willingness can NEVER be "NOT SURE". There is always enough data to determine it:
+  * No conversations AND no payment attempts → VERY LOW
+  * Payment attempts exist but no conversations → LOW
+  * Customer is unresponsive to multiple outreach attempts → LOW or VERY LOW
 - If customer proactively reached out asking for help → HIGH willingness
 - If customer made a promise-to-pay but broke it → LOW willingness
 - If customer has failed payment attempts (they tried but failed) → at least MEDIUM
-- If customer is unresponsive to multiple outreach attempts → LOW or VERY LOW
-- NOT SURE only when there are ZERO conversations AND ZERO payment attempts
+- NEVER output NOT SURE for willingness under any circumstances
 
 --- ABILITY TO PAY (numeric estimate) ---
 Estimate the dollar/currency amount the customer can realistically pay next month.

@@ -329,6 +329,33 @@ REMINDER before you respond:
       }
     }
 
+    if (finalWillingness === "NOT SURE") {
+      const conversations = (customerData._conversations || customerData.conversations || []) as Array<Record<string, any>>;
+      const payments = (customerData._payments || customerData.payments || []) as Array<Record<string, any>>;
+      const hasConversations = conversations.length > 0;
+      const hasPaymentAttempts = payments.length > 0;
+
+      if (!hasConversations && !hasPaymentAttempts) {
+        finalWillingness = "VERY LOW";
+        if (!reasonWillingness) {
+          reasonWillingness = "No conversations or payment attempts on record. Willingness defaults to VERY LOW per business rules.";
+        }
+        console.log("[AI FIX] Willingness defaulted to VERY LOW — no conversations or payment attempts");
+      } else if (hasPaymentAttempts && !hasConversations) {
+        finalWillingness = "LOW";
+        if (!reasonWillingness) {
+          reasonWillingness = "Payment attempts exist but no customer-initiated conversations on record. No engagement beyond automated payments.";
+        }
+        console.log("[AI FIX] Willingness defaulted to LOW — payments but no conversations");
+      } else {
+        finalWillingness = "VERY LOW";
+        if (!reasonWillingness) {
+          reasonWillingness = "Insufficient engagement signals to determine willingness. Defaults to VERY LOW per business rules.";
+        }
+        console.log("[AI FIX] Willingness defaulted to VERY LOW — fallback");
+      }
+    }
+
     if (!reasonAffordability && finalAffordability !== "NOT SURE") {
       const abilityReason = String(parsed.reason_for_ability_to_pay ?? "");
       if (abilityReason) {
@@ -401,8 +428,8 @@ REMINDER before you respond:
       reason_for_vulnerability: "",
       affordability: "VERY LOW",
       reason_for_affordability: "AI analysis could not be parsed. Affordability defaults to VERY LOW per business rules.",
-      willingness: "NOT SURE",
-      reason_for_willingness: "",
+      willingness: "VERY LOW",
+      reason_for_willingness: "AI analysis could not be parsed. Willingness defaults to VERY LOW per business rules.",
       ability_to_pay: null,
       reason_for_ability_to_pay: "",
       problem_description: "AI analysis could not be parsed. Raw response stored.",
