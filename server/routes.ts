@@ -275,7 +275,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/client-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.post("/api/client-config", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -286,7 +286,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/client-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.patch("/api/client-config", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const config = await storage.updateClientConfig(companyId, req.body);
@@ -307,7 +307,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/rulebooks", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.post("/api/rulebooks", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -326,7 +326,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/rulebooks/upload", authenticate, authorize("superadmin", "admin"), companyFilter, upload.single("file"), async (req: any, res) => {
+  app.post("/api/rulebooks/upload", authenticate, authorize("admin"), companyFilter, upload.single("file"), async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -378,7 +378,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/rulebooks/:id", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.delete("/api/rulebooks/:id", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const rb = await storage.getRulebook(parseInt(req.params.id));
@@ -402,7 +402,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/data-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.post("/api/data-config", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -421,7 +421,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/data-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.patch("/api/data-config", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const config = await storage.updateDataConfig(companyId, req.body);
@@ -443,7 +443,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/policy-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.post("/api/policy-config", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -476,7 +476,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/policy-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.patch("/api/policy-config", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const dpdStagesData = await storage.getDpdStages(companyId);
@@ -502,7 +502,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/prompt-preview", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.get("/api/prompt-preview", authenticate, authorize("superadmin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const policyConfig = await storage.getPolicyConfig(companyId);
@@ -538,7 +538,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/prompt-preview/regenerate", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.post("/api/prompt-preview/regenerate", authenticate, authorize("superadmin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const policyConfig = await storage.getPolicyConfig(companyId);
@@ -580,7 +580,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/dpd-stages", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.post("/api/dpd-stages", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -614,7 +614,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/dpd-stages/:id", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.patch("/api/dpd-stages/:id", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const id = parseInt(req.params.id);
@@ -647,7 +647,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/dpd-stages/:id", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.delete("/api/dpd-stages/:id", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const id = parseInt(req.params.id);
@@ -844,7 +844,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/uploads/:category/records/:index", authenticate, companyFilter, async (req: any, res) => {
+  app.put("/api/uploads/:category/records/:index", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const category = req.params.category;
@@ -880,7 +880,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/uploads/:category/records", authenticate, companyFilter, async (req: any, res) => {
+  app.delete("/api/uploads/:category/records", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const category = req.params.category;
@@ -913,7 +913,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/uploads", authenticate, companyFilter, upload.single("file"), async (req: any, res) => {
+  app.post("/api/uploads", authenticate, authorize("admin", "manager", "agent"), companyFilter, upload.single("file"), async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -1073,7 +1073,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/analyze", authenticate, companyFilter, async (req: any, res) => {
+  app.post("/api/analyze", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -1281,7 +1281,7 @@ export async function registerRoutes(
   });
 
   // Process upload with AI
-  app.post("/api/uploads/:id/process", authenticate, companyFilter, async (req: any, res) => {
+  app.post("/api/uploads/:id/process", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
@@ -1390,7 +1390,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/decisions/bulk", authenticate, companyFilter, async (req: any, res) => {
+  app.delete("/api/decisions/bulk", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const { ids } = req.body;
@@ -1404,7 +1404,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/decisions/:id/review", authenticate, companyFilter, async (req: any, res) => {
+  app.patch("/api/decisions/:id/review", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const id = parseInt(req.params.id);
@@ -1418,7 +1418,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/decisions/:id/email-review", authenticate, companyFilter, async (req: any, res) => {
+  app.patch("/api/decisions/:id/email-review", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const id = parseInt(req.params.id);

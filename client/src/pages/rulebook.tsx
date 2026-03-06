@@ -9,11 +9,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BookOpen, Upload, FileText, Save, Loader2, Trash2, Plus, File } from "lucide-react";
+import { BookOpen, Upload, FileText, Save, Loader2, Trash2, Plus, File, Building2 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import type { Rulebook, ClientConfig } from "@shared/schema";
 
 export default function RulebookPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "superadmin";
+  const noCompanySelected = isSuperAdmin && !user?.viewingCompanyId;
   const [title, setTitle] = useState("Default Rulebook");
   const [sopText, setSopText] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -102,96 +106,98 @@ export default function RulebookPage() {
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Add New Rulebook / SOP</CardTitle>
-          <CardDescription>Enter rules as text or upload a PDF/image document. AI will extract and use these rules.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <label className="text-sm font-medium mb-1.5 block">Title</label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g., Early Delinquency Playbook v2"
-              data-testid="input-rulebook-title"
-            />
-          </div>
-
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList>
-              <TabsTrigger value="text" data-testid="tab-text">
-                <FileText className="w-3.5 h-3.5 mr-1.5" />
-                Free Text
-              </TabsTrigger>
-              <TabsTrigger value="upload" data-testid="tab-upload">
-                <Upload className="w-3.5 h-3.5 mr-1.5" />
-                Upload Document
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="text" className="mt-4">
-              <Textarea
-                value={sopText}
-                onChange={(e) => setSopText(e.target.value)}
-                placeholder="Enter your SOP rules here. For example:&#10;&#10;If customer CMD < 0.3 and mentions employment loss -> offer forbearance&#10;If DPD > 60 and no payment in 3 months -> escalate to legal&#10;If customer has made 2+ partial payments -> offer restructured plan"
-                className="min-h-[200px] text-sm"
-                data-testid="textarea-sop"
+      {!isSuperAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Add New Rulebook / SOP</CardTitle>
+            <CardDescription>Enter rules as text or upload a PDF/image document. AI will extract and use these rules.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Title</label>
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g., Early Delinquency Playbook v2"
+                data-testid="input-rulebook-title"
               />
-            </TabsContent>
+            </div>
 
-            <TabsContent value="upload" className="mt-4">
-              <div
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleFileDrop}
-                className="border-2 border-dashed border-border rounded-md p-8 text-center transition-colors"
-              >
-                {selectedFile ? (
-                  <div className="space-y-2">
-                    <File className="w-8 h-8 text-primary mx-auto" />
-                    <p className="text-sm font-medium">{selectedFile.name}</p>
-                    <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
-                    <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)} data-testid="button-remove-file">
-                      Remove
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <Upload className="w-8 h-8 text-muted-foreground mx-auto" />
-                    <p className="text-sm text-muted-foreground">Drag & drop a PDF or image here</p>
-                    <label>
-                      <input
-                        type="file"
-                        accept=".pdf,.jpg,.jpeg,.png"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) setSelectedFile(file);
-                        }}
-                        data-testid="input-file-upload"
-                      />
-                      <Button variant="outline" size="sm" asChild>
-                        <span>Browse Files</span>
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
+              <TabsList>
+                <TabsTrigger value="text" data-testid="tab-text">
+                  <FileText className="w-3.5 h-3.5 mr-1.5" />
+                  Free Text
+                </TabsTrigger>
+                <TabsTrigger value="upload" data-testid="tab-upload">
+                  <Upload className="w-3.5 h-3.5 mr-1.5" />
+                  Upload Document
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="text" className="mt-4">
+                <Textarea
+                  value={sopText}
+                  onChange={(e) => setSopText(e.target.value)}
+                  placeholder="Enter your SOP rules here. For example:&#10;&#10;If customer CMD < 0.3 and mentions employment loss -> offer forbearance&#10;If DPD > 60 and no payment in 3 months -> escalate to legal&#10;If customer has made 2+ partial payments -> offer restructured plan"
+                  className="min-h-[200px] text-sm"
+                  data-testid="textarea-sop"
+                />
+              </TabsContent>
+
+              <TabsContent value="upload" className="mt-4">
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={handleFileDrop}
+                  className="border-2 border-dashed border-border rounded-md p-8 text-center transition-colors"
+                >
+                  {selectedFile ? (
+                    <div className="space-y-2">
+                      <File className="w-8 h-8 text-primary mx-auto" />
+                      <p className="text-sm font-medium">{selectedFile.name}</p>
+                      <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                      <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)} data-testid="button-remove-file">
+                        Remove
                       </Button>
-                    </label>
-                  </div>
-                )}
-              </div>
-            </TabsContent>
-          </Tabs>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Upload className="w-8 h-8 text-muted-foreground mx-auto" />
+                      <p className="text-sm text-muted-foreground">Drag & drop a PDF or image here</p>
+                      <label>
+                        <input
+                          type="file"
+                          accept=".pdf,.jpg,.jpeg,.png"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) setSelectedFile(file);
+                          }}
+                          data-testid="input-file-upload"
+                        />
+                        <Button variant="outline" size="sm" asChild>
+                          <span>Browse Files</span>
+                        </Button>
+                      </label>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
 
-          <div className="pt-2">
-            <Button
-              onClick={() => createMutation.mutate()}
-              disabled={createMutation.isPending || (!sopText && !selectedFile)}
-              data-testid="button-save-rulebook"
-            >
-              {createMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-              Save Rulebook
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+            <div className="pt-2">
+              <Button
+                onClick={() => createMutation.mutate()}
+                disabled={createMutation.isPending || (!sopText && !selectedFile)}
+                data-testid="button-save-rulebook"
+              >
+                {createMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                Save Rulebook
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div>
         <h2 className="text-lg font-semibold mb-3">Existing Rulebooks</h2>
@@ -219,15 +225,17 @@ export default function RulebookPage() {
                         Created {new Date(rb.createdAt).toLocaleDateString()}
                       </p>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => deleteMutation.mutate(rb.id)}
-                      disabled={deleteMutation.isPending}
-                      data-testid={`button-delete-rulebook-${rb.id}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
+                    {!isSuperAdmin && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => deleteMutation.mutate(rb.id)}
+                        disabled={deleteMutation.isPending}
+                        data-testid={`button-delete-rulebook-${rb.id}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>

@@ -359,6 +359,8 @@ const DEFAULT_AFFORDABILITY_RULES: AffordabilityRule[] = [
 
 function PolicyConfigTab() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "superadmin";
 
   const { data: policyConfig, isLoading: policyLoading } = useQuery<PolicyConfig>({
     queryKey: ["/api/policy-config"],
@@ -645,10 +647,12 @@ function PolicyConfigTab() {
                 <CardTitle className="text-base">Section A: DPD Configuration</CardTitle>
                 <CardDescription>Configure Days Past Due (DPD) stages for your collection workflow.</CardDescription>
               </div>
-              <Button variant="outline" size="sm" onClick={openAddStageDialog} data-testid="button-add-stage">
-                <Plus className="w-3.5 h-3.5 mr-1" />
-                Add Stage
-              </Button>
+              {!isSuperAdmin && (
+                <Button variant="outline" size="sm" onClick={openAddStageDialog} data-testid="button-add-stage">
+                  <Plus className="w-3.5 h-3.5 mr-1" />
+                  Add Stage
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -674,14 +678,16 @@ function PolicyConfigTab() {
                           <span className={`w-2.5 h-2.5 rounded-full ${colors.dot}`} />
                           <span className="font-semibold text-sm">{stage.name}</span>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEditStageDialog(stage)} data-testid={`button-edit-stage-${stage.id}`}>
-                            <Pencil className="w-3.5 h-3.5 text-primary" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteStageMutation.mutate(stage.id)} data-testid={`button-delete-stage-${stage.id}`}>
-                            <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                          </Button>
-                        </div>
+                        {!isSuperAdmin && (
+                          <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEditStageDialog(stage)} data-testid={`button-edit-stage-${stage.id}`}>
+                              <Pencil className="w-3.5 h-3.5 text-primary" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteStageMutation.mutate(stage.id)} data-testid={`button-delete-stage-${stage.id}`}>
+                              <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                            </Button>
+                          </div>
+                        )}
                       </div>
                       {stage.description && (
                         <p className="text-xs text-muted-foreground mt-1 ml-4.5">{stage.description}</p>
@@ -1209,12 +1215,14 @@ function PolicyConfigTab() {
           </CardContent>
         </Card>
 
-        <div className="pt-2 pb-8">
-          <Button onClick={() => savePolicyMutation.mutate()} disabled={savePolicyMutation.isPending} data-testid="button-save-policy-config">
-            {savePolicyMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-            Save Policy Configuration
-          </Button>
-        </div>
+        {!isSuperAdmin && (
+          <div className="pt-2 pb-8">
+            <Button onClick={() => savePolicyMutation.mutate()} disabled={savePolicyMutation.isPending} data-testid="button-save-policy-config">
+              {savePolicyMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+              Save Policy Configuration
+            </Button>
+          </div>
+        )}
       </div>
 
       <Dialog open={stageDialogOpen} onOpenChange={setStageDialogOpen}>
@@ -1265,6 +1273,8 @@ function PolicyConfigTab() {
 
 function DataConfigTab() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "superadmin";
 
   const { data: dataConfig, isLoading } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
 
@@ -1432,12 +1442,14 @@ function DataConfigTab() {
           </CardContent>
         </Card>
 
-        <div className="pt-2 pb-8">
-          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-dataconfig">
-            {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-            Save Configuration
-          </Button>
-        </div>
+        {!isSuperAdmin && (
+          <div className="pt-2 pb-8">
+            <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-dataconfig">
+              {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+              Save Configuration
+            </Button>
+          </div>
+        )}
     </div>
   );
 }
@@ -1637,10 +1649,12 @@ export default function ClientSetupPage() {
             <Database className="w-3.5 h-3.5 mr-1.5" />
             Data Configuration
           </TabsTrigger>
-          <TabsTrigger value="prompt-config" data-testid="tab-prompt-config">
-            <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
-            Prompt Config
-          </TabsTrigger>
+          {isSuperAdmin && (
+            <TabsTrigger value="prompt-config" data-testid="tab-prompt-config">
+              <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+              Prompt Config
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="policy">
@@ -1651,9 +1665,11 @@ export default function ClientSetupPage() {
           <DataConfigTab />
         </TabsContent>
 
-        <TabsContent value="prompt-config">
-          <PromptConfigTab />
-        </TabsContent>
+        {isSuperAdmin && (
+          <TabsContent value="prompt-config">
+            <PromptConfigTab />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

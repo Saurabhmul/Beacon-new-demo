@@ -162,17 +162,19 @@ export default function ReviewQueuePage() {
             Validate Beacon's recommendations before execution.
           </p>
         </div>
-        <Button
-          onClick={startAnalysis}
-          disabled={analyzing}
-          data-testid="button-start-analyzing"
-        >
-          {analyzing ? (
-            <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Analyzing...</>
-          ) : (
-            <><Play className="w-4 h-4 mr-2" /> Start Analyzing</>
-          )}
-        </Button>
+        {!isSuperAdmin && (
+          <Button
+            onClick={startAnalysis}
+            disabled={analyzing}
+            data-testid="button-start-analyzing"
+          >
+            {analyzing ? (
+              <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Analyzing...</>
+            ) : (
+              <><Play className="w-4 h-4 mr-2" /> Start Analyzing</>
+            )}
+          </Button>
+        )}
       </div>
 
       {analyzing && progress && (
@@ -234,7 +236,7 @@ export default function ReviewQueuePage() {
                 data-testid="input-search-decisions"
               />
             </div>
-            {selectedIds.size > 0 && (
+            {selectedIds.size > 0 && !isSuperAdmin && (
               <Button
                 variant="destructive"
                 size="sm"
@@ -262,14 +264,16 @@ export default function ReviewQueuePage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-10">
-                      <Checkbox
-                        checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
-                        onCheckedChange={toggleSelectAll}
-                        aria-label="Select all on this page"
-                        data-testid="checkbox-select-all"
-                      />
-                    </TableHead>
+                    {!isSuperAdmin && (
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
+                          onCheckedChange={toggleSelectAll}
+                          aria-label="Select all on this page"
+                          data-testid="checkbox-select-all"
+                        />
+                      </TableHead>
+                    )}
                     <TableHead>Customer ID</TableHead>
                     <TableHead>Last AI Run Date</TableHead>
                     <TableHead>Proposed Action</TableHead>
@@ -279,14 +283,16 @@ export default function ReviewQueuePage() {
                 <TableBody>
                   {pageDecisions.map((d) => (
                     <TableRow key={d.id} className={selectedIds.has(d.id) ? "bg-muted/50" : ""}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedIds.has(d.id)}
-                          onCheckedChange={() => toggleSelect(d.id)}
-                          aria-label={`Select ${d.customerGuid}`}
-                          data-testid={`checkbox-select-${d.id}`}
-                        />
-                      </TableCell>
+                      {!isSuperAdmin && (
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedIds.has(d.id)}
+                            onCheckedChange={() => toggleSelect(d.id)}
+                            aria-label={`Select ${d.customerGuid}`}
+                            data-testid={`checkbox-select-${d.id}`}
+                          />
+                        </TableCell>
+                      )}
                       <TableCell>
                         <span className="font-medium text-sm font-mono" data-testid={`text-customer-id-${d.id}`}>
                           {d.customerGuid}

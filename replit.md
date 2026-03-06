@@ -20,8 +20,8 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - **Seed data**: Prodigy Finance company with superadmin (saurabh.aggarwal@prodigyfinance.com) and admin (test@prodigyfinance.com / test1234)
 
 ## Role Permissions
-- **SuperAdmin**: All features + company switching + create SuperAdmin/Admin users
-- **Admin**: Client Configuration, Policy Config, Data Config, Prompt Config, Review Queue, Users (create Manager/Agent)
+- **SuperAdmin**: View-only on all company data (config, uploads, review queue, rulebooks). Can manage users + company switching. Exclusive access to Prompt Config tab. Cannot edit/upload/analyze/review company data (403 from backend).
+- **Admin**: Client Configuration, Policy Config, Data Config, Review Queue, Users (create Admin/Manager/Agent). No Prompt Config access.
 - **Manager**: Data Config, Review Queue, Users (create Agent only, read-only for non-agents)
 - **Agent**: Data Config, Review Queue only
 

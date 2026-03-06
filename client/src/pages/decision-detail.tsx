@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { useParams, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -91,6 +92,8 @@ export default function DecisionDetailPage() {
   const params = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "superadmin";
 
   const [agentReason, setAgentReason] = useState("");
   const [showRejectForm, setShowRejectForm] = useState(false);
@@ -687,7 +690,7 @@ export default function DecisionDetailPage() {
             </CardContent>
           </Card>
 
-          {isPending && (
+          {isPending && !isSuperAdmin && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Your Decision</CardTitle>

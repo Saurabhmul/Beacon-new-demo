@@ -192,9 +192,10 @@ function UploadHistoryView({ category, onBack }: {
   );
 }
 
-function UploadSection({ category, dataConfig }: {
+function UploadSection({ category, dataConfig, readOnly }: {
   category: UploadCategory;
   dataConfig?: DataConfig | null;
+  readOnly?: boolean;
 }) {
   const { toast } = useToast();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -406,52 +407,54 @@ function UploadSection({ category, dataConfig }: {
         </div>
       </div>
 
-      <Card>
-        <CardContent className="pt-6">
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleFileDrop}
-            className="border-2 border-dashed border-border rounded-md p-6 text-center transition-colors hover:border-primary/50"
-          >
-            {selectedFile ? (
-              <div className="space-y-3">
-                <FileUp className="w-8 h-8 text-primary mx-auto" />
-                <p className="text-sm font-medium">{selectedFile.name}</p>
-                <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
-                <div className="flex items-center justify-center gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)} data-testid={`button-remove-${category}`}>
-                    Remove
-                  </Button>
-                  <Button size="sm" onClick={() => uploadMutation.mutate()} disabled={uploadMutation.isPending} data-testid={`button-upload-${category}`}>
-                    {uploadMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-                    Upload
-                  </Button>
+      {!readOnly && (
+        <Card>
+          <CardContent className="pt-6">
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleFileDrop}
+              className="border-2 border-dashed border-border rounded-md p-6 text-center transition-colors hover:border-primary/50"
+            >
+              {selectedFile ? (
+                <div className="space-y-3">
+                  <FileUp className="w-8 h-8 text-primary mx-auto" />
+                  <p className="text-sm font-medium">{selectedFile.name}</p>
+                  <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                  <div className="flex items-center justify-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)} data-testid={`button-remove-${category}`}>
+                      Remove
+                    </Button>
+                    <Button size="sm" onClick={() => uploadMutation.mutate()} disabled={uploadMutation.isPending} data-testid={`button-upload-${category}`}>
+                      {uploadMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                      Upload
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <Upload className="w-8 h-8 text-muted-foreground mx-auto" />
-                <p className="text-sm text-muted-foreground">{meta.description}</p>
-                <label>
-                  <input
-                    type="file"
-                    accept=".csv,.json"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) setSelectedFile(file);
-                    }}
-                    data-testid={`input-file-${category}`}
-                  />
-                  <Button variant="outline" size="sm" asChild>
-                    <span>Browse Files</span>
-                  </Button>
-                </label>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+              ) : (
+                <div className="space-y-2">
+                  <Upload className="w-8 h-8 text-muted-foreground mx-auto" />
+                  <p className="text-sm text-muted-foreground">{meta.description}</p>
+                  <label>
+                    <input
+                      type="file"
+                      accept=".csv,.json"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) setSelectedFile(file);
+                      }}
+                      data-testid={`input-file-${category}`}
+                    />
+                    <Button variant="outline" size="sm" asChild>
+                      <span>Browse Files</span>
+                    </Button>
+                  </label>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {isLoading ? (
         <Skeleton className="h-40 w-full" />
@@ -461,7 +464,7 @@ function UploadSection({ category, dataConfig }: {
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Current Data</CardTitle>
               <div className="flex items-center gap-2">
-                {selectedRows.size > 0 && (
+                {selectedRows.size > 0 && !readOnly && (
                   <Button
                     size="sm"
                     variant="destructive"
@@ -525,32 +528,34 @@ function UploadSection({ category, dataConfig }: {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-10 px-2">
-                      <Checkbox
-                        checked={filteredRecords.length > 0 && filteredRecords.every((row) => selectedRows.has(row.__idx as number))}
-                        ref={(el) => {
-                          if (el) {
-                            const someSelected = filteredRecords.some((row) => selectedRows.has(row.__idx as number));
-                            const allSelected = filteredRecords.length > 0 && filteredRecords.every((row) => selectedRows.has(row.__idx as number));
-                            (el as unknown as HTMLButtonElement).dataset.state = allSelected ? "checked" : someSelected ? "indeterminate" : "unchecked";
-                          }
-                        }}
-                        onCheckedChange={(checked) => {
-                          const next = new Set(selectedRows);
-                          filteredRecords.forEach((row) => {
-                            const idx = row.__idx as number;
-                            if (checked) next.add(idx);
-                            else next.delete(idx);
-                          });
-                          setSelectedRows(next);
-                        }}
-                        data-testid={`checkbox-select-all-${category}`}
-                      />
-                    </TableHead>
+                    {!readOnly && (
+                      <TableHead className="w-10 px-2">
+                        <Checkbox
+                          checked={filteredRecords.length > 0 && filteredRecords.every((row) => selectedRows.has(row.__idx as number))}
+                          ref={(el) => {
+                            if (el) {
+                              const someSelected = filteredRecords.some((row) => selectedRows.has(row.__idx as number));
+                              const allSelected = filteredRecords.length > 0 && filteredRecords.every((row) => selectedRows.has(row.__idx as number));
+                              (el as unknown as HTMLButtonElement).dataset.state = allSelected ? "checked" : someSelected ? "indeterminate" : "unchecked";
+                            }
+                          }}
+                          onCheckedChange={(checked) => {
+                            const next = new Set(selectedRows);
+                            filteredRecords.forEach((row) => {
+                              const idx = row.__idx as number;
+                              if (checked) next.add(idx);
+                              else next.delete(idx);
+                            });
+                            setSelectedRows(next);
+                          }}
+                          data-testid={`checkbox-select-all-${category}`}
+                        />
+                      </TableHead>
+                    )}
                     {columns.map((col) => (
                       <TableHead key={col} className="text-xs whitespace-nowrap">{col.replace(/_/g, " ")}</TableHead>
                     ))}
-                    <TableHead className="w-10 text-xs">Edit</TableHead>
+                    {!readOnly && <TableHead className="w-10 text-xs">Edit</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -558,38 +563,42 @@ function UploadSection({ category, dataConfig }: {
                     const rowIdx = row.__idx as number;
                     return (
                       <TableRow key={rowIdx} data-testid={`row-data-${category}-${i}`} className={selectedRows.has(rowIdx) ? "bg-muted/50" : ""}>
-                        <TableCell className="px-2">
-                          <Checkbox
-                            checked={selectedRows.has(rowIdx)}
-                            onCheckedChange={(checked) => {
-                              const next = new Set(selectedRows);
-                              if (checked) next.add(rowIdx);
-                              else next.delete(rowIdx);
-                              setSelectedRows(next);
-                            }}
-                            data-testid={`checkbox-row-${category}-${i}`}
-                          />
-                        </TableCell>
+                        {!readOnly && (
+                          <TableCell className="px-2">
+                            <Checkbox
+                              checked={selectedRows.has(rowIdx)}
+                              onCheckedChange={(checked) => {
+                                const next = new Set(selectedRows);
+                                if (checked) next.add(rowIdx);
+                                else next.delete(rowIdx);
+                                setSelectedRows(next);
+                              }}
+                              data-testid={`checkbox-row-${category}-${i}`}
+                            />
+                          </TableCell>
+                        )}
                         {columns.map((col) => (
                           <TableCell key={col} className="text-xs py-2 whitespace-nowrap max-w-[200px] truncate">
                             {String(row[col] ?? "")}
                           </TableCell>
                         ))}
-                        <TableCell className="px-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0"
-                            onClick={() => {
-                              const rowData: Record<string, string> = {};
-                              columns.forEach(col => { rowData[col] = String(row[col] ?? ""); });
-                              setEditingRow({ index: rowIdx, data: rowData });
-                            }}
-                            data-testid={`button-edit-row-${category}-${i}`}
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
-                        </TableCell>
+                        {!readOnly && (
+                          <TableCell className="px-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0"
+                              onClick={() => {
+                                const rowData: Record<string, string> = {};
+                                columns.forEach(col => { rowData[col] = String(row[col] ?? ""); });
+                                setEditingRow({ index: rowIdx, data: rowData });
+                              }}
+                              data-testid={`button-edit-row-${category}-${i}`}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                          </TableCell>
+                        )}
                       </TableRow>
                     );
                   })}
@@ -796,6 +805,7 @@ export default function UploadPage() {
             <UploadSection
               category={cat}
               dataConfig={dataConfig}
+              readOnly={isSuperAdmin}
             />
           </TabsContent>
         ))}
