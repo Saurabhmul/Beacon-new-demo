@@ -486,8 +486,14 @@ export default function UsersPage() {
                   onChange={(e) => setAddCompanyName(e.target.value)}
                   placeholder="Enter or select company name"
                   required
+                  list="company-name-options"
                   data-testid="input-add-company"
                 />
+                <datalist id="company-name-options">
+                  {companiesList?.map((c) => (
+                    <option key={c.id} value={c.name} />
+                  ))}
+                </datalist>
               </div>
             )}
 
