@@ -141,8 +141,15 @@ export default function UsersPage() {
     },
   });
 
+  function isValidEmail(email: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+  }
+
   const createUserMutation = useMutation({
     mutationFn: async () => {
+      if (!isValidEmail(addEmail)) {
+        throw new Error("Please enter a valid email address (e.g., name@company.com)");
+      }
       const res = await apiRequest("POST", "/api/users", {
         firstName: addFirstName,
         lastName: addLastName,
