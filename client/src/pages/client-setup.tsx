@@ -361,6 +361,7 @@ function PolicyConfigTab() {
   const { toast } = useToast();
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "superadmin";
+  const isReadOnly = user?.role === "superadmin" || user?.role === "manager";
 
   const { data: policyConfig, isLoading: policyLoading } = useQuery<PolicyConfig>({
     queryKey: ["/api/policy-config"],
@@ -647,7 +648,7 @@ function PolicyConfigTab() {
                 <CardTitle className="text-base">Section A: DPD Configuration</CardTitle>
                 <CardDescription>Configure Days Past Due (DPD) stages for your collection workflow.</CardDescription>
               </div>
-              {!isSuperAdmin && (
+              {!isReadOnly && (
                 <Button variant="outline" size="sm" onClick={openAddStageDialog} data-testid="button-add-stage">
                   <Plus className="w-3.5 h-3.5 mr-1" />
                   Add Stage
@@ -678,7 +679,7 @@ function PolicyConfigTab() {
                           <span className={`w-2.5 h-2.5 rounded-full ${colors.dot}`} />
                           <span className="font-semibold text-sm">{stage.name}</span>
                         </div>
-                        {!isSuperAdmin && (
+                        {!isReadOnly && (
                           <div className="flex items-center gap-1">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEditStageDialog(stage)} data-testid={`button-edit-stage-${stage.id}`}>
                               <Pencil className="w-3.5 h-3.5 text-primary" />
@@ -1215,7 +1216,7 @@ function PolicyConfigTab() {
           </CardContent>
         </Card>
 
-        {!isSuperAdmin && (
+        {!isReadOnly && (
           <div className="pt-2 pb-8">
             <Button onClick={() => savePolicyMutation.mutate()} disabled={savePolicyMutation.isPending} data-testid="button-save-policy-config">
               {savePolicyMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
@@ -1274,7 +1275,7 @@ function PolicyConfigTab() {
 function DataConfigTab() {
   const { toast } = useToast();
   const { user } = useAuth();
-  const isSuperAdmin = user?.role === "superadmin";
+  const isReadOnly = user?.role === "superadmin" || user?.role === "manager";
 
   const { data: dataConfig, isLoading } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
 
@@ -1442,7 +1443,7 @@ function DataConfigTab() {
           </CardContent>
         </Card>
 
-        {!isSuperAdmin && (
+        {!isReadOnly && (
           <div className="pt-2 pb-8">
             <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-dataconfig">
               {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}

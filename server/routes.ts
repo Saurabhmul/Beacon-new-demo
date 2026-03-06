@@ -264,7 +264,7 @@ export async function registerRoutes(
   });
 
   // Client Config
-  app.get("/api/client-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.get("/api/client-config", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const config = await storage.getClientConfig(companyId);
@@ -297,7 +297,7 @@ export async function registerRoutes(
   });
 
   // Rulebooks
-  app.get("/api/rulebooks", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.get("/api/rulebooks", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const rbs = await storage.getRulebooks(companyId);
@@ -432,7 +432,7 @@ export async function registerRoutes(
   });
 
   // Policy Config
-  app.get("/api/policy-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.get("/api/policy-config", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const config = await storage.getPolicyConfig(companyId);
@@ -570,7 +570,7 @@ export async function registerRoutes(
   });
 
   // DPD Stages
-  app.get("/api/dpd-stages", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+  app.get("/api/dpd-stages", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const stages = await storage.getDpdStages(companyId);

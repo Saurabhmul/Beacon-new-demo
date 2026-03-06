@@ -42,7 +42,7 @@ interface NavItem {
 
 const navItemsList: NavItem[] = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, roles: ["superadmin", "admin", "manager", "agent"] },
-  { title: "Client Configuration", url: "/config", icon: Settings, roles: ["superadmin", "admin"] },
+  { title: "Client Configuration", url: "/config", icon: Settings, roles: ["superadmin", "admin", "manager"] },
   { title: "Upload Data", url: "/upload", icon: Upload, roles: ["superadmin", "admin", "manager", "agent"] },
   { title: "Review Queue", url: "/review", icon: ClipboardList, roles: ["superadmin", "admin", "manager", "agent"] },
   { title: "Users", url: "/users", icon: Users, roles: ["superadmin", "admin", "manager"] },

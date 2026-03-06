@@ -21,9 +21,9 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 
 ## Role Permissions
 - **SuperAdmin**: View-only on all company data (config, uploads, review queue, rulebooks). Can manage users + company switching. Exclusive access to Prompt Config tab. Cannot edit/upload/analyze/review company data (403 from backend).
-- **Admin**: Client Configuration, Policy Config, Data Config, Review Queue, Users (create Admin/Manager/Agent). No Prompt Config access.
-- **Manager**: Data Config, Review Queue, Users (create Agent only, read-only for non-agents)
-- **Agent**: Data Config, Review Queue only
+- **Admin**: Client Configuration (full edit), Policy Config, Data Config, Review Queue, Users (create Admin/Manager/Agent). No Prompt Config access.
+- **Manager**: Client Configuration (read-only), Upload Data (full), Review Queue (full), Users (create Agent only, read-only for non-agents)
+- **Agent**: Upload Data, Review Queue only
 
 ## User Invitation Flow
 1. Admin/SuperAdmin creates user via POST /api/users — generates invite token (7-day expiry)

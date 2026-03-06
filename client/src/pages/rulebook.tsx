@@ -17,6 +17,7 @@ export default function RulebookPage() {
   const { toast } = useToast();
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "superadmin";
+  const isReadOnly = user?.role === "superadmin" || user?.role === "manager";
   const noCompanySelected = isSuperAdmin && !user?.viewingCompanyId;
   const [title, setTitle] = useState("Default Rulebook");
   const [sopText, setSopText] = useState("");
@@ -106,7 +107,7 @@ export default function RulebookPage() {
         </p>
       </div>
 
-      {!isSuperAdmin && (
+      {!isReadOnly && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Add New Rulebook / SOP</CardTitle>
@@ -225,7 +226,7 @@ export default function RulebookPage() {
                         Created {new Date(rb.createdAt).toLocaleDateString()}
                       </p>
                     </div>
-                    {!isSuperAdmin && (
+                    {!isReadOnly && (
                       <Button
                         variant="outline"
                         size="icon"
