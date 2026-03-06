@@ -257,7 +257,7 @@ export async function registerRoutes(
 
       await storage.updateUser(targetId, { inviteToken, inviteExpiresAt });
 
-      res.json({ message: `Invitation resent. New link: /auth?invite=${inviteToken}` });
+      res.json({ message: "Invite link regenerated", inviteLink: `/auth?invite=${inviteToken}` });
     } catch (error) {
       res.status(500).json({ error: "Failed to resend invite" });
     }

@@ -209,16 +209,18 @@ export default function UsersPage() {
     },
   });
 
-  const resendInviteMutation = useMutation({
+  const copyInviteMutation = useMutation({
     mutationFn: async (userId: string) => {
       const res = await apiRequest("POST", `/api/users/${userId}/resend-invite`);
       return res.json();
     },
     onSuccess: (data: any) => {
-      toast({ title: "Invitation resent", description: data.message });
+      const fullLink = `${window.location.origin}${data.inviteLink}`;
+      navigator.clipboard.writeText(fullLink);
+      toast({ title: "Invite link copied", description: "The invite link has been copied to your clipboard." });
     },
     onError: (error: Error) => {
-      toast({ title: "Failed to resend invite", description: error.message, variant: "destructive" });
+      toast({ title: "Failed to copy invite link", description: error.message, variant: "destructive" });
     },
   });
 
@@ -386,12 +388,12 @@ export default function UsersPage() {
                             )}
                             {u.status === "invited" && (
                               <DropdownMenuItem
-                                onClick={() => resendInviteMutation.mutate(u.id)}
-                                disabled={resendInviteMutation.isPending}
-                                data-testid={`action-resend-${u.id}`}
+                                onClick={() => copyInviteMutation.mutate(u.id)}
+                                disabled={copyInviteMutation.isPending}
+                                data-testid={`action-copy-invite-${u.id}`}
                               >
-                                <Mail className="w-4 h-4 mr-2" />
-                                Resend Invite
+                                <Copy className="w-4 h-4 mr-2" />
+                                Copy Invite Link
                               </DropdownMenuItem>
                             )}
                           </DropdownMenuContent>
