@@ -90,15 +90,14 @@ export function AppSidebar() {
         {user?.role === "superadmin" && companiesList && companiesList.length > 0 && (
           <div className="mt-3">
             <Select
-              value={user.viewingCompanyId || "all"}
-              onValueChange={(val) => switchCompany(val === "all" ? null : val)}
+              value={user.viewingCompanyId || ""}
+              onValueChange={(val) => switchCompany(val)}
               disabled={isSwitchingCompany}
             >
               <SelectTrigger className="h-8 text-xs" data-testid="select-company-switcher">
-                <SelectValue placeholder="All Companies" />
+                <SelectValue placeholder="Select a Company" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Companies</SelectItem>
                 {companiesList.map((c) => (
                   <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                 ))}

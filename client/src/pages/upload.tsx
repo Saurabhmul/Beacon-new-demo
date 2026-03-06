@@ -35,7 +35,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark, ArrowLeft, History, AlertCircle, Trash2, Pencil } from "lucide-react";
+import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark, ArrowLeft, History, AlertCircle, Trash2, Pencil, Building2 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import type { DataUpload, ClientConfig, DataConfig } from "@shared/schema";
 
 type UploadCategory = "loan_data" | "payment_history" | "conversation_history";
@@ -708,8 +709,12 @@ function UploadSection({ category, dataConfig }: {
 }
 
 export default function UploadPage() {
-  const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"] });
-  const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "superadmin";
+  const noCompanySelected = isSuperAdmin && !user?.viewingCompanyId;
+
+  const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"], enabled: !noCompanySelected });
+  const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], enabled: !noCompanySelected });
   const { data: conversationUploads = [] } = useQuery<DataUpload[]>({
     queryKey: ["/api/uploads", "conversation_history"],
     queryFn: async () => {
@@ -717,6 +722,7 @@ export default function UploadPage() {
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: !noCompanySelected,
   });
 
   const showConversationHistory = useMemo(() => {
@@ -726,6 +732,22 @@ export default function UploadPage() {
     const hasExistingData = conversationUploads.length > 0;
     return enabledInConfig || hasExistingData;
   }, [dataConfig, conversationUploads]);
+
+  if (noCompanySelected) {
+    return (
+      <div className="p-6 max-w-6xl mx-auto">
+        <Card>
+          <CardContent className="p-12 text-center">
+            <Building2 className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Select a Company</h3>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              Please select a company from the dropdown in the sidebar to upload data.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (!config) {
     return (

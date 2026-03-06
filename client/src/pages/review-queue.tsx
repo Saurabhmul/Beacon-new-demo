@@ -27,7 +27,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Trash2,
+  Building2,
 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import type { Decision } from "@shared/schema";
 
 type TabType = "pending" | "completed";
@@ -35,6 +37,10 @@ type TabType = "pending" | "completed";
 const PAGE_SIZE = 25;
 
 export default function ReviewQueuePage() {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "superadmin";
+  const noCompanySelected = isSuperAdmin && !user?.viewingCompanyId;
+
   const [activeTab, setActiveTab] = useState<TabType>("pending");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -45,10 +51,12 @@ export default function ReviewQueuePage() {
 
   const { data: pendingData, isLoading: pendingLoading } = useQuery<Decision[]>({
     queryKey: ["/api/decisions", "pending"],
+    enabled: !noCompanySelected,
   });
 
   const { data: allData, isLoading: allLoading } = useQuery<Decision[]>({
     queryKey: ["/api/decisions", "all"],
+    enabled: !noCompanySelected,
   });
 
   const pendingDecisions = pendingData?.filter((d) => d.status === "pending") || [];
@@ -126,6 +134,22 @@ export default function ReviewQueuePage() {
     if (!window.confirm(`Are you sure you want to delete ${count} selected decision${count > 1 ? "s" : ""}? This cannot be undone.`)) return;
     deleteMutation.mutate(Array.from(selectedIds));
   };
+
+  if (noCompanySelected) {
+    return (
+      <div className="p-6 max-w-6xl mx-auto">
+        <Card>
+          <CardContent className="p-12 text-center">
+            <Building2 className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Select a Company</h3>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              Please select a company from the dropdown in the sidebar to view the review queue.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">

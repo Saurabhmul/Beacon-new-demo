@@ -47,8 +47,8 @@ export async function registerRoutes(
     return req.user?.id;
   }
 
-  function getCompanyId(req: any): string {
-    return req.companyId || req.user?.companyId;
+  function getCompanyId(req: any): string | null {
+    return req.companyId || null;
   }
 
   // Companies API (SuperAdmin only)

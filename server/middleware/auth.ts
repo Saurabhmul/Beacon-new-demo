@@ -38,7 +38,7 @@ export function authorize(...allowedRoles: string[]): RequestHandler {
 
 export const companyFilter: RequestHandler = (req: any, res, next) => {
   if (req.user.role === "superadmin") {
-    req.companyId = req.session?.viewingCompanyId || req.user.companyId;
+    req.companyId = req.session?.viewingCompanyId || null;
   } else {
     req.companyId = req.user.companyId;
   }

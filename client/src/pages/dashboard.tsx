@@ -14,14 +14,19 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  Building2,
 } from "lucide-react";
 import type { ClientConfig } from "@shared/schema";
 
 export default function DashboardPage() {
   const { user } = useAuth();
 
+  const isSuperAdmin = user?.role === "superadmin";
+  const noCompanySelected = isSuperAdmin && !user?.viewingCompanyId;
+
   const { data: config, isLoading: configLoading } = useQuery<ClientConfig>({
     queryKey: ["/api/client-config"],
+    enabled: !noCompanySelected,
   });
 
   const { data: stats, isLoading: statsLoading } = useQuery<{
@@ -30,6 +35,7 @@ export default function DashboardPage() {
     total: number;
   }>({
     queryKey: ["/api/decisions/stats"],
+    enabled: !noCompanySelected,
   });
 
   const isLoading = configLoading || statsLoading;
@@ -64,6 +70,25 @@ export default function DashboardPage() {
       desc: "Review AI-generated recommendations",
     },
   ];
+
+  if (noCompanySelected) {
+    return (
+      <div className="p-6 max-w-6xl mx-auto">
+        <h1 className="text-2xl font-sans font-bold tracking-tight mb-6" data-testid="text-dashboard-heading">
+          Welcome back{user?.firstName ? `, ${user.firstName}` : ""}
+        </h1>
+        <Card>
+          <CardContent className="p-12 text-center">
+            <Building2 className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Select a Company</h3>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              Please select a company from the dropdown in the sidebar to view dashboard data.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-8">
