@@ -139,8 +139,7 @@ Affordability calculation (WTP)
 HIGH: if the customer can pay greater than the minimum amount due, it would be considered high
 MEDIUM: if the customer can pay greater than 60% of minimum amount due and less than minimum amount due
 LOW: if the customer can pay less than 60% of minimum amount due
-VERY LOW: if the customer cannot pay us anything or pay <10% of minimum amount due
-NOT SURE: If there is not enough data to infer anything
+VERY LOW: if the customer cannot pay us anything or pay <10% of minimum amount due. Also applies when there is not enough data — absence of payments means VERY LOW.
 
 Ability to Pay (ATP)
 Additionally we can estimate ability to pay: estimated amount the customer can pay next month to us depending upon what the customer has mentioned, payment history and income and employment data - depending on what is available to pay - some logic as we put for affordability only difference is Ability to pay is a number
@@ -156,8 +155,7 @@ Assign WTP level based on recent behavior:
 HIGH: responsive + consistent + follows through; payments align with promises when capacity exists
 MEDIUM: mixed responsiveness or occasional broken promises; some payments
 LOW: Very irregular engagements but some sort of communication established between our agents and customers during the collection period
-VERY LOW: avoidance/ghosting, not at all engaging on any channels, repeated broken PTP, inconsistent reasons, no payments despite contact (especially if ability to pay not clearly constrained)
-NOT SURE: If there is not enough data to infer anything
+VERY LOW: avoidance/ghosting, not at all engaging on any channels, repeated broken PTP, inconsistent reasons, no payments despite contact (especially if ability to pay not clearly constrained). Also applies when there is no data — absence of engagement means VERY LOW.
 
 Determining the next best action
 
@@ -409,8 +407,8 @@ const DEFAULT_ESCALATION: EscalationRules = {
   otherConditions: [],
 };
 
-const AFFORDABILITY_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE"];
-const WILLINGNESS_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE"];
+const AFFORDABILITY_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW"];
+const WILLINGNESS_OPTIONS = ["HIGH", "MEDIUM", "LOW", "VERY LOW"];
 
 function MultiSelectDropdown({ values, options, onChange, testIdPrefix }: {
   values: string[];
@@ -497,14 +495,13 @@ function MultiSelectDropdown({ values, options, onChange, testIdPrefix }: {
 const ESCALATION_OPERATORS = [">", "<", "=", ">=", "<=", "contains"];
 
 const AFFORDABILITY_OPERATORS = [">", ">=", "<", "<=", "="];
-const AFFORDABILITY_LABELS = ["HIGH", "MEDIUM", "LOW", "VERY LOW", "NOT SURE"];
+const AFFORDABILITY_LABELS = ["HIGH", "MEDIUM", "LOW", "VERY LOW"];
 
 const DEFAULT_AFFORDABILITY_RULES: AffordabilityRule[] = [
   { id: 1, label: "HIGH", operator: ">", percentage: 100, condition: "", isDefault: true },
   { id: 2, label: "MEDIUM", operator: ">=", percentage: 60, condition: "and < Minimum Amount Due", isDefault: true },
   { id: 3, label: "LOW", operator: "<", percentage: 60, condition: "", isDefault: true },
-  { id: 4, label: "VERY LOW", operator: "<", percentage: 10, condition: "NMPC = 0 OR NMPC < 10% of MAD", isDefault: true },
-  { id: 5, label: "NOT SURE", operator: "=", percentage: null, condition: "Not enough data to estimate NMPC or Minimum Amount Due not provided", isDefault: true },
+  { id: 4, label: "VERY LOW", operator: "<", percentage: 10, condition: "NMPC = 0 OR NMPC < 10% of MAD. Also applies when no payment data exists.", isDefault: true },
 ];
 
 function PolicyConfigTab() {
@@ -896,21 +893,17 @@ function PolicyConfigTab() {
                         </Select>
                       </td>
                       <td className="py-2 px-2">
-                        {rule.label === "NOT SURE" ? (
-                          <span className="text-xs text-muted-foreground italic px-2">N/A</span>
-                        ) : (
-                          <div className="flex items-center gap-1">
-                            <Input
-                              type="number"
-                              value={rule.percentage ?? ""}
-                              onChange={(e) => updateAffordabilityRule(rule.id, "percentage", e.target.value ? parseInt(e.target.value) : null)}
-                              className="h-9 text-xs w-16"
-                              placeholder="0"
-                              data-testid={`input-aff-pct-${rule.id}`}
-                            />
-                            <span className="text-xs text-muted-foreground">%</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1">
+                          <Input
+                            type="number"
+                            value={rule.percentage ?? ""}
+                            onChange={(e) => updateAffordabilityRule(rule.id, "percentage", e.target.value ? parseInt(e.target.value) : null)}
+                            className="h-9 text-xs w-16"
+                            placeholder="0"
+                            data-testid={`input-aff-pct-${rule.id}`}
+                          />
+                          <span className="text-xs text-muted-foreground">%</span>
+                        </div>
                       </td>
                       <td className="py-2 px-2">
                         <Input
@@ -936,7 +929,7 @@ function PolicyConfigTab() {
             <div className="mt-4 p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                <p className="text-xs text-amber-800 dark:text-amber-300">If Minimum Amount Due is missing, output <strong>NOT SURE</strong> (and still provide best NMPC estimate if possible, clearly marked as an estimate).</p>
+                <p className="text-xs text-amber-800 dark:text-amber-300">If Minimum Amount Due is missing or no payment data exists, affordability defaults to <strong>VERY LOW</strong>. The system will still provide the best estimate possible based on available data.</p>
               </div>
             </div>
           </CardContent>
