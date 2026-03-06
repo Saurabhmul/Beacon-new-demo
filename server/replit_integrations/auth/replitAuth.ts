@@ -112,9 +112,8 @@ export async function setupAuth(app: Express) {
           inviteToken: null,
         });
 
-        req.session.userId = updatedUser.id;
         const { password: _, ...safeUser } = updatedUser;
-        return res.status(201).json(safeUser);
+        return res.status(201).json({ message: "Registration complete. Please log in.", user: safeUser });
       }
 
       const { email, firstName, lastName } = req.body;

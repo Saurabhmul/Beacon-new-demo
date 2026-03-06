@@ -82,9 +82,8 @@ export default function AuthPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      toast({ title: "Welcome!", description: "Your account has been activated." });
-      setLocation("/dashboard");
+      toast({ title: "Registration complete", description: "Your account is active. Please log in with your new password." });
+      setLocation("/auth");
     },
     onError: (error: Error) => {
       toast({
