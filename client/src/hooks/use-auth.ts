@@ -2,7 +2,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import type { User } from "@shared/models/auth";
 
-type SafeUser = Omit<User, "password">;
+type SafeUser = Omit<User, "password"> & {
+  companyName?: string;
+  viewingCompanyId?: string | null;
+};
 
 async function fetchUser(): Promise<SafeUser | null> {
   const response = await fetch("/api/auth/user", {
@@ -39,11 +42,23 @@ export function useAuth() {
     },
   });
 
+  const switchCompanyMutation = useMutation({
+    mutationFn: async (companyId: string | null) => {
+      const res = await apiRequest("POST", "/api/auth/switch-company", { companyId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+    },
+  });
+
   return {
     user,
     isLoading,
     isAuthenticated: !!user,
     logout: logoutMutation.mutate,
     isLoggingOut: logoutMutation.isPending,
+    switchCompany: switchCompanyMutation.mutate,
+    isSwitchingCompany: switchCompanyMutation.isPending,
   };
 }

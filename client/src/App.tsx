@@ -18,6 +18,7 @@ import ClientSetupPage from "@/pages/client-setup";
 import UploadPage from "@/pages/upload";
 import ReviewQueuePage from "@/pages/review-queue";
 import DecisionDetailPage from "@/pages/decision-detail";
+import UsersPage from "@/pages/users";
 
 function AnalysisHeaderIndicator() {
   const { analyzing, progress } = useAnalysis();
@@ -63,6 +64,7 @@ function AuthenticatedLayout() {
                 <Route path="/upload" component={UploadPage} />
                 <Route path="/review" component={ReviewQueuePage} />
                 <Route path="/review/:id" component={DecisionDetailPage} />
+                <Route path="/users" component={UsersPage} />
                 <Route component={DashboardPage} />
               </Switch>
             </main>

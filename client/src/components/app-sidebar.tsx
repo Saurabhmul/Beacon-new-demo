@@ -1,5 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
+import { useQuery } from "@tanstack/react-query";
 import {
   Sidebar,
   SidebarContent,
@@ -14,6 +15,14 @@ import {
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   LayoutDashboard,
   Settings,
@@ -21,18 +30,45 @@ import {
   ClipboardList,
   LogOut,
   Zap,
+  Users,
 } from "lucide-react";
 
-const navItems = [
-  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Client Configuration", url: "/config", icon: Settings },
-  { title: "Upload Data", url: "/upload", icon: Upload },
-  { title: "Review Queue", url: "/review", icon: ClipboardList },
+interface NavItem {
+  title: string;
+  url: string;
+  icon: typeof LayoutDashboard;
+  roles: string[];
+}
+
+const navItemsList: NavItem[] = [
+  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, roles: ["superadmin", "admin", "manager", "agent"] },
+  { title: "Client Configuration", url: "/config", icon: Settings, roles: ["superadmin", "admin"] },
+  { title: "Upload Data", url: "/upload", icon: Upload, roles: ["superadmin", "admin", "manager", "agent"] },
+  { title: "Review Queue", url: "/review", icon: ClipboardList, roles: ["superadmin", "admin", "manager", "agent"] },
+  { title: "Users", url: "/users", icon: Users, roles: ["superadmin", "admin", "manager"] },
 ];
+
+function roleLabel(role: string) {
+  switch (role) {
+    case "superadmin": return "Super Admin";
+    case "admin": return "Admin";
+    case "manager": return "Manager";
+    case "agent": return "Agent";
+    default: return role;
+  }
+}
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { user, logout, isLoggingOut } = useAuth();
+  const { user, logout, isLoggingOut, switchCompany, isSwitchingCompany } = useAuth();
+
+  const { data: companiesList } = useQuery<Array<{ id: string; name: string; status: string }>>({
+    queryKey: ["/api/companies"],
+    enabled: user?.role === "superadmin",
+  });
+
+  const userRole = user?.role || "agent";
+  const navItems = navItemsList.filter(item => item.roles.includes(userRole));
 
   const initials = user
     ? `${user.firstName?.[0] || ""}${user.lastName?.[0] || ""}`.toUpperCase() || "U"
@@ -50,6 +86,26 @@ export function AppSidebar() {
             <div className="text-[10px] text-sidebar-foreground/50 tracking-wider uppercase">Decision Engine</div>
           </div>
         </Link>
+
+        {user?.role === "superadmin" && companiesList && companiesList.length > 0 && (
+          <div className="mt-3">
+            <Select
+              value={user.viewingCompanyId || "all"}
+              onValueChange={(val) => switchCompany(val === "all" ? null : val)}
+              disabled={isSwitchingCompany}
+            >
+              <SelectTrigger className="h-8 text-xs" data-testid="select-company-switcher">
+                <SelectValue placeholder="All Companies" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Companies</SelectItem>
+                {companiesList.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
@@ -88,6 +144,9 @@ export function AppSidebar() {
             <div className="text-[11px] text-sidebar-foreground/50 truncate" data-testid="text-user-email">
               {user?.email || ""}
             </div>
+            <Badge variant="outline" className="text-[9px] mt-0.5 h-4 px-1.5" data-testid="badge-user-role">
+              {roleLabel(userRole)}
+            </Badge>
           </div>
         </div>
         <Button

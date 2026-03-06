@@ -7,9 +7,30 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - **Frontend**: React + TypeScript + Tailwind CSS + Shadcn UI + Wouter routing
 - **Backend**: Express.js + TypeScript
 - **Database**: PostgreSQL (Replit managed) + Drizzle ORM
-- **Auth**: Custom email/password (bcryptjs + express-session)
+- **Auth**: Custom email/password (bcryptjs + express-session) with invite-based registration
 - **AI**: Gemini 2.5 Pro via Replit AI Integrations (no API key needed)
 - **File Processing**: Multer for uploads, PapaParse for CSV parsing
+
+## Multi-Tenant Architecture
+- **Companies**: `companies` table — each lender organization
+- **Users**: Expanded `users` table with role (superadmin/admin/manager/agent), companyId, status (invited/active/deactivated), invite token flow
+- **Data Isolation**: All business tables (client_configs, rulebooks, data_configs, dpd_stages, policy_configs, data_uploads, upload_logs, decisions) have `companyId` column. All storage methods filter by companyId.
+- **Middleware stack**: `authenticate` → `authorize(...roles)` → `companyFilter` on all protected routes
+- **SuperAdmin**: Can switch companies via session.viewingCompanyId; defaults to own companyId if none selected
+- **Seed data**: Prodigy Finance company with superadmin (saurabh.aggarwal@prodigyfinance.com) and admin (test@prodigyfinance.com / test1234)
+
+## Role Permissions
+- **SuperAdmin**: All features + company switching + create SuperAdmin/Admin users
+- **Admin**: Client Configuration, Policy Config, Data Config, Prompt Config, Review Queue, Users (create Manager/Agent)
+- **Manager**: Data Config, Review Queue, Users (create Agent only, read-only for non-agents)
+- **Agent**: Data Config, Review Queue only
+
+## User Invitation Flow
+1. Admin/SuperAdmin creates user via POST /api/users — generates invite token (7-day expiry)
+2. Invite link returned in API response (no SMTP — must be shared manually)
+3. User visits /auth?invite=<token>, sees pre-filled details, sets password
+4. POST /api/auth/register with inviteToken activates account
+5. Self-registration is disabled — all users must be invited
 
 ## Key Pages
 - `/` - Landing page (unauthenticated) or Dashboard (authenticated)
@@ -17,7 +38,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - `/upload` - Upload Data (tabbed: Loan Data, Payment History, Conversation History if enabled)
 - `/review` - Pending decisions review queue
 - `/review/:id` - Individual decision detail with approve/reject
-- `/history` - Decision history
+- `/users` - User Management (role-based: add, edit, deactivate/reactivate, resend invite)
 
 ## Data Flow
 1. Manager configures client details in Client Configuration
@@ -40,8 +61,9 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - Each upload creates an upload log entry tracking per-row status (created/updated/failed with messages)
 
 ## Database Tables
-- `users` / `sessions` - Auth
-- `client_configs` - Company details per user
+- `companies` - Lender organizations (id, name, status, createdBy, createdAt)
+- `users` / `sessions` - Auth with roles, company membership, invite tokens
+- `client_configs` - Company details per companyId
 - `rulebooks` - SOP documents/text per client
 - `data_configs` - Field mapping, prompt templates, payment additional fields
 - `data_uploads` - Uploaded file records with `uploadCategory` (loan_data, payment_history, conversation_history)
@@ -75,6 +97,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - Decision rules auto-suggest `otherCondition` when Clear Arrears Plan is selected; condition updates when clearanceMonths changes
 
 ## Recent Changes
+- 2026-03-06: Multi-tenant Users & Roles system implemented — companies table, expanded users with roles/invites, company_id on all tables, role-based auth middleware, role-based sidebar navigation, Users management page (add/edit/deactivate/resend invite), invite registration flow, SuperAdmin company switching, seed data for Prodigy Finance
 - 2026-03-05: Fixed AI returning "NOT SURE" for affordability/willingness — root causes fixed: 1) `formatCustomerData()` handles `_payments`/`_conversations` underscore-prefixed keys, 2) `compile-policy.ts` now generates plain English thresholds (no NMPC/MAD acronyms), 3) brain-template.txt rewritten with step-by-step calculation instructions, 4) output-schema.json mandates non-empty reason fields ending with "→ LABEL", 5) `routes.ts` always freshly recompiles policy with `clearTemplateCache()` before analysis, 6) Removed duplicate customer data from user message (data only in system prompt's CUSTOMER_DATA section), 7) Model acknowledgment explicitly commits to matching labels to calculations, 8) Safety net `extractLabelFromReason()` + `humanizeReasonText()` as last-resort post-processing
 - 2026-03-03: Global analysis context (`client/src/hooks/use-analysis.tsx`) — analysis state (progress, SSE connection) persists across page navigation; header shows progress indicator on all pages during analysis; bulk select/delete for review queue decisions
 - 2026-03-03: Added "Start Analyzing" feature with POST /api/analyze endpoint, multi-source data aggregation (loan+payment+conversation per customer), SSE progress streaming, redesigned review queue with pagination, redesigned decision detail page with sidebar layout

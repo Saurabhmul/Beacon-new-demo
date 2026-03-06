@@ -1,18 +1,22 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
+import { authenticate, authorize, companyFilter } from "./middleware/auth";
 import multer from "multer";
 import Papa from "papaparse";
 import { analyzeCustomer, extractTextFromImage } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
-import { users, uploadLogs } from "@shared/schema";
+import { users, uploadLogs, companies } from "@shared/schema";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
 import { assemblePrompt, assemblePreview, formatCustomerData, clearTemplateCache } from "./lib/prompt/assemble-prompt";
+import { seedDatabase } from "./seed";
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -33,15 +37,236 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
 
+  try {
+    await seedDatabase();
+  } catch (e: any) {
+    console.error("Seed error:", e.message);
+  }
+
   function getUserId(req: any): string {
     return req.user?.id;
   }
 
-  // Client Config
-  app.get("/api/client-config", isAuthenticated, async (req, res) => {
+  function getCompanyId(req: any): string {
+    return req.companyId || req.user?.companyId;
+  }
+
+  // Companies API (SuperAdmin only)
+  app.get("/api/companies", authenticate, authorize("superadmin"), async (req, res) => {
     try {
-      const userId = getUserId(req);
-      const config = await storage.getClientConfig(userId);
+      const companiesList = await storage.getCompanies();
+      res.json(companiesList);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch companies" });
+    }
+  });
+
+  // Users API
+  app.get("/api/users", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = req.user.role === "superadmin" ? (req.query.companyId as string || null) : req.user.companyId;
+      const usersList = await storage.getUsers(companyId);
+      const safeUsers = await Promise.all(usersList.map(async (u) => {
+        const { password: _, ...safe } = u;
+        let invitedByName = null;
+        if (u.invitedBy) {
+          const inviter = await storage.getUserById(u.invitedBy);
+          if (inviter) invitedByName = `${inviter.firstName || ""} ${inviter.lastName || ""}`.trim();
+        }
+        let companyName = "";
+        const company = await storage.getCompany(u.companyId);
+        if (company) companyName = company.name;
+        return { ...safe, invitedByName, companyName };
+      }));
+      res.json(safeUsers);
+    } catch (error) {
+      console.error("Get users error:", error);
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
+  app.post("/api/users", authenticate, authorize("superadmin", "admin", "manager"), async (req: any, res) => {
+    try {
+      const creator = req.user;
+      const { firstName, lastName, email, designation, role, companyName } = req.body;
+
+      if (!firstName || firstName.length < 2) return res.status(400).json({ error: "First name must be at least 2 characters" });
+      if (!lastName || lastName.length < 2) return res.status(400).json({ error: "Last name must be at least 2 characters" });
+      if (!email) return res.status(400).json({ error: "Email is required" });
+      if (!designation) return res.status(400).json({ error: "Designation is required" });
+      if (!role) return res.status(400).json({ error: "Role is required" });
+
+      const existing = await storage.getUserByEmail(email);
+      if (existing) return res.status(409).json({ error: "A user with this email already exists." });
+
+      if (creator.role === "superadmin") {
+        if (!["superadmin", "admin"].includes(role)) return res.status(400).json({ error: "SuperAdmin can only create SuperAdmin or Admin" });
+        if (role === "superadmin" && !email.endsWith("@prodigyfinance.com")) {
+          return res.status(400).json({ error: "SuperAdmin accounts require a @prodigyfinance.com email address." });
+        }
+      } else if (creator.role === "admin") {
+        if (!["manager", "agent"].includes(role)) return res.status(400).json({ error: "Admin can only create Manager or Agent" });
+      } else if (creator.role === "manager") {
+        if (role !== "agent") return res.status(400).json({ error: "Manager can only create Agent" });
+      }
+
+      let targetCompanyId: string;
+
+      if (creator.role === "superadmin") {
+        if (role === "superadmin") {
+          const prodigy = await db.select().from(companies).where(eq(companies.name, "Prodigy Finance"));
+          if (!prodigy.length) return res.status(500).json({ error: "Prodigy Finance company not found" });
+          targetCompanyId = prodigy[0].id;
+        } else if (role === "admin") {
+          if (!companyName) return res.status(400).json({ error: "Company name is required for Admin" });
+          const existingCompany = await db.select().from(companies).where(eq(companies.name, companyName));
+          if (existingCompany.length) {
+            targetCompanyId = existingCompany[0].id;
+          } else {
+            const [newCompany] = await db.insert(companies).values({
+              name: companyName,
+              status: "active",
+              createdBy: creator.id,
+            }).returning();
+            targetCompanyId = newCompany.id;
+          }
+        } else {
+          targetCompanyId = creator.companyId;
+        }
+      } else {
+        targetCompanyId = creator.companyId;
+      }
+
+      const inviteToken = crypto.randomUUID();
+      const inviteExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      const newUser = await storage.createUser({
+        firstName,
+        lastName,
+        email,
+        designation,
+        companyId: targetCompanyId,
+        role,
+        status: "invited",
+        invitedBy: creator.id,
+        inviteToken,
+        inviteExpiresAt,
+      });
+
+      const { password: _, ...safeUser } = newUser;
+      const company = await storage.getCompany(targetCompanyId);
+
+      res.status(201).json({
+        ...safeUser,
+        companyName: company?.name || "",
+        inviteLink: `/auth?invite=${inviteToken}`,
+      });
+    } catch (error) {
+      console.error("Create user error:", error);
+      res.status(500).json({ error: "Failed to create user" });
+    }
+  });
+
+  app.patch("/api/users/:id", authenticate, authorize("superadmin", "admin"), async (req: any, res) => {
+    try {
+      const creator = req.user;
+      const targetId = req.params.id;
+      const target = await storage.getUserById(targetId);
+      if (!target) return res.status(404).json({ error: "User not found" });
+
+      if (creator.role === "admin" && target.companyId !== creator.companyId) {
+        return res.status(403).json({ error: "Cannot edit users from another company" });
+      }
+
+      const { firstName, lastName, designation, role } = req.body;
+      const updates: Partial<any> = {};
+
+      if (firstName) updates.firstName = firstName;
+      if (lastName) updates.lastName = lastName;
+      if (designation) updates.designation = designation;
+
+      if (role && role !== target.role) {
+        if (creator.role === "admin" && ["superadmin", "admin"].includes(role)) {
+          return res.status(403).json({ error: "Admin cannot promote to Admin or SuperAdmin" });
+        }
+        updates.role = role;
+      }
+
+      const updated = await storage.updateUser(targetId, updates);
+      const { password: _, ...safe } = updated;
+      res.json(safe);
+    } catch (error) {
+      console.error("Edit user error:", error);
+      res.status(500).json({ error: "Failed to update user" });
+    }
+  });
+
+  app.post("/api/users/:id/deactivate", authenticate, authorize("superadmin", "admin"), async (req: any, res) => {
+    try {
+      const creator = req.user;
+      const targetId = req.params.id;
+
+      if (creator.id === targetId) {
+        return res.status(400).json({ error: "You cannot deactivate your own account." });
+      }
+
+      const target = await storage.getUserById(targetId);
+      if (!target) return res.status(404).json({ error: "User not found" });
+
+      if (creator.role === "admin" && target.companyId !== creator.companyId) {
+        return res.status(403).json({ error: "Cannot deactivate users from another company" });
+      }
+
+      const updated = await storage.updateUser(targetId, { status: "deactivated" });
+      const { password: _, ...safe } = updated;
+      res.json(safe);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to deactivate user" });
+    }
+  });
+
+  app.post("/api/users/:id/reactivate", authenticate, authorize("superadmin", "admin"), async (req: any, res) => {
+    try {
+      const creator = req.user;
+      const targetId = req.params.id;
+      const target = await storage.getUserById(targetId);
+      if (!target) return res.status(404).json({ error: "User not found" });
+
+      if (creator.role === "admin" && target.companyId !== creator.companyId) {
+        return res.status(403).json({ error: "Cannot reactivate users from another company" });
+      }
+
+      const updated = await storage.updateUser(targetId, { status: "active" });
+      const { password: _, ...safe } = updated;
+      res.json(safe);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to reactivate user" });
+    }
+  });
+
+  app.post("/api/users/:id/resend-invite", authenticate, authorize("superadmin", "admin", "manager"), async (req: any, res) => {
+    try {
+      const targetId = req.params.id;
+      const target = await storage.getUserById(targetId);
+      if (!target) return res.status(404).json({ error: "User not found" });
+      if (target.status !== "invited") return res.status(400).json({ error: "User is not in invited status" });
+
+      const inviteToken = crypto.randomUUID();
+      const inviteExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      await storage.updateUser(targetId, { inviteToken, inviteExpiresAt });
+
+      res.json({ message: `Invitation resent. New link: /auth?invite=${inviteToken}` });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to resend invite" });
+    }
+  });
+
+  // Client Config
+  app.get("/api/client-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const config = await storage.getClientConfig(companyId);
       if (!config) return res.status(404).json({ error: "Not configured" });
       res.json(config);
     } catch (error) {
@@ -49,20 +274,21 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/client-config", isAuthenticated, async (req, res) => {
+  app.post("/api/client-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const config = await storage.createClientConfig({ ...req.body, userId });
+      const companyId = getCompanyId(req);
+      const config = await storage.createClientConfig({ ...req.body, userId, companyId });
       res.status(201).json(config);
     } catch (error) {
       res.status(500).json({ error: "Failed to create config" });
     }
   });
 
-  app.patch("/api/client-config", isAuthenticated, async (req, res) => {
+  app.patch("/api/client-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const config = await storage.updateClientConfig(userId, req.body);
+      const companyId = getCompanyId(req);
+      const config = await storage.updateClientConfig(companyId, req.body);
       res.json(config);
     } catch (error) {
       res.status(500).json({ error: "Failed to update config" });
@@ -70,25 +296,27 @@ export async function registerRoutes(
   });
 
   // Rulebooks
-  app.get("/api/rulebooks", isAuthenticated, async (req, res) => {
+  app.get("/api/rulebooks", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const rbs = await storage.getRulebooks(userId);
+      const companyId = getCompanyId(req);
+      const rbs = await storage.getRulebooks(companyId);
       res.json(rbs);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch rulebooks" });
     }
   });
 
-  app.post("/api/rulebooks", isAuthenticated, async (req, res) => {
+  app.post("/api/rulebooks", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const config = await storage.getClientConfig(userId);
+      const companyId = getCompanyId(req);
+      const config = await storage.getClientConfig(companyId);
       if (!config) return res.status(400).json({ error: "Configure client first" });
 
       const rb = await storage.createRulebook({
         ...req.body,
         userId,
+        companyId,
         clientConfigId: config.id,
       });
       res.status(201).json(rb);
@@ -97,10 +325,11 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/rulebooks/upload", isAuthenticated, upload.single("file"), async (req, res) => {
+  app.post("/api/rulebooks/upload", authenticate, authorize("superadmin", "admin"), companyFilter, upload.single("file"), async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const config = await storage.getClientConfig(userId);
+      const companyId = getCompanyId(req);
+      const config = await storage.getClientConfig(companyId);
       if (!config) return res.status(400).json({ error: "Configure client first" });
 
       const file = req.file;
@@ -133,6 +362,7 @@ export async function registerRoutes(
       const rb = await storage.createRulebook({
         title: req.body.title || file.originalname,
         userId,
+        companyId,
         clientConfigId: config.id,
         sopFileUrl: filePath,
         sopFileName: file.originalname,
@@ -147,11 +377,11 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/rulebooks/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/rulebooks/:id", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const rb = await storage.getRulebook(parseInt(req.params.id));
-      if (!rb || rb.userId !== userId) return res.status(404).json({ error: "Rulebook not found" });
+      if (!rb || rb.companyId !== companyId) return res.status(404).json({ error: "Rulebook not found" });
       await storage.deleteRulebook(rb.id);
       res.status(204).send();
     } catch (error) {
@@ -160,10 +390,10 @@ export async function registerRoutes(
   });
 
   // Data Config
-  app.get("/api/data-config", isAuthenticated, async (req, res) => {
+  app.get("/api/data-config", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const config = await storage.getDataConfig(userId);
+      const companyId = getCompanyId(req);
+      const config = await storage.getDataConfig(companyId);
       if (!config) return res.status(404).json({ error: "Not configured" });
       res.json(config);
     } catch (error) {
@@ -171,15 +401,17 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/data-config", isAuthenticated, async (req, res) => {
+  app.post("/api/data-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const clientConfig = await storage.getClientConfig(userId);
+      const companyId = getCompanyId(req);
+      const clientConfig = await storage.getClientConfig(companyId);
       if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
 
       const config = await storage.createDataConfig({
         ...req.body,
         userId,
+        companyId,
         clientConfigId: clientConfig.id,
       });
       res.status(201).json(config);
@@ -188,10 +420,10 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/data-config", isAuthenticated, async (req, res) => {
+  app.patch("/api/data-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const config = await storage.updateDataConfig(userId, req.body);
+      const companyId = getCompanyId(req);
+      const config = await storage.updateDataConfig(companyId, req.body);
       res.json(config);
     } catch (error) {
       res.status(500).json({ error: "Failed to update data config" });
@@ -199,10 +431,10 @@ export async function registerRoutes(
   });
 
   // Policy Config
-  app.get("/api/policy-config", isAuthenticated, async (req, res) => {
+  app.get("/api/policy-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const config = await storage.getPolicyConfig(userId);
+      const companyId = getCompanyId(req);
+      const config = await storage.getPolicyConfig(companyId);
       if (!config) return res.status(404).json({ error: "Not configured" });
       res.json(config);
     } catch (error) {
@@ -210,13 +442,14 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/policy-config", isAuthenticated, async (req, res) => {
+  app.post("/api/policy-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const clientConfig = await storage.getClientConfig(userId);
+      const companyId = getCompanyId(req);
+      const clientConfig = await storage.getClientConfig(companyId);
       if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
 
-      const dpdStagesData = await storage.getDpdStages(userId);
+      const dpdStagesData = await storage.getDpdStages(companyId);
 
       const compiled = compilePolicyPrompt({
         dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
@@ -230,6 +463,7 @@ export async function registerRoutes(
       const config = await storage.createPolicyConfig({
         ...req.body,
         userId,
+        companyId,
         clientConfigId: clientConfig.id,
         compiledPolicy: compiled as unknown as Record<string, string>,
         compiledAt: new Date(),
@@ -241,10 +475,10 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/policy-config", isAuthenticated, async (req, res) => {
+  app.patch("/api/policy-config", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const dpdStagesData = await storage.getDpdStages(userId);
+      const companyId = getCompanyId(req);
+      const dpdStagesData = await storage.getDpdStages(companyId);
 
       const compiled = compilePolicyPrompt({
         dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
@@ -255,7 +489,7 @@ export async function registerRoutes(
         escalationRules: req.body.escalationRules,
       });
 
-      const config = await storage.updatePolicyConfig(userId, {
+      const config = await storage.updatePolicyConfig(companyId, {
         ...req.body,
         compiledPolicy: compiled as unknown as Record<string, string>,
         compiledAt: new Date(),
@@ -267,14 +501,14 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/prompt-preview", isAuthenticated, async (req, res) => {
+  app.get("/api/prompt-preview", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const policyConfig = await storage.getPolicyConfig(userId);
-      const dataConfig = await storage.getDataConfig(userId);
+      const companyId = getCompanyId(req);
+      const policyConfig = await storage.getPolicyConfig(companyId);
+      const dataConfig = await storage.getDataConfig(companyId);
 
       if (!policyConfig || !policyConfig.compiledPolicy) {
-        const dpdStagesData = await storage.getDpdStages(userId);
+        const dpdStagesData = await storage.getDpdStages(companyId);
         const compiled = compilePolicyPrompt({
           dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
           vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
@@ -303,12 +537,12 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/prompt-preview/regenerate", isAuthenticated, async (req, res) => {
+  app.post("/api/prompt-preview/regenerate", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const policyConfig = await storage.getPolicyConfig(userId);
-      const dpdStagesData = await storage.getDpdStages(userId);
-      const dataConfig = await storage.getDataConfig(userId);
+      const companyId = getCompanyId(req);
+      const policyConfig = await storage.getPolicyConfig(companyId);
+      const dpdStagesData = await storage.getDpdStages(companyId);
+      const dataConfig = await storage.getDataConfig(companyId);
 
       const compiled = compilePolicyPrompt({
         dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
@@ -320,7 +554,7 @@ export async function registerRoutes(
       });
 
       if (policyConfig) {
-        await storage.updatePolicyConfig(userId, {
+        await storage.updatePolicyConfig(companyId, {
           compiledPolicy: compiled as unknown as Record<string, string>,
           compiledAt: new Date(),
         });
@@ -335,26 +569,27 @@ export async function registerRoutes(
   });
 
   // DPD Stages
-  app.get("/api/dpd-stages", isAuthenticated, async (req, res) => {
+  app.get("/api/dpd-stages", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const stages = await storage.getDpdStages(userId);
+      const companyId = getCompanyId(req);
+      const stages = await storage.getDpdStages(companyId);
       res.json(stages);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch DPD stages" });
     }
   });
 
-  app.post("/api/dpd-stages", isAuthenticated, async (req, res) => {
+  app.post("/api/dpd-stages", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const config = await storage.getClientConfig(userId);
+      const companyId = getCompanyId(req);
+      const config = await storage.getClientConfig(companyId);
       if (!config) return res.status(400).json({ error: "Configure client first" });
 
       const { name, description, fromDays, toDays, color } = req.body;
       if (fromDays >= toDays) return res.status(400).json({ error: "From days must be less than To days" });
 
-      const existing = await storage.getDpdStages(userId);
+      const existing = await storage.getDpdStages(companyId);
       const overlap = existing.find(s =>
         (fromDays >= s.fromDays && fromDays <= s.toDays) ||
         (toDays >= s.fromDays && toDays <= s.toDays) ||
@@ -369,6 +604,7 @@ export async function registerRoutes(
         toDays,
         color: color || "blue",
         userId,
+        companyId,
         clientConfigId: config.id,
       });
       res.status(201).json(stage);
@@ -377,13 +613,13 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/dpd-stages/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/dpd-stages/:id", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const id = parseInt(req.params.id);
       const { name, description, fromDays, toDays, color } = req.body;
 
-      const existing = await storage.getDpdStages(userId);
+      const existing = await storage.getDpdStages(companyId);
       const owned = existing.find(s => s.id === id);
       if (!owned) return res.status(404).json({ error: "DPD stage not found" });
 
@@ -410,11 +646,11 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/dpd-stages/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/dpd-stages/:id", authenticate, authorize("superadmin", "admin"), companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const id = parseInt(req.params.id);
-      const stages = await storage.getDpdStages(userId);
+      const stages = await storage.getDpdStages(companyId);
       const stage = stages.find(s => s.id === id);
       if (!stage) return res.status(404).json({ error: "DPD stage not found" });
       await storage.deleteDpdStage(id);
@@ -425,11 +661,11 @@ export async function registerRoutes(
   });
 
   // Uploads
-  app.get("/api/uploads", isAuthenticated, async (req, res) => {
+  app.get("/api/uploads", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const category = req.query.category as string | undefined;
-      const uploads = await storage.getUploads(userId);
+      const uploads = await storage.getUploads(companyId);
       if (category) {
         res.json(uploads.filter(u => u.uploadCategory === category));
       } else {
@@ -453,11 +689,11 @@ export async function registerRoutes(
     "customer / account / loan id", "date_and_timestamp", "message",
   ];
 
-  app.get("/api/uploads/sample/:category", isAuthenticated, async (req, res) => {
+  app.get("/api/uploads/sample/:category", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const category = req.params.category;
-      const dataConfig = await storage.getDataConfig(userId);
+      const dataConfig = await storage.getDataConfig(companyId);
 
       let fields: string[] = [];
       let filename = "sample.csv";
@@ -532,13 +768,13 @@ export async function registerRoutes(
     return keyCols.map(col => String(record[col] || "")).join("||");
   }
 
-  app.get("/api/upload-logs", isAuthenticated, async (req, res) => {
+  app.get("/api/upload-logs", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const category = req.query.category as string;
       if (!category) return res.status(400).json({ error: "Category is required" });
 
-      const logs = await storage.getUploadLogs(userId, category);
+      const logs = await storage.getUploadLogs(companyId, category);
 
       const logsWithEmail = await Promise.all(
         logs.map(async (log) => {
@@ -554,12 +790,12 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/upload-logs/:id/download", isAuthenticated, async (req, res) => {
+  app.get("/api/upload-logs/:id/download", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const logId = Number(req.params.id);
       const log = await storage.getUploadLog(logId);
-      if (!log || log.userId !== userId) return res.status(404).json({ error: "Upload log not found" });
+      if (!log || log.companyId !== companyId) return res.status(404).json({ error: "Upload log not found" });
 
       const rows = log.rowResults || [];
       if (rows.length === 0) return res.status(400).json({ error: "No row data available" });
@@ -569,13 +805,13 @@ export async function registerRoutes(
       let orderedFields: string[] = [];
       if (log.uploadCategory === "loan_data") {
         orderedFields = [...MANDATORY_LOAN_FIELDS];
-        const dataConfig = await storage.getDataConfig(userId);
+        const dataConfig = await storage.getDataConfig(companyId);
         if (dataConfig?.optionalFields) {
           orderedFields.push(...(dataConfig.optionalFields as string[]).filter(f => f !== "conversation_history"));
         }
       } else if (log.uploadCategory === "payment_history") {
         orderedFields = [...MANDATORY_PAYMENT_FIELDS];
-        const dataConfig = await storage.getDataConfig(userId);
+        const dataConfig = await storage.getDataConfig(companyId);
         if (dataConfig?.paymentAdditionalFields) {
           orderedFields.push(...(dataConfig.paymentAdditionalFields as string[]));
         }
@@ -607,9 +843,9 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/uploads/:category/records/:index", isAuthenticated, async (req, res) => {
+  app.put("/api/uploads/:category/records/:index", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const category = req.params.category;
       const index = Number(req.params.index);
       const updatedRecord = req.body as Record<string, unknown>;
@@ -618,7 +854,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid record index" });
       }
 
-      const existingUpload = await storage.getUploadByCategory(userId, category);
+      const existingUpload = await storage.getUploadByCategory(companyId, category);
       if (!existingUpload || !existingUpload.uploadedData) {
         return res.status(404).json({ error: "No data found for this category" });
       }
@@ -643,9 +879,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/uploads/:category/records", isAuthenticated, async (req, res) => {
+  app.delete("/api/uploads/:category/records", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const category = req.params.category;
       const { indices } = req.body as { indices: number[] };
 
@@ -653,7 +889,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No rows specified for deletion" });
       }
 
-      const existingUpload = await storage.getUploadByCategory(userId, category);
+      const existingUpload = await storage.getUploadByCategory(companyId, category);
       if (!existingUpload || !existingUpload.uploadedData) {
         return res.status(404).json({ error: "No data found for this category" });
       }
@@ -676,10 +912,11 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/uploads", isAuthenticated, upload.single("file"), async (req, res) => {
+  app.post("/api/uploads", authenticate, companyFilter, upload.single("file"), async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const config = await storage.getClientConfig(userId);
+      const companyId = getCompanyId(req);
+      const config = await storage.getClientConfig(companyId);
       if (!config) return res.status(400).json({ error: "Configure client first" });
 
       const file = req.file;
@@ -704,7 +941,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Payment data must include a 'payment_reference' column" });
       }
 
-      const existingUpload = await storage.getUploadByCategory(userId, category);
+      const existingUpload = await storage.getUploadByCategory(companyId, category);
       const rowResults: Array<Record<string, unknown> & { _status: string; _message: string }> = [];
       let processedCount = 0;
       let failedCount = 0;
@@ -782,6 +1019,7 @@ export async function registerRoutes(
         await storage.createUploadLog({
           dataUploadId: existingUpload.id,
           userId,
+          companyId,
           fileName: file.originalname,
           fileType: file.originalname.endsWith(".csv") ? "CSV" : "JSON",
           fileSize: file.size,
@@ -808,12 +1046,14 @@ export async function registerRoutes(
           uploadCategory: category,
           uploadedData: newRecords,
           userId,
+          companyId,
           clientConfigId: config.id,
         });
 
         await storage.createUploadLog({
           dataUploadId: uploadRecord.id,
           userId,
+          companyId,
           fileName: file.originalname,
           fileType: file.originalname.endsWith(".csv") ? "CSV" : "JSON",
           fileSize: file.size,
@@ -832,31 +1072,32 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/analyze", isAuthenticated, async (req, res) => {
+  app.post("/api/analyze", authenticate, companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
+      const companyId = getCompanyId(req);
 
-      const existingJob = analysisJobs.get(userId);
+      const existingJob = analysisJobs.get(companyId);
       if (existingJob && !existingJob.complete) {
         return res.status(409).json({ error: "Analysis already in progress." });
       }
       if (existingJob) {
-        analysisJobs.delete(userId);
+        analysisJobs.delete(companyId);
       }
 
-      const loanUpload = await storage.getUploadByCategory(userId, "loan_data");
+      const loanUpload = await storage.getUploadByCategory(companyId, "loan_data");
       if (!loanUpload || !loanUpload.uploadedData || !(loanUpload.uploadedData as Record<string, unknown>[]).length) {
         return res.status(400).json({ error: "No loan data uploaded. Please upload loan data first." });
       }
 
-      const dataConfig = await storage.getDataConfig(userId);
-      const policyConfig = await storage.getPolicyConfig(userId);
+      const dataConfig = await storage.getDataConfig(companyId);
+      const policyConfig = await storage.getPolicyConfig(companyId);
       const loanRecords = loanUpload.uploadedData as Record<string, unknown>[];
 
-      const paymentUpload = await storage.getUploadByCategory(userId, "payment_history");
+      const paymentUpload = await storage.getUploadByCategory(companyId, "payment_history");
       const paymentRecords = (paymentUpload?.uploadedData || []) as Record<string, unknown>[];
 
-      const conversationUpload = await storage.getUploadByCategory(userId, "conversation_history");
+      const conversationUpload = await storage.getUploadByCategory(companyId, "conversation_history");
       const conversationRecords = (conversationUpload?.uploadedData || []) as Record<string, unknown>[];
 
       const customerIdField = "customer / account / loan id";
@@ -887,12 +1128,12 @@ export async function registerRoutes(
       const customers = Array.from(customerMap.entries());
       if (!customers.length) return res.status(400).json({ error: "No valid customers found in loan data." });
 
-      const clientConfig = await storage.getClientConfig(userId);
+      const clientConfig = await storage.getClientConfig(companyId);
 
-      await storage.deletePendingDecisions(userId);
+      await storage.deletePendingDecisions(companyId);
 
       const job: AnalysisJob = { events: [], complete: false, listeners: new Set() };
-      analysisJobs.set(userId, job);
+      analysisJobs.set(companyId, job);
 
       const emitEvent = (event: Record<string, unknown>) => {
         job.events.push(event);
@@ -911,7 +1152,7 @@ export async function registerRoutes(
           let failed = 0;
 
           clearTemplateCache();
-          const dpdStagesData = await storage.getDpdStages(userId);
+          const dpdStagesData = await storage.getDpdStages(companyId);
           const compiled = compilePolicyPrompt({
             dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
             vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
@@ -947,6 +1188,7 @@ export async function registerRoutes(
                 clientConfigId: clientConfig?.id || 0,
                 dataUploadId: loanUpload.id,
                 userId,
+                companyId,
                 customerGuid: result.customer_guid || custId,
                 customerData: combinedData,
                 combinedCmd: result.combined_cmd,
@@ -980,7 +1222,7 @@ export async function registerRoutes(
           emitEvent({ type: "error", error: "Analysis failed unexpectedly" });
         } finally {
           job.complete = true;
-          setTimeout(() => analysisJobs.delete(userId), 30000);
+          setTimeout(() => analysisJobs.delete(companyId), 30000);
         }
       })();
     } catch (error) {
@@ -989,14 +1231,14 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/analyze/events", isAuthenticated, async (req, res) => {
-    const userId = getUserId(req);
+  app.get("/api/analyze/events", authenticate, companyFilter, async (req: any, res) => {
+    const companyId = getCompanyId(req);
 
-    let job = analysisJobs.get(userId);
+    let job = analysisJobs.get(companyId);
     if (!job) {
       for (let i = 0; i < 20; i++) {
         await new Promise(r => setTimeout(r, 250));
-        job = analysisJobs.get(userId);
+        job = analysisJobs.get(companyId);
         if (job) break;
       }
     }
@@ -1038,19 +1280,20 @@ export async function registerRoutes(
   });
 
   // Process upload with AI
-  app.post("/api/uploads/:id/process", isAuthenticated, async (req, res) => {
+  app.post("/api/uploads/:id/process", authenticate, companyFilter, async (req: any, res) => {
     try {
       const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const uploadId = parseInt(req.params.id);
       const uploadRecord = await storage.getUpload(uploadId);
 
-      if (!uploadRecord || uploadRecord.userId !== userId) return res.status(404).json({ error: "Upload not found" });
+      if (!uploadRecord || uploadRecord.companyId !== companyId) return res.status(404).json({ error: "Upload not found" });
       if (uploadRecord.status === "processed") return res.status(400).json({ error: "Already processed" });
 
-      const rbs = await storage.getRulebooks(userId);
+      const rbs = await storage.getRulebooks(companyId);
       if (!rbs.length) return res.status(400).json({ error: "No rulebook configured" });
 
-      const dataConfig = await storage.getDataConfig(userId);
+      const dataConfig = await storage.getDataConfig(companyId);
       const sopText = rbs.map(r => r.sopText || r.extractedText || "").join("\n\n");
       const records = (uploadRecord.uploadedData || []) as Record<string, unknown>[];
 
@@ -1079,6 +1322,7 @@ export async function registerRoutes(
             clientConfigId: uploadRecord.clientConfigId,
             dataUploadId: uploadId,
             userId,
+            companyId,
             customerGuid: result.customer_guid,
             customerData: record,
             combinedCmd: result.combined_cmd,
@@ -1119,52 +1363,52 @@ export async function registerRoutes(
   });
 
   // Decisions
-  app.get("/api/decisions/stats", isAuthenticated, async (req, res) => {
+  app.get("/api/decisions/stats", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
-      const stats = await storage.getDecisionStats(userId);
+      const companyId = getCompanyId(req);
+      const stats = await storage.getDecisionStats(companyId);
       res.json(stats);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch stats" });
     }
   });
 
-  app.get("/api/decisions/:status", isAuthenticated, async (req, res) => {
+  app.get("/api/decisions/:status", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const status = req.params.status;
       if (!isNaN(parseInt(status))) {
         const decision = await storage.getDecision(parseInt(status));
-        if (!decision || decision.userId !== userId) return res.status(404).json({ error: "Decision not found" });
+        if (!decision || decision.companyId !== companyId) return res.status(404).json({ error: "Decision not found" });
         return res.json(decision);
       }
-      const decisions = await storage.getDecisions(userId, status);
-      res.json(decisions);
+      const decisionsList = await storage.getDecisions(companyId, status);
+      res.json(decisionsList);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch decisions" });
     }
   });
 
-  app.delete("/api/decisions/bulk", isAuthenticated, async (req, res) => {
+  app.delete("/api/decisions/bulk", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const { ids } = req.body;
       if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "number")) {
         return res.status(400).json({ error: "ids must be a non-empty array of numbers" });
       }
-      await storage.deleteDecisionsByIds(ids, userId);
+      await storage.deleteDecisionsByIds(ids, companyId);
       res.json({ success: true, deleted: ids.length });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete decisions" });
     }
   });
 
-  app.patch("/api/decisions/:id/review", isAuthenticated, async (req, res) => {
+  app.patch("/api/decisions/:id/review", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const id = parseInt(req.params.id);
       const existing = await storage.getDecision(id);
-      if (!existing || existing.userId !== userId) return res.status(404).json({ error: "Decision not found" });
+      if (!existing || existing.companyId !== companyId) return res.status(404).json({ error: "Decision not found" });
       const { agentAgreed, agentReason } = req.body;
       const decision = await storage.updateDecisionReview(id, agentAgreed, agentReason);
       res.json(decision);
@@ -1173,12 +1417,12 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/decisions/:id/email-review", isAuthenticated, async (req, res) => {
+  app.patch("/api/decisions/:id/email-review", authenticate, companyFilter, async (req: any, res) => {
     try {
-      const userId = getUserId(req);
+      const companyId = getCompanyId(req);
       const id = parseInt(req.params.id);
       const existing = await storage.getDecision(id);
-      if (!existing || existing.userId !== userId) return res.status(404).json({ error: "Decision not found" });
+      if (!existing || existing.companyId !== companyId) return res.status(404).json({ error: "Decision not found" });
       const { emailAccepted, emailRejectReason } = req.body;
       const decision = await storage.updateDecisionEmailReview(id, emailAccepted, emailRejectReason);
       res.json(decision);
