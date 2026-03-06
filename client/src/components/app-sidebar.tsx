@@ -94,7 +94,7 @@ export function AppSidebar() {
               onValueChange={(val) => switchCompany(val)}
               disabled={isSwitchingCompany}
             >
-              <SelectTrigger className="h-8 text-xs" data-testid="select-company-switcher">
+              <SelectTrigger className="h-8 text-xs text-sidebar-foreground bg-sidebar-accent border-sidebar-border" data-testid="select-company-switcher">
                 <SelectValue placeholder="Select a Company" />
               </SelectTrigger>
               <SelectContent>
