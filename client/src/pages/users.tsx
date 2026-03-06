@@ -247,14 +247,14 @@ export default function UsersPage() {
 
   function getRoleOptions(): { value: string; label: string }[] {
     if (isSuperAdmin) return [{ value: "superadmin", label: "Super Admin" }, { value: "admin", label: "Admin" }];
-    if (isAdmin) return [{ value: "manager", label: "Manager" }, { value: "agent", label: "Agent" }];
+    if (isAdmin) return [{ value: "admin", label: "Admin" }, { value: "manager", label: "Manager" }, { value: "agent", label: "Agent" }];
     if (isManager) return [{ value: "agent", label: "Agent" }];
     return [];
   }
 
   function getEditRoleOptions(): { value: string; label: string }[] {
     if (isSuperAdmin) return [{ value: "superadmin", label: "Super Admin" }, { value: "admin", label: "Admin" }, { value: "manager", label: "Manager" }, { value: "agent", label: "Agent" }];
-    if (isAdmin) return [{ value: "manager", label: "Manager" }, { value: "agent", label: "Agent" }];
+    if (isAdmin) return [{ value: "admin", label: "Admin" }, { value: "manager", label: "Manager" }, { value: "agent", label: "Agent" }];
     return [];
   }
 

@@ -106,7 +106,7 @@ export async function registerRoutes(
           return res.status(400).json({ error: "SuperAdmin accounts require a @prodigyfinance.com email address." });
         }
       } else if (creator.role === "admin") {
-        if (!["manager", "agent"].includes(role)) return res.status(400).json({ error: "Admin can only create Manager or Agent" });
+        if (!["admin", "manager", "agent"].includes(role)) return res.status(400).json({ error: "Admin can only create Admin, Manager or Agent" });
       } else if (creator.role === "manager") {
         if (role !== "agent") return res.status(400).json({ error: "Manager can only create Agent" });
       }
@@ -187,8 +187,8 @@ export async function registerRoutes(
       if (designation) updates.designation = designation;
 
       if (role && role !== target.role) {
-        if (creator.role === "admin" && ["superadmin", "admin"].includes(role)) {
-          return res.status(403).json({ error: "Admin cannot promote to Admin or SuperAdmin" });
+        if (creator.role === "admin" && role === "superadmin") {
+          return res.status(403).json({ error: "Admin cannot promote to SuperAdmin" });
         }
         updates.role = role;
       }
