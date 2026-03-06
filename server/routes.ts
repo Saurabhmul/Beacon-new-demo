@@ -65,7 +65,8 @@ export async function registerRoutes(
   app.get("/api/users", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = req.user.role === "superadmin" ? (req.query.companyId as string || null) : req.user.companyId;
-      const usersList = await storage.getUsers(companyId);
+      const allUsers = await storage.getUsers(companyId);
+      const usersList = req.user.role === "superadmin" ? allUsers : allUsers.filter(u => u.role !== "superadmin");
       const safeUsers = await Promise.all(usersList.map(async (u) => {
         const { password: _, ...safe } = u;
         let invitedByName = null;
