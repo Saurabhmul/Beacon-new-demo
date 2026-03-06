@@ -108,7 +108,7 @@ export async function registerRoutes(
       } else if (creator.role === "admin") {
         if (!["admin", "manager", "agent"].includes(role)) return res.status(400).json({ error: "Admin can only create Admin, Manager or Agent" });
       } else if (creator.role === "manager") {
-        if (role !== "agent") return res.status(400).json({ error: "Manager can only create Agent" });
+        if (!["manager", "agent"].includes(role)) return res.status(400).json({ error: "Manager can only create Manager or Agent" });
       }
 
       let targetCompanyId: string;
@@ -844,7 +844,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/uploads/:category/records/:index", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
+  app.put("/api/uploads/:category/records/:index", authenticate, authorize("admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const category = req.params.category;
@@ -880,7 +880,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/uploads/:category/records", authenticate, authorize("admin", "manager", "agent"), companyFilter, async (req: any, res) => {
+  app.delete("/api/uploads/:category/records", authenticate, authorize("admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const category = req.params.category;
@@ -913,7 +913,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/uploads", authenticate, authorize("admin", "manager", "agent"), companyFilter, upload.single("file"), async (req: any, res) => {
+  app.post("/api/uploads", authenticate, authorize("admin", "manager"), companyFilter, upload.single("file"), async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
