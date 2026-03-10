@@ -159,6 +159,14 @@ export function compileDecisionRules(rules: DecisionRule[] | null | undefined): 
         : target.replace(/\bMAD\b/g, 'minimum amount due');
       text += `  THEN: No loan treatment required — encourage payment.\n`;
       text += `  PAYMENT TARGET: ${targetText}\n`;
+
+      if (target === 'At or above MAD' || target === 'At or above minimum amount due') {
+        text += `  EMAIL RULE: The proposed email MUST encourage the customer to pay at least the minimum amount due (MAD). Do NOT suggest that paying below the minimum amount is acceptable or a positive step. Frame the minimum amount as the baseline expectation.\n`;
+      } else if (target === 'Any amount they can afford') {
+        text += `  EMAIL RULE: The proposed email should encourage any payment the customer can make, even partial amounts below the minimum due. Acknowledge that every payment helps.\n`;
+      } else if (target === 'Specific amount' && r.paymentTargetAmount) {
+        text += `  EMAIL RULE: The proposed email MUST reference the specific payment amount of ${r.paymentTargetAmount} and encourage the customer to pay at least this amount.\n`;
+      }
     } else if (treatmentName === 'Agent Review — Escalate to Human' || treatmentName === 'Agent Review') {
       text += `  THEN recommend: Agent Review — Escalate to Human\n`;
     } else {

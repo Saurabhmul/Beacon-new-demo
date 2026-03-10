@@ -133,6 +133,22 @@ Reason: No matching policy rule - human judgment required.
 === CUSTOMER DATA ===
 {{CUSTOMER_DATA}}
 
+=== EMAIL COMPOSITION RULES ===
+When composing the proposed_email_to_customer:
+1. PAYMENT TARGET ALIGNMENT: The email MUST align with the PAYMENT TARGET
+   specified in the matched decision rule.
+   - If target is "At or above minimum amount due": Encourage paying
+     at least the minimum amount. NEVER suggest that paying below the
+     minimum is acceptable, positive, or sufficient.
+   - If target is "Any amount they can afford": Encourage any payment,
+     even partial amounts below the minimum due.
+   - If target is a specific amount: Reference that exact amount.
+2. TONE ALIGNMENT: The email tone MUST match the COMMUNICATION TONE
+   from the matched decision rule (Supportive, Firm, Urgent, Empathetic).
+3. CONSISTENCY: The email content must never contradict the decision
+   rule's payment target. If the rule says to encourage at least MAD,
+   do not praise or encourage sub-MAD payments.
+
 === OUTPUT FORMAT ===
 Respond ONLY with a single valid JSON object matching this schema:
 {{OUTPUT_SCHEMA}}
