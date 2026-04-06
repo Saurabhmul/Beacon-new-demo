@@ -33,6 +33,22 @@ export const rulebooks = pgTable("rulebooks", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export interface FieldReview {
+  fieldName: string;
+  beaconsUnderstanding: string;
+  confidence: 'High' | 'Medium' | 'Low';
+  userDescription: string;
+  ignored: boolean;
+}
+
+export interface CategoryEntry {
+  fileName?: string;
+  fileSize?: number;
+  docType?: 'tabular' | 'document';
+  uploadedAt?: string;
+  fieldAnalysis?: FieldReview[];
+}
+
 export const dataConfigs = pgTable("data_configs", {
   id: serial("id").primaryKey(),
   clientConfigId: integer("client_config_id").notNull(),
@@ -44,6 +60,8 @@ export const dataConfigs = pgTable("data_configs", {
   dpdBuckets: jsonb("dpd_buckets").$type<string[]>().default([]).notNull(),
   promptTemplate: text("prompt_template"),
   outputFormat: text("output_format"),
+  selectedCategories: jsonb("selected_categories").$type<string[]>().default([]).notNull(),
+  categoryData: jsonb("category_data").$type<Record<string, CategoryEntry>>().default({}).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

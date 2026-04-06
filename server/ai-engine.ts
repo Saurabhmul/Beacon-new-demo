@@ -464,3 +464,49 @@ export async function extractTextFromImage(base64Data: string, mimeType: string)
 
   return response.text || "";
 }
+
+export async function analyzeCategoryFields(
+  categoryId: string,
+  headers: string[],
+  sampleRows: Record<string, string>[]
+): Promise<Array<{ fieldName: string; beaconsUnderstanding: string; confidence: 'High' | 'Medium' | 'Low' }>> {
+  const categoryLabel = categoryId.replace(/_/g, ' ');
+  const sampleStr = sampleRows.length > 0
+    ? `\nSample data rows:\n${sampleRows.map((r, i) => `Row ${i + 1}: ${JSON.stringify(r)}`).join('\n')}`
+    : '';
+
+  const prompt = `You are a data analyst for a financial collections software called Beacon.
+A client has uploaded a sample file for the "${categoryLabel}" data category.
+Analyze these column headers and describe what each field likely means in a loan collections context.
+
+Column headers: ${headers.join(', ')}${sampleStr}
+
+For each column, provide:
+- fieldName: the exact column name as given
+- beaconsUnderstanding: a clear, plain-English description (1-2 sentences) of what this field likely represents in a collections context
+- confidence: "High" if the field name is self-explanatory, "Medium" if you can reasonably infer the meaning, "Low" if the name is ambiguous
+
+Respond ONLY with a valid JSON array. Example:
+[{"fieldName": "dpd_bucket", "beaconsUnderstanding": "Number of days the account is past due, grouped into buckets (e.g. 1-30, 31-60).", "confidence": "High"}]`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.0-flash",
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: { maxOutputTokens: 4096 },
+  });
+
+  const text = response.text || "";
+  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch {
+      // fall through to fallback
+    }
+  }
+  return headers.map(h => ({
+    fieldName: h,
+    beaconsUnderstanding: `Field named "${h.replace(/_/g, ' ')}" — please describe what this field represents.`,
+    confidence: 'Low' as const,
+  }));
+}

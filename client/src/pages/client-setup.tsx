@@ -44,7 +44,7 @@ import {
   Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
   Copy, RefreshCw, Info, Eye,
 } from "lucide-react";
-import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule } from "@shared/schema";
+import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview } from "@shared/schema";
 
 
 const MANDATORY_LOAN_FIELDS = [
@@ -1272,6 +1272,58 @@ function PolicyConfigTab() {
   );
 }
 
+const DATA_CATEGORIES = [
+  {
+    id: "loan_account",
+    name: "Loan / Account Data",
+    description: "Information about each customer loan or account, such as account ID, balances, due amounts, arrears status, and important dates.",
+    docType: "tabular" as const,
+    accept: ".csv,.xlsx,.xls",
+  },
+  {
+    id: "payment_history",
+    name: "Payment History",
+    description: "Records of payments made or missed over time, including payment dates, amounts, and payment status.",
+    docType: "tabular" as const,
+    accept: ".csv,.xlsx,.xls",
+  },
+  {
+    id: "conversation_history",
+    name: "Conversation History",
+    description: "Customer interactions such as calls, emails, chats, or notes, with date/time and message or outcome.",
+    docType: "tabular" as const,
+    accept: ".csv,.xlsx,.xls",
+  },
+  {
+    id: "income_employment",
+    name: "Income and Employment Data",
+    description: "Information that helps assess affordability, such as income, employer status, and employment changes.",
+    docType: "tabular" as const,
+    accept: ".csv,.xlsx,.xls",
+  },
+  {
+    id: "credit_bureau",
+    name: "Credit Bureau Data",
+    description: "External bureau information such as scores, delinquencies, or other credit-related indicators.",
+    docType: "tabular" as const,
+    accept: ".csv,.xlsx,.xls",
+  },
+  {
+    id: "compliance_policy",
+    name: "Compliance Policy / Internal Rules",
+    description: "Policy or operating documents that explain how collections, forbearance, or compliance decisions should be handled.",
+    docType: "document" as const,
+    accept: ".pdf,.docx,.txt",
+  },
+  {
+    id: "knowledge_base",
+    name: "Knowledge Base / Agent Guidance",
+    description: "Internal reference material used by agents, such as playbooks, FAQs, and customer handling guidance.",
+    docType: "document" as const,
+    accept: ".pdf,.docx,.txt",
+  },
+];
+
 function DataConfigTab() {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -1279,21 +1331,22 @@ function DataConfigTab() {
 
   const { data: dataConfig, isLoading } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
 
-  const [mandatoryFields] = useState<string[]>(MANDATORY_LOAN_FIELDS);
-  const [paymentAdditionalFields, setPaymentAdditionalFields] = useState<string[]>([]);
-  const [customPaymentField, setCustomPaymentField] = useState("");
-  const [optionalFields, setOptionalFields] = useState<string[]>([]);
-  const [customField, setCustomField] = useState("");
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [categoryData, setCategoryData] = useState<Record<string, CategoryEntry>>({});
+  const [analyzingCategories, setAnalyzingCategories] = useState<Set<string>>(new Set());
+  const [editingField, setEditingField] = useState<{ categoryId: string; fieldIndex: number } | null>(null);
+  const [editValue, setEditValue] = useState("");
   const [hydrated, setHydrated] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadingForRef = useRef<string>("");
+  const uploadAcceptRef = useRef<string>(".csv,.xlsx,.xls,.pdf,.docx,.txt");
 
   useEffect(() => {
     if (dataConfig && !hydrated) {
-      if (dataConfig.optionalFields && (dataConfig.optionalFields as string[]).length > 0) {
-        setOptionalFields(dataConfig.optionalFields as string[]);
-      }
-      if (dataConfig.paymentAdditionalFields && (dataConfig.paymentAdditionalFields as string[]).length > 0) {
-        setPaymentAdditionalFields(dataConfig.paymentAdditionalFields as string[]);
-      }
+      const sc = (dataConfig as any).selectedCategories;
+      const cd = (dataConfig as any).categoryData;
+      if (sc && Array.isArray(sc) && sc.length > 0) setSelectedCategories(sc);
+      if (cd && typeof cd === "object") setCategoryData(cd);
       setHydrated(true);
     }
   }, [dataConfig, hydrated]);
@@ -1302,10 +1355,8 @@ function DataConfigTab() {
     mutationFn: async () => {
       const method = dataConfig ? "PATCH" : "POST";
       const res = await apiRequest(method, "/api/data-config", {
-        mandatoryFields,
-        optionalFields,
-        paymentAdditionalFields,
-        dpdBuckets: [],
+        selectedCategories,
+        categoryData,
       });
       return res.json();
     },
@@ -1318,139 +1369,322 @@ function DataConfigTab() {
     },
   });
 
+  async function handleFile(categoryId: string, file: File) {
+    setAnalyzingCategories(prev => new Set([...prev, categoryId]));
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", categoryId);
+      const res = await fetch("/api/data-config/analyze-category", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      setCategoryData(prev => ({
+        ...prev,
+        [categoryId]: {
+          fileName: data.fileName,
+          fileSize: data.fileSize,
+          docType: data.docType,
+          uploadedAt: new Date().toISOString(),
+          fieldAnalysis: (data.fieldAnalysis || []).map((f: FieldReview) => ({
+            ...f,
+            userDescription: "",
+            ignored: false,
+          })),
+        },
+      }));
+    } catch (err) {
+      toast({ title: "Upload failed", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAnalyzingCategories(prev => {
+        const next = new Set(prev);
+        next.delete(categoryId);
+        return next;
+      });
+    }
+  }
+
+  function triggerUpload(categoryId: string, accept: string) {
+    uploadingForRef.current = categoryId;
+    uploadAcceptRef.current = accept;
+    if (fileInputRef.current) {
+      fileInputRef.current.accept = accept;
+      fileInputRef.current.click();
+    }
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file && uploadingForRef.current) {
+      handleFile(uploadingForRef.current, file);
+    }
+    e.target.value = "";
+  }
+
+  function removeFile(categoryId: string) {
+    setCategoryData(prev => {
+      const next = { ...prev };
+      delete next[categoryId];
+      return next;
+    });
+  }
+
+  function toggleCategory(categoryId: string, checked: boolean) {
+    if (checked) {
+      setSelectedCategories(prev => [...prev, categoryId]);
+    } else {
+      setSelectedCategories(prev => prev.filter(id => id !== categoryId));
+      removeFile(categoryId);
+    }
+  }
+
+  function updateFieldDescription(categoryId: string, fieldIndex: number, value: string) {
+    setCategoryData(prev => {
+      const entry = prev[categoryId];
+      if (!entry?.fieldAnalysis) return prev;
+      const updatedFields = entry.fieldAnalysis.map((f, i) =>
+        i === fieldIndex ? { ...f, userDescription: value } : f
+      );
+      return { ...prev, [categoryId]: { ...entry, fieldAnalysis: updatedFields } };
+    });
+  }
+
+  function toggleIgnoreField(categoryId: string, fieldIndex: number) {
+    setCategoryData(prev => {
+      const entry = prev[categoryId];
+      if (!entry?.fieldAnalysis) return prev;
+      const updatedFields = entry.fieldAnalysis.map((f, i) =>
+        i === fieldIndex ? { ...f, ignored: !f.ignored } : f
+      );
+      return { ...prev, [categoryId]: { ...entry, fieldAnalysis: updatedFields } };
+    });
+  }
+
+  function confidenceBadge(confidence: string) {
+    if (confidence === "High") return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400";
+    if (confidence === "Medium") return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400";
+    return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
+  }
+
   if (isLoading) {
-    return (
-      <div className="space-y-6">
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
+    return <Skeleton className="h-64 w-full" />;
   }
 
   return (
     <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Mandatory Loan Data</CardTitle>
-            <CardDescription>These fields are required in every loan data upload.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {mandatoryFields.map((f) => (
-                <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
-                  {f.replace(/_/g, " ")}
-                </Badge>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Mandatory Payment History</CardTitle>
-            <CardDescription>These fields are required in every payment history upload.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2 mb-4">
-              {MANDATORY_PAYMENT_FIELDS.map((f) => (
-                <Badge key={f} variant="default" className="text-xs py-1 px-2.5">
-                  {f.replace(/_/g, " ")}
-                </Badge>
-              ))}
-              {paymentAdditionalFields.map((f) => (
-                <Badge key={f} variant="secondary" className="text-xs py-1 px-2.5">
-                  {f.replace(/_/g, " ")}
-                </Badge>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <Input
-                value={customPaymentField}
-                onChange={(e) => setCustomPaymentField(e.target.value)}
-                placeholder="Add additional field (e.g. payment method)"
-                className="max-w-[280px]"
-                data-testid="input-custom-payment-field"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (customPaymentField.trim()) {
-                    setPaymentAdditionalFields((prev) => [...prev, customPaymentField.trim().replace(/\s+/g, "_")]);
-                    setCustomPaymentField("");
-                  }
-                }}
-                data-testid="button-add-payment-field"
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Data You Can Provide</CardTitle>
+          <CardDescription>
+            Select the types of data you can share with Beacon. For each selected category, upload a sample file so Beacon can understand the fields and prepare your configuration.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {DATA_CATEGORIES.map(cat => {
+            const isSelected = selectedCategories.includes(cat.id);
+            const entry = categoryData[cat.id];
+            const isAnalyzing = analyzingCategories.has(cat.id);
+
+            return (
+              <div
+                key={cat.id}
+                className={`border rounded-lg p-4 transition-colors ${isSelected ? "border-primary/40 bg-primary/5" : "border-border"}`}
+                data-testid={`card-category-${cat.id}`}
               >
-                <Plus className="w-3.5 h-3.5 mr-1" />
-                Add
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Optional Data Fields</CardTitle>
-            <CardDescription>Select additional fields to improve accuracy.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {OPTIONAL_FIELDS.map((f) => (
-                <label key={f} className="flex items-center gap-3 cursor-pointer">
+                <label className="flex items-start gap-3 cursor-pointer">
                   <Checkbox
-                    checked={optionalFields.includes(f)}
-                    onCheckedChange={(checked) => {
-                      setOptionalFields((prev) =>
-                        checked ? [...prev, f] : prev.filter((x) => x !== f)
-                      );
-                    }}
-                    data-testid={`checkbox-field-${f}`}
+                    checked={isSelected}
+                    disabled={isReadOnly}
+                    onCheckedChange={(checked) => toggleCategory(cat.id, !!checked)}
+                    data-testid={`checkbox-category-${cat.id}`}
+                    className="mt-0.5"
                   />
-                  <span className="text-sm capitalize">
-                    {f.replace(/_/g, " ")}
-                    {f === "conversation_history" && (
-                      <span className="text-xs text-muted-foreground normal-case ml-1">
-                        ({MANDATORY_CONVERSATION_FIELDS.map(c => c.replace(/_/g, " ")).join(", ")})
-                      </span>
-                    )}
-                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm">{cat.name}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{cat.description}</div>
+                  </div>
                 </label>
-              ))}
-              <div className="flex items-center gap-2 mt-3">
-                <Input
-                  value={customField}
-                  onChange={(e) => setCustomField(e.target.value)}
-                  placeholder="Add custom field"
-                  className="max-w-[200px]"
-                  data-testid="input-custom-field"
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (customField.trim()) {
-                      setOptionalFields((prev) => [...prev, customField.trim().replace(/\s+/g, "_")]);
-                      setCustomField("");
-                    }
-                  }}
-                  data-testid="button-add-field"
-                >
-                  <Plus className="w-3.5 h-3.5 mr-1" />
-                  Add
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
-        {!isReadOnly && (
-          <div className="pt-2 pb-8">
-            <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-dataconfig">
-              {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-              Save Configuration
-            </Button>
-          </div>
-        )}
+                {isSelected && (
+                  <div className="mt-4 ml-7">
+                    {isAnalyzing ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Beacon is analyzing your file…</span>
+                      </div>
+                    ) : !entry?.fileName ? (
+                      <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
+                        <Upload className="w-6 h-6 text-muted-foreground mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground mb-1">
+                          Upload a sample file representative of your {cat.name.toLowerCase()} data.
+                        </p>
+                        <p className="text-[11px] text-muted-foreground/60 mb-3">
+                          Accepted: {cat.docType === "tabular" ? "CSV, XLSX" : "PDF, DOCX, TXT"}
+                        </p>
+                        {!isReadOnly && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => triggerUpload(cat.id, cat.accept)}
+                            data-testid={`button-upload-${cat.id}`}
+                          >
+                            <Upload className="w-3.5 h-3.5 mr-1.5" />
+                            Upload Sample File
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-sm">
+                            <FileIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                            <span className="font-medium truncate max-w-[240px]">{entry.fileName}</span>
+                            {entry.fileSize && (
+                              <span className="text-xs text-muted-foreground flex-shrink-0">
+                                ({(entry.fileSize / 1024).toFixed(1)} KB)
+                              </span>
+                            )}
+                          </div>
+                          {!isReadOnly && (
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-xs h-7 px-2"
+                                onClick={() => triggerUpload(cat.id, cat.accept)}
+                                data-testid={`button-reupload-${cat.id}`}
+                              >
+                                <Upload className="w-3 h-3 mr-1" />
+                                Re-upload
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                                onClick={() => removeFile(cat.id)}
+                                data-testid={`button-remove-${cat.id}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+
+                        {entry.docType === "tabular" && entry.fieldAnalysis && entry.fieldAnalysis.length > 0 && (
+                          <div className="space-y-2">
+                            <div>
+                              <h4 className="text-sm font-medium">Review Beacon's understanding</h4>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                Beacon analyzed this file and described what each field appears to mean. {!isReadOnly && "Click any description to edit it before saving."}
+                              </p>
+                            </div>
+                            <div className="border rounded-md overflow-hidden">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="bg-muted/50 border-b">
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[175px]">Field Name</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Beacon's Understanding</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[85px]">Confidence</th>
+                                    <th className="text-center px-3 py-2 text-xs font-medium text-muted-foreground w-[65px]">Ignore</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {entry.fieldAnalysis.map((field, idx) => (
+                                    <tr
+                                      key={`${field.fieldName}-${idx}`}
+                                      className={`border-b last:border-0 ${field.ignored ? "opacity-40" : ""}`}
+                                      data-testid={`row-field-${cat.id}-${idx}`}
+                                    >
+                                      <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">{field.fieldName}</td>
+                                      <td className="px-3 py-2">
+                                        {editingField?.categoryId === cat.id && editingField?.fieldIndex === idx && !isReadOnly ? (
+                                          <input
+                                            autoFocus
+                                            className="w-full text-xs border rounded px-2 py-1 bg-background outline-none focus:ring-1 focus:ring-primary"
+                                            value={editValue}
+                                            onChange={e => setEditValue(e.target.value)}
+                                            onBlur={() => {
+                                              updateFieldDescription(cat.id, idx, editValue);
+                                              setEditingField(null);
+                                            }}
+                                            onKeyDown={e => {
+                                              if (e.key === "Enter") { updateFieldDescription(cat.id, idx, editValue); setEditingField(null); }
+                                              if (e.key === "Escape") setEditingField(null);
+                                            }}
+                                            data-testid={`input-field-desc-${cat.id}-${idx}`}
+                                          />
+                                        ) : (
+                                          <span
+                                            className={`text-xs block leading-relaxed ${!isReadOnly && !field.ignored ? "cursor-pointer hover:text-primary" : ""}`}
+                                            onClick={() => {
+                                              if (!isReadOnly && !field.ignored) {
+                                                setEditingField({ categoryId: cat.id, fieldIndex: idx });
+                                                setEditValue(field.userDescription || field.beaconsUnderstanding);
+                                              }
+                                            }}
+                                            data-testid={`text-field-desc-${cat.id}-${idx}`}
+                                          >
+                                            {field.userDescription || field.beaconsUnderstanding}
+                                            {field.userDescription && (
+                                              <span className="text-muted-foreground ml-1 text-[10px]">(edited)</span>
+                                            )}
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${confidenceBadge(field.confidence)}`}>
+                                          {field.confidence}
+                                        </span>
+                                      </td>
+                                      <td className="px-3 py-2 text-center">
+                                        <Checkbox
+                                          checked={field.ignored}
+                                          disabled={isReadOnly}
+                                          onCheckedChange={() => toggleIgnoreField(cat.id, idx)}
+                                          data-testid={`checkbox-ignore-${cat.id}-${idx}`}
+                                        />
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {entry.docType === "document" && (
+                          <p className="text-xs text-muted-foreground">
+                            Document uploaded successfully. Beacon will use this as reference guidance during analysis.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      {!isReadOnly && (
+        <div className="pt-2 pb-8">
+          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-dataconfig">
+            {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+            Save Configuration
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

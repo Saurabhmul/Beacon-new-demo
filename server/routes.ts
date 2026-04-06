@@ -5,7 +5,7 @@ import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
 import { authenticate, authorize, companyFilter } from "./middleware/auth";
 import multer from "multer";
 import Papa from "papaparse";
-import { analyzeCustomer, extractTextFromImage } from "./ai-engine";
+import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
 import { users, uploadLogs, companies } from "@shared/schema";
 import { db } from "./db";
@@ -428,6 +428,73 @@ export async function registerRoutes(
       res.json(config);
     } catch (error) {
       res.status(500).json({ error: "Failed to update data config" });
+    }
+  });
+
+  app.post("/api/data-config/analyze-category", authenticate, authorize("admin"), companyFilter, upload.single("file"), async (req: any, res) => {
+    try {
+      const file = req.file;
+      const category = req.body?.category;
+      if (!file) return res.status(400).json({ error: "No file uploaded" });
+      if (!category) return res.status(400).json({ error: "Category is required" });
+
+      const isTabular = /\.(csv|xlsx|xls)$/i.test(file.originalname);
+      const isDocument = /\.(pdf|docx|txt)$/i.test(file.originalname);
+
+      if (!isTabular && !isDocument) {
+        return res.status(400).json({ error: "Unsupported file type. Use CSV, XLSX, PDF, DOCX, or TXT." });
+      }
+
+      let headers: string[] = [];
+      let sampleRows: Record<string, string>[] = [];
+
+      if (isTabular) {
+        if (/\.csv$/i.test(file.originalname)) {
+          const content = file.buffer.toString("utf-8");
+          const parsed = Papa.parse(content, { header: true, skipEmptyLines: true });
+          if (parsed.data.length > 0) {
+            headers = Object.keys(parsed.data[0] as Record<string, unknown>);
+            sampleRows = (parsed.data as Record<string, unknown>[]).slice(0, 3).map(row => {
+              const r: Record<string, string> = {};
+              for (const [k, v] of Object.entries(row)) r[k] = String(v ?? "");
+              return r;
+            });
+          }
+        } else {
+          const XLSX = await import("xlsx");
+          const wb = XLSX.read(file.buffer, { type: "buffer" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as unknown[][];
+          if (data.length > 0) {
+            headers = (data[0] as unknown[]).map(h => String(h ?? "")).filter(h => h.trim());
+            sampleRows = data.slice(1, 4).map(row => {
+              const r: Record<string, string> = {};
+              headers.forEach((h, i) => { r[h] = String((row as unknown[])[i] ?? ""); });
+              return r;
+            });
+          }
+        }
+
+        if (headers.length === 0) {
+          return res.status(400).json({ error: "Could not extract column headers from file. Please check the file format." });
+        }
+      }
+
+      let fieldAnalysis: Array<{ fieldName: string; beaconsUnderstanding: string; confidence: 'High' | 'Medium' | 'Low' }> = [];
+      if (isTabular && headers.length > 0) {
+        fieldAnalysis = await analyzeCategoryFields(category, headers, sampleRows);
+      }
+
+      res.json({
+        categoryId: category,
+        docType: isTabular ? "tabular" : "document",
+        fieldAnalysis,
+        fileName: file.originalname,
+        fileSize: file.size,
+      });
+    } catch (error) {
+      console.error("analyze-category error:", error);
+      res.status(500).json({ error: "Failed to analyze file" });
     }
   });
 

@@ -1,0 +1,203 @@
+# Beacon — Data Configuration Tab Changes
+
+## Goal
+
+Redesign the **Data Configuration** tab to be more flexible and AI-assisted.
+
+## Product changes
+
+### 1. Replace current mandatory/optional structure
+
+Remove the current split of:
+
+* Mandatory Loan Data
+* Mandatory Payment History
+* Optional Data Fields
+
+Replace with a category-based selection flow.
+
+### 2. New category list
+
+Show selectable data categories with a checkbox for each.
+
+Suggested categories:
+
+* **Loan / Account Data**
+
+  * Description: Information about each customer loan or account, such as account ID, balances, due amounts, arrears status, and important dates.
+* **Payment History**
+
+  * Description: Records of payments made or missed over time, including payment dates, amounts, and payment status.
+* **Conversation History**
+
+  * Description: Customer interactions such as calls, emails, chats, or notes, with date/time and message or outcome.
+* **Income and Employment Data**
+
+  * Description: Information that helps assess affordability, such as income, employer status, and employment changes.
+* **Credit Bureau Data**
+
+  * Description: External bureau information such as scores, delinquencies, or other credit-related indicators.
+* **Compliance Policy / Internal Rules**
+
+  * Description: Policy or operating documents that explain how collections, forbearance, or compliance decisions should be handled.
+* **Knowledge Base / Agent Guidance**
+
+  * Description: Internal reference material used by agents, such as playbooks, FAQs, and customer handling guidance.
+
+### 3. Checkbox-driven upload flow
+
+When a user checks a category:
+
+* expand an upload area for that category
+* ask them to upload a **sample file**
+* support CSV / XLSX for data tables
+* support PDF / DOCX / TXT for policy and knowledge documents where relevant
+
+### 4. AI-assisted field understanding after upload
+
+After sample upload, Beacon should analyze the file and show a review table.
+
+For tabular files, show columns like:
+
+* **Field name**
+* **Beacon's understanding**
+* **Confidence** (High / Medium / Low)
+* **Client action** (editable text or dropdown)
+* **Ignore** toggle
+
+Example:
+
+* `arrears_months` → "Number of months the account is in arrears" → High
+* `vulnerability_rag` → "Customer vulnerability status such as Red / Amber / Green" → Medium
+* `ie_assessment_completed` → "Whether income and expenditure assessment is complete" → High
+
+User should be able to:
+
+* accept Beacon's description
+* edit Beacon's description
+* mark a field as irrelevant
+
+### 5. Save configuration
+
+Once all selected categories are reviewed, clicking **Save Configuration** should save:
+
+* selected categories
+* uploaded sample file metadata
+* AI field descriptions
+* user edits / overrides
+* ignored fields
+* configuration status
+
+## UX layout
+
+### Header
+
+Keep current page title:
+
+* **Client Configuration**
+* tabs: **Policy Config** and **Data Configuration**
+
+### Main card title
+
+Use title:
+
+* **Data You Can Provide**
+
+Subtitle:
+
+* Select the types of data you can share with Beacon. For each selected category, upload a sample file so Beacon can understand the fields and prepare your configuration.
+
+### Category card layout
+
+For each category show:
+
+* checkbox
+* category name
+* 1–2 line description
+* if selected: upload button / uploaded file state
+* if file uploaded: "Review Fields" section below
+
+### Review Fields section
+
+Title:
+
+* **Review Beacon's understanding**
+
+Subtitle:
+
+* Beacon analyzed this file and described what each field appears to mean. Edit anything that looks incorrect before saving.
+
+## Suggested UI copy
+
+### Intro copy
+
+"Select the data types you can provide. Beacon will analyze a sample file for each selected category and describe the fields it finds. You can review and edit Beacon's understanding before saving."
+
+### Upload helper copy
+
+"Upload a sample file that is representative of the data you usually maintain for this category."
+
+### Review helper copy
+
+"Beacon's understanding is a draft. Please review any fields marked Medium or Low confidence."
+
+## Functional requirements
+
+### Frontend
+
+* replace current chips-based required field UI
+* add checkbox cards for categories
+* add upload control per selected category
+* add post-upload field review table
+* allow inline editing of field description
+* allow ignore toggle
+* show confidence badge
+* persist draft state before save
+
+### Backend
+
+Add or update endpoints to support:
+
+* saving selected categories
+* uploading sample files by category
+* triggering AI analysis of uploaded sample
+* storing field analysis results
+* storing user edits / ignored fields
+* saving final data configuration
+
+Suggested objects:
+
+* `data_category_selection`
+* `sample_upload`
+* `field_analysis`
+* `field_review`
+
+## AI behavior
+
+For uploaded structured files, AI should try to infer:
+
+* field name
+* plain-English description
+* likely business meaning
+* confidence score
+
+For example:
+
+* `dpd_bucket` → "Delinquency or days-past-due bucket for the account"
+* `amt_paid` → "Amount paid in the payment record"
+
+AI output should always be editable by the client.
+
+## Implementation note for Replit
+
+Please update the existing **Data Configuration** tab component rather than creating a separate page. Keep styling consistent with the current app design system.
+
+## Success criteria
+
+* clients no longer need to manually define required fields upfront
+* payment history is selectable like other data categories
+* each category includes plain-English guidance
+* selected categories require a sample upload
+* uploaded samples trigger AI-based field understanding
+* client can review/edit before saving
+* configuration is saved cleanly per client

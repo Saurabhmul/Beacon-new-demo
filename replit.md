@@ -65,7 +65,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - `users` / `sessions` - Auth with roles, company membership, invite tokens
 - `client_configs` - Company details per companyId
 - `rulebooks` - SOP documents/text per client
-- `data_configs` - Field mapping, prompt templates, payment additional fields
+- `data_configs` - Field mapping, prompt templates, selected categories, and per-category file/field analysis data. New columns: `selected_categories` (jsonb string[]), `category_data` (jsonb Record<string, CategoryEntry>)
 - `data_uploads` - Uploaded file records with `uploadCategory` (loan_data, payment_history, conversation_history)
 - `upload_logs` - Upload history with per-row status tracking (created/updated/failed) and download capability
 - `decisions` - AI decisions with review status
@@ -97,6 +97,7 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - Decision rules auto-suggest `otherCondition` when Clear Arrears Plan is selected; condition updates when clearanceMonths changes
 
 ## Recent Changes
+- 2026-04-06: Redesigned Data Configuration tab — replaced mandatory/optional field chips with 7 category cards (Loan/Account, Payment History, Conversation History, Income/Employment, Credit Bureau, Compliance Policy, Knowledge Base). Checkbox-driven upload flow with AI field analysis (Gemini 2.0 Flash), inline editable field descriptions, confidence badges (High/Medium/Low), ignore toggles, and save to DB. New backend endpoint POST /api/data-config/analyze-category; xlsx support for XLSX parsing; new schema columns selected_categories and category_data on data_configs
 - 2026-03-06: Multi-tenant Users & Roles system implemented — companies table, expanded users with roles/invites, company_id on all tables, role-based auth middleware, role-based sidebar navigation, Users management page (add/edit/deactivate/resend invite), invite registration flow, SuperAdmin company switching, seed data for Prodigy Finance
 - 2026-03-05: Fixed AI returning "NOT SURE" for affordability/willingness — root causes fixed: 1) `formatCustomerData()` handles `_payments`/`_conversations` underscore-prefixed keys, 2) `compile-policy.ts` now generates plain English thresholds (no NMPC/MAD acronyms), 3) brain-template.txt rewritten with step-by-step calculation instructions, 4) output-schema.json mandates non-empty reason fields ending with "→ LABEL", 5) `routes.ts` always freshly recompiles policy with `clearTemplateCache()` before analysis, 6) Removed duplicate customer data from user message (data only in system prompt's CUSTOMER_DATA section), 7) Model acknowledgment explicitly commits to matching labels to calculations, 8) Safety net `extractLabelFromReason()` + `humanizeReasonText()` as last-resort post-processing
 - 2026-03-03: Global analysis context (`client/src/hooks/use-analysis.tsx`) — analysis state (progress, SSE connection) persists across page navigation; header shows progress indicator on all pages during analysis; bulk select/delete for review queue decisions
