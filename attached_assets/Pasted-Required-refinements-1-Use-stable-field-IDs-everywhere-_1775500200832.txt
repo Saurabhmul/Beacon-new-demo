@@ -1,0 +1,228 @@
+Required refinements
+1. Use stable field IDs everywhere
+
+Do not rely on field labels/names as the primary identifier in rules.
+
+Each selectable field must have a stable ID.
+
+Recommended approach
+source fields: deterministic ID such as source:<fieldKey>
+business fields: DB ID / UUID
+derived fields: DB ID / UUID
+Why
+labels can change
+labels may not be unique
+rules must remain stable even if display names are edited later
+Requirement
+
+All rule rows should store field references by ID, not by label.
+
+2. Make source fields deterministic in the field registry
+
+If source fields are synthesized from knownFields, make sure they are returned in a stable registry format, not just as loose dropdown values.
+
+Each source field returned by /api/policy-fields should include at least:
+
+id
+label
+description (nullable/blank allowed)
+sourceType = source_field
+Why
+
+The rule engine and info popovers should treat source fields the same way as business/derived fields in the UI, even if their persistence model is different underneath.
+
+3. Make RHS storage explicit for both modes
+
+Please make the rule storage model explicit for both RHS modes.
+
+Required rule condition shape
+
+Each treatment rule condition should support at least:
+
+leftFieldId
+operator
+rightMode = constant | field
+rightConstantValue nullable
+rightFieldId nullable
+
+If you want to reuse the old value column as rightConstantValue, that is fine, but please normalize the code so the meaning is explicit.
+
+Why
+
+This avoids half-migrated logic where field mode is added but constant mode still behaves like an old legacy path.
+
+4. Add duplicate label validation for custom fields
+
+Please prevent duplicate custom field labels within the same company scope for Phase 1.
+
+Requirement
+
+When creating a business or derived field:
+
+reject exact duplicate label if one already exists for the same company
+show a user-friendly validation message
+Why
+
+Without this, users may create multiple fields called:
+
+Affordability
+Total Arrears
+NMPC
+
+which will quickly make the rule engine confusing.
+
+5. Strengthen derived field validation
+
+Please tighten validation for the derived field builder.
+
+Minimum validation rules
+
+A derived field must have:
+
+label
+sourceType = derived_field
+fieldA
+operator1
+operand B
+
+For operand B and operand C:
+
+if operand mode = field, a field ID is required
+if operand mode = constant, a constant value is required
+
+If operator2 is present:
+
+operand C is required
+
+If operator2 is absent:
+
+ignore operand C
+Why
+
+This prevents partially completed or ambiguous derivation definitions from being saved.
+
+6. Generate and expose a derivation summary
+
+For each derived field, generate a consistent human-readable summary string.
+
+Examples
+amount_due - current_due
+(nmpc - minimum_due_amount) * 6
+Requirement
+
+This summary should be available for:
+
+info popover
+field display/help text where useful
+Why
+
+Users need to understand what a derived field means after it has been created.
+
+7. Keep the implementation reusable for Blocked If later
+
+Phase 1 still only needs to be enabled for When to Offer, but the implementation should avoid hardcoding everything specifically to that one section.
+
+Requirement
+build the updated field picker and RHS mode logic in a reusable way
+only wire it into When to Offer now
+do not expand scope to Blocked If yet
+Why
+
+Blocked If will almost certainly need the same mechanics next.
+
+8. Make backward hydration rules explicit
+
+Please make the legacy-to-new hydration behavior explicit in the implementation.
+
+Required behavior
+
+For existing saved rules:
+
+if old rule only has plain string value, hydrate as:
+rightMode = constant
+rightFieldId = null
+preserve existing rule behavior and display
+if existing left field matches a source field, map it to the correct stable source field ID
+Why
+
+This reduces migration regressions and ensures existing treatments still render correctly.
+
+9. Info icon scope: keep it practical
+
+Please implement the info icon in the rule engine where it matters most, but do not over-engineer it globally.
+
+Minimum requirement
+
+Show info metadata on selected/displayed fields in the rule row:
+
+label
+description
+source type
+derivation summary for derived fields
+
+If dropdown item-level info is easy, that is a bonus, but not required for Phase 1.
+
+Clarified API expectations
+GET /api/policy-fields
+
+Should return a unified list for the current user’s company containing:
+
+all business fields for the company
+all derived fields for the company
+source fields synthesized from existing mapped/known fields using stable source IDs
+
+Each field object should include at least:
+
+id
+label
+description
+sourceType
+derivationConfig nullable
+derivationSummary nullable
+POST /api/policy-fields
+
+Should support creation of:
+
+business_field
+derived_field
+Validation
+label required
+sourceType required
+duplicate label check required
+derived field requires valid derivation config
+
+On success:
+
+return the full created field object in the same shape expected by the frontend registry
+Clarified frontend expectations
+Field picker
+
+Any field picker in the rule engine should show:
+
+source fields
+business fields
+derived fields
++ Add customer field
+
+Newly created field should:
+
+save successfully
+appear immediately in the local field list
+be preselected where appropriate
+Rule row RHS
+
+Each rule row must support:
+
+Constant mode → current text input behavior
+Field mode → same field picker as left side
+
+For:
+
+is empty
+is not empty
+
+RHS should be hidden or disabled.
+
+Final note
+
+Please keep the overall plan and scope exactly as Phase 1. These refinements are not asking for more features — they are guardrails to make the implementation cleaner, more stable, and easier to build on in Phase 2.

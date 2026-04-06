@@ -1,0 +1,524 @@
+Beacon Rule Engine Phase 1 — Implementation Brief
+
+Build the following Phase 1 enhancements to the Policy Configuration → Section D Treatment Rule Engine, specifically for “When to Offer” and the supporting field model.
+
+Goal
+
+Upgrade the current rule engine from a simple field/operator/value filter into a more flexible policy rule builder that supports:
+
+inline creation of new fields during rule setup
+support for source, business, and derived fields
+support for derived field definitions
+support for comparing a field against:
+a constant value
+another field
+no full free-form expressions in rule rows
+no explicit field type management in the UI for Phase 1
+
+The design should remain lightweight and easy for business users configuring policy.
+
+Product Decisions to Follow
+1. Field source types in Phase 1
+
+We will support these field source types:
+
+source_field
+business_field
+derived_field
+Definitions
+source_field: existing mapped/uploaded fields already shown in the dropdown today
+business_field: new semantic field created by the user during policy setup
+derived_field: new field created by the user and defined from other fields using a simple derivation builder
+Important
+All existing dropdown fields should automatically be treated as source_field
+User does not need to manually create a source_field
+We are not introducing system_field in Phase 1 for this flow
+2. No separate “Policy Fields” section in Phase 1
+
+Do not add a separate standalone Policy Fields page/section.
+
+Instead, field creation must happen inside the rule-building flow.
+
+When the user opens a field dropdown, they should be able to choose:
+
+existing fields
++ Add customer field
+
+This keeps the flow lightweight and contextual.
+
+3. No explicit type handling in UI in Phase 1
+
+Do not add type selection to the create-field form yet.
+
+No user-facing field type UI for:
+
+text
+number
+date
+currency
+enum
+etc.
+
+We may support types later, but not in Phase 1.
+
+Implementation can remain flexible underneath for future extension, but the user should not see or manage field types right now.
+
+4. Rule values must support 2 modes
+
+For rule conditions, the right-hand side must support:
+
+Constant value
+Another field
+
+“Another field” can be:
+
+source field
+business field
+derived field
+
+This allows rules like:
+
+dpd_bucket >= 30
+nmpc > minimum_due_amount
+six_month_repayment_capacity >= total_arrears
+5. No free-form expressions in rule rows
+
+Do not allow arbitrary expressions directly in a rule row.
+
+Examples we do not want directly in rule rows:
+
+(nmpc - minimum_due) * 6 >= total_arrears
+
+Instead, users should create a derived field first, then use that derived field in rules.
+
+Example:
+
+define six_month_repayment_capacity
+define total_arrears
+then use:
+six_month_repayment_capacity >= total_arrears
+UX Requirements
+A. Field dropdown behavior
+
+Anywhere the user selects a field in the rule engine, the dropdown should show:
+
+Existing source fields
+Existing business fields
+Existing derived fields
+Final action: + Add customer field
+Notes
+Existing fields should remain selectable as today
+User should not leave the rule builder to add a field
+Newly created fields should immediately appear in the dropdown after save
+B. Add customer field flow
+
+When user clicks + Add customer field, open a modal or inline drawer.
+
+Step 1: Basic field setup
+
+Collect:
+
+Field Label
+Description
+Source Type
+Business field
+Derived field
+Notes
+Do not offer source_field in this creation flow
+existing mapped fields already cover source fields
+C. Business field creation
+
+If user selects Business field, show only:
+
+Field Label
+Description
+
+On save:
+
+create the field
+add it to available fields
+make it selectable immediately in the current rule setup
+
+Examples:
+
+Affordability
+Willingness
+Payment Target
+NMPC
+D. Derived field creation
+
+If user selects Derived field, show:
+
+Field Label
+Description
+Derivation builder
+Derivation builder format
+
+Phase 1 derived field definition should support:
+
+Field A
+Operation 1
+Field B
+optional Operation 2
+optional Field or Constant C
+
+This is the exact model we agreed for Phase 1.
+
+Examples to support
+total_arrears = amount_due - current_due
+capacity_gap = nmpc - minimum_due_amount
+six_month_repayment_capacity = capacity_gap * 6
+six_month_repayment_capacity = (nmpc - minimum_due_amount) * 6
+UX expectation
+
+The builder should make this possible without requiring free-form formula typing.
+
+Recommended UI shape
+
+For Phase 1:
+
+Left operand dropdown = Field A
+Operator 1 dropdown = + - * /
+Operand B selector = field or constant
+optional second step:
+Operator 2 dropdown = + - * /
+Operand C selector = field or constant
+Important
+
+Operand B and Operand C should support:
+
+selecting a field
+entering a constant
+E. Info icon on fields
+
+For any displayed field in the rule engine UI, add a small info icon where practical.
+
+On hover/click, show field metadata:
+
+Label
+Description
+Source type (source_field, business_field, derived_field)
+If derived:
+show its derivation summary
+
+Examples:
+
+Derived from: amount_due - current_due
+Derived from: (nmpc - minimum_due_amount) * 6
+
+This helps users understand custom fields later.
+
+Rule Engine Requirements
+1. Update rule condition model
+
+Current rule conditions are too limited if they only support:
+
+field
+operator
+value string
+
+Phase 1 rule conditions must support:
+
+left side = selected field
+operator = comparison operator
+right side mode =
+constant
+field
+Comparison operators to keep
+
+Use current supported operators where relevant, at least:
+
+=
+!=
+>
+>=
+<
+<=
+contains
+is empty
+is not empty
+Important behavior
+For is empty and is not empty, right side should be hidden / not required
+For all other operators, right side is required
+2. Right-hand side mode selector
+
+In each rule row, the right side should have a small selector or toggle:
+
+Constant
+Field
+If Constant
+
+Show existing value input
+
+If Field
+
+Show field dropdown using same field picker as left side:
+
+source fields
+business fields
+derived fields
+plus + Add customer field
+3. Derived fields must be reusable
+
+Once a derived field is created, it should behave like any other selectable field in rules.
+
+Examples:
+
+left side can be a derived field
+right side can be a derived field
+
+This is essential.
+
+4. No expression editor inside rule row
+
+Do not build:
+
+free-form formula input
+advanced expression editor
+parser for arbitrary expressions typed by the user in the rule row UI
+
+All complexity should be handled through reusable derived fields.
+
+Data / Storage Requirements
+
+Implement storage in a way that supports Phase 1 cleanly and allows later expansion.
+
+A. Field registry
+
+Introduce a stored registry of fields available to policy/treatment rules.
+
+Each field should store at least:
+
+id
+label
+description
+sourceType
+source_field
+business_field
+derived_field
+
+For derived fields, also store the derivation config.
+
+Suggested derived field structure
+
+Store enough data to reconstruct the formula builder:
+
+fieldA
+operator1
+operandBType (field or constant)
+operandBValue
+optional operator2
+optional operandCType (field or constant)
+optional operandCValue
+
+Also store a human-readable summary string for UI display.
+
+Example:
+
+(nmpc - minimum_due_amount) * 6
+B. Existing mapped fields
+
+Existing mapped/uploaded fields do not need manual creation, but they should still be treated in the rule engine as available fields with:
+
+label
+source type = source_field
+
+If descriptions are not available, description can be blank.
+
+C. Rule condition storage
+
+Update treatment rule conditions so the right-hand side can be either:
+
+constant
+field reference
+Suggested model
+
+Each condition should store at least:
+
+leftFieldId
+operator
+rightMode = constant or field
+rightConstantValue (nullable)
+rightFieldId (nullable)
+
+This is enough for Phase 1.
+
+Behavior Requirements
+1. Immediate usability after field creation
+
+When a user creates a business or derived field:
+
+it should save successfully
+it should become immediately available in the current rule builder session
+user should not need to refresh page
+2. Derived field display name
+
+Derived fields should display like normal fields in dropdowns, but ideally include a subtle indicator/icon to distinguish them.
+
+Example:
+
+Total Arrears
+Six Month Repayment Capacity
+
+Optional small badge:
+
+Derived
+Business
+Source
+
+Not mandatory, but useful.
+
+3. Validation
+
+Implement only lightweight validation for Phase 1.
+
+Required validations
+field label required
+source type required for new custom field
+derived field must have:
+Field A
+Operator 1
+Operand B
+if Operation 2 is present, Operand C must also be present
+duplicate empty or invalid rule rows should not save
+if right mode is field, right field selection is required
+if right mode is constant, constant value is required except for empty/not-empty operators
+Do not overbuild validation yet
+
+No need for:
+
+advanced type validation
+circular dependency detection in Phase 1 unless easy
+complex formula parsing
+unit enforcement
+
+Keep it pragmatic.
+
+UI Scope in Treatment Rule Engine
+
+Apply these Phase 1 changes specifically in the When to Offer rule engine.
+
+If the same shared component is reused later for:
+
+Blocked If
+other rule sections
+
+that is fine, but the immediate requirement is for When to Offer.
+
+Examples the implementation must support
+Example 1
+
+Create business field:
+
+Label: Affordability
+Description: Customer affordability band used for treatment policy
+
+Then use in a rule:
+
+Affordability = HIGH
+
+Right side mode:
+
+Constant
+Example 2
+
+Create business field:
+
+Label: NMPC
+Description: Next Month Payment Capacity
+
+Then compare:
+
+NMPC > minimum_due_amount
+
+Right side mode:
+
+Field
+Example 3
+
+Create derived field:
+
+Label: Total Arrears
+Description: Amount due minus current due
+Derivation:
+amount_due
+-
+current_due
+
+Then use:
+
+Total Arrears > 0
+Example 4
+
+Create derived field:
+
+Label: Six Month Repayment Capacity
+Description: Capacity gap multiplied by six
+Derivation:
+nmpc
+-
+minimum_due_amount
+then *
+6
+
+Then use:
+
+Six Month Repayment Capacity >= Total Arrears
+
+Right side mode:
+
+Field
+Out of Scope for Phase 1
+
+Do not build these now:
+
+standalone Policy Fields section/page
+field type management in UI
+full expression editor in rule rows
+system fields
+advanced formula language
+nested formula builder beyond the agreed 2-operation model
+complex dependency graph management
+advanced rule testing engine
+major redesign of the rest of policy config
+Implementation Notes
+Prefer minimal-change integration
+
+Integrate into the existing treatment rule engine and current UI patterns instead of redesigning the whole policy section.
+
+Keep the UX simple
+
+This is for business users, not technical users. Avoid exposing internal complexity.
+
+Design principle
+
+The Phase 1 experience should feel like:
+
+pick a field
+if needed, add a missing field inline
+if needed, define a simple derived field
+compare against constant or another field
+Acceptance Criteria
+
+Phase 1 is complete when all of the following are true:
+
+In the rule engine field dropdown, user can choose + Add customer field
+User can create a business field inline with:
+label
+description
+User can create a derived field inline with:
+label
+description
+derivation builder
+New fields appear immediately in dropdowns
+Existing mapped fields are treated as source_field
+Rule right-hand side supports:
+constant
+field
+Derived fields can be used on either side of comparisons
+No free-form expression editor exists in rule rows
+Info metadata is accessible for fields
+Existing “When to Offer” behavior still works for simple source-field rules
+Final instruction
+
+Implement this as Phase 1 only. Do not add extra architecture or advanced configurability beyond what is specified here unless required to make the feature work cleanly.
