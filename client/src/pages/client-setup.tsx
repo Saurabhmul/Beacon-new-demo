@@ -695,11 +695,22 @@ function TreatmentCard({ treatment, knownFields, isReadOnly, onUpdate, onDelete 
   );
 }
 
+const PRELOADED_TREATMENTS = [
+  { name: "Forbearance / Payment Holiday", shortDescription: "Temporarily pausing or reducing payments for a set period (typically 1–6 months). The loan still accrues interest, but the customer gets breathing room. Used when the customer genuinely can't pay right now but the situation is temporary." },
+  { name: "Loan Modification / Restructure", shortDescription: "Permanently changing the loan terms: extending tenor, reducing interest rate, reducing EMI amount, or some combination. Used when the customer's financial situation has fundamentally changed and the original terms are no longer realistic." },
+  { name: "Reaging / Re-amortization", shortDescription: "Resetting the delinquency clock back to current after the customer demonstrates good behavior (e.g., 3 consecutive on-time payments). The past-due status is wiped. Sometimes combined with capitalizing the arrears into the remaining loan balance." },
+  { name: "Interest Rate Reduction", shortDescription: "Specifically lowering the rate, either temporarily or permanently, to make payments more affordable. Sometimes a standalone action, sometimes part of a broader modification." },
+  { name: "Capitalization of Arrears", shortDescription: "Rolling the missed payment amounts into the remaining principal balance and recalculating the EMI. The customer doesn't have to \"catch up\" separately — the arrears just become part of the loan going forward." },
+  { name: "Deferment", shortDescription: "Specifically for education/student loans, pausing payments entirely because the borrower meets a qualifying condition (still in school, military service, economic hardship). Different from forbearance because it's often interest-free or subsidised." },
+  { name: "Clear Arrears Plan", shortDescription: "Customer is encouraged to pay above the Minimum Amount Due to clear outstanding arrears within a target period. No loan modification or system intervention needed — the arrears clear naturally through consistent overpayment." },
+  { name: "Write-Off / Debt Settlement", shortDescription: "Offering a reduced lump-sum settlement to close the account. Used in late-stage collections when full recovery is unlikely. Typically requires management approval." },
+];
+
 function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
   const { toast } = useToast();
 
   const { data: policyPack, isLoading: packLoading } = useQuery<PolicyPack>({ queryKey: ["/api/policy-pack"], retry: false });
-  const { data: serverTreatments = [], isLoading: txLoading } = useQuery<TreatmentWithRules[]>({ queryKey: ["/api/policy-pack/treatments"], enabled: true });
+  const { data: serverTreatmentsData, isLoading: txLoading } = useQuery<TreatmentWithRules[]>({ queryKey: ["/api/policy-pack/treatments"] });
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], retry: false });
 
   const knownFields = useMemo(() => {
@@ -720,20 +731,25 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
   const [addName, setAddName] = useState("");
   const [addDesc, setAddDesc] = useState("");
   const [addEnabled, setAddEnabled] = useState(true);
+  const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set());
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [buildSelectedTemplates, setBuildSelectedTemplates] = useState<Set<string>>(new Set());
   const sopInputRef = useRef<HTMLInputElement>(null);
 
   // Sync from server — preserve expanded/activeSection state
+  // Note: use serverTreatmentsData (not a defaulted alias) to keep stable reference when undefined
   useEffect(() => {
+    if (!serverTreatmentsData) return;
     setLocalTreatments(prev => {
       const drafts = prev.filter(t => t.isDraft);
-      const serverLocals = serverTreatments.map(tx => {
+      const serverLocals = serverTreatmentsData.map(tx => {
         const existing = prev.find(p => p.dbId === tx.id);
         const base = serverTxToLocal(tx);
         return existing ? { ...base, expanded: existing.expanded, activeSection: existing.activeSection } : base;
       });
       return [...serverLocals, ...drafts];
     });
-  }, [serverTreatments]);
+  }, [serverTreatmentsData]);
 
   const createPackMutation = useMutation({
     mutationFn: async (data: { policyName: string; sourceType: string; sourceFileName?: string }) => {
@@ -746,9 +762,24 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
     onError: () => toast({ title: "Error", description: "Failed to create policy pack", variant: "destructive" }),
   });
 
+  function makeTemplateLocal(name: string, shortDescription: string, expanded = false): LocalTreatment {
+    return {
+      localId: crypto.randomUUID(), dbId: undefined, name, shortDescription,
+      enabled: true, priority: "", tone: "",
+      whenToOffer: makeEmptyGroup(), blockedIf: makeEmptyGroup(),
+      isDraft: true, expanded, activeSection: "when",
+    };
+  }
+
   async function handleStartBuild() {
     if (!packNameInput.trim()) return;
     await createPackMutation.mutateAsync({ policyName: packNameInput, sourceType: "ui" });
+    if (buildSelectedTemplates.size > 0) {
+      const drafts = PRELOADED_TREATMENTS
+        .filter(t => buildSelectedTemplates.has(t.name))
+        .map(t => makeTemplateLocal(t.name, t.shortDescription));
+      setLocalTreatments(prev => [...prev, ...drafts]);
+    }
     setEntryMode(null);
   }
 
@@ -771,15 +802,25 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
     } finally { setSopExtracting(false); }
   }
 
-  function handleAddTreatment() {
-    if (!addName.trim()) return;
-    setLocalTreatments(prev => [...prev, {
-      localId: crypto.randomUUID(), dbId: undefined, name: addName.trim(),
-      shortDescription: addDesc, enabled: addEnabled, priority: "", tone: "",
-      whenToOffer: makeEmptyGroup(), blockedIf: makeEmptyGroup(),
-      isDraft: true, expanded: true, activeSection: "when",
-    }]);
-    setAddDialogOpen(false); setAddName(""); setAddDesc(""); setAddEnabled(true);
+  function closeAddDialog() {
+    setAddDialogOpen(false);
+    setSelectedTemplates(new Set());
+    setShowCustomForm(false);
+    setAddName(""); setAddDesc(""); setAddEnabled(true);
+  }
+
+  function handleAddFromDialog() {
+    const newTreatments: LocalTreatment[] = [];
+    for (const name of selectedTemplates) {
+      const t = PRELOADED_TREATMENTS.find(p => p.name === name);
+      if (t) newTreatments.push(makeTemplateLocal(t.name, t.shortDescription, true));
+    }
+    if (showCustomForm && addName.trim()) {
+      newTreatments.push(makeTemplateLocal(addName.trim(), addDesc, true));
+    }
+    if (!newTreatments.length) return;
+    setLocalTreatments(prev => [...prev, ...newTreatments]);
+    closeAddDialog();
   }
 
   const hasPack = !!policyPack;
@@ -830,18 +871,47 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Build in Beacon</CardTitle>
-            <CardDescription>Give your policy pack a name then start adding treatments.</CardDescription>
+            <CardDescription>Name your policy pack and pick from our treatment library — or start with an empty pack and add treatments later.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-5">
             <div>
               <label className="text-sm font-medium mb-1.5 block">Policy name <span className="text-destructive">*</span></label>
               <Input value={packNameInput} onChange={e => setPackNameInput(e.target.value)}
                 placeholder="e.g. Standard Collections Policy 2025" className="max-w-md"
                 data-testid="input-pack-name-build" />
             </div>
-            <div className="flex gap-2">
+
+            <div>
+              <p className="text-sm font-medium mb-2">Select treatments to include</p>
+              <p className="text-xs text-muted-foreground mb-3">You can always add or remove treatments later. Select any that apply to your business.</p>
+              <div className="space-y-2">
+                {PRELOADED_TREATMENTS.map(t => {
+                  const checked = buildSelectedTemplates.has(t.name);
+                  return (
+                    <label key={t.name}
+                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors select-none ${checked ? "border-primary/30 bg-primary/5" : "hover:bg-muted/40 border-border"}`}
+                      data-testid={`label-build-template-${t.name}`}>
+                      <Checkbox checked={checked}
+                        onCheckedChange={v => setBuildSelectedTemplates(prev => {
+                          const next = new Set(prev);
+                          if (v) next.add(t.name); else next.delete(t.name);
+                          return next;
+                        })}
+                        className="mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium leading-snug">{t.name}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{t.shortDescription}</p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-1">
               <Button onClick={handleStartBuild} disabled={!packNameInput.trim() || createPackMutation.isPending} data-testid="button-start-build">
-                {createPackMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}Get Started
+                {createPackMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                {buildSelectedTemplates.size > 0 ? `Get Started with ${buildSelectedTemplates.size} Treatment${buildSelectedTemplates.size !== 1 ? "s" : ""}` : "Get Started"}
               </Button>
               <Button variant="outline" onClick={() => setEntryMode(null)}>Back</Button>
             </div>
@@ -953,29 +1023,89 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
       )}
 
       {/* Add Treatment Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Add Treatment</DialogTitle></DialogHeader>
-          <div className="space-y-4 py-2">
-            <div>
-              <label className="text-sm font-medium mb-1.5 block">Treatment name <span className="text-destructive">*</span></label>
-              <Input value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. Payment Holiday"
-                data-testid="input-add-treatment-name" />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1.5 block">Short description</label>
-              <Textarea value={addDesc} onChange={e => setAddDesc(e.target.value)}
-                placeholder="Briefly describe when and how this treatment is applied…"
-                className="min-h-[80px] text-sm" data-testid="textarea-add-treatment-desc" />
-            </div>
-            <div className="flex items-center gap-3">
-              <Switch checked={addEnabled} onCheckedChange={setAddEnabled} data-testid="switch-add-enabled" />
-              <Label>Enabled</Label>
+      <Dialog open={addDialogOpen} onOpenChange={v => { if (!v) closeAddDialog(); else setAddDialogOpen(true); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
+            <DialogTitle>Add Treatments</DialogTitle>
+            <p className="text-sm text-muted-foreground">Pick from our treatment library, create your own, or both.</p>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+            {/* Template library */}
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Treatment library</p>
+            {PRELOADED_TREATMENTS.map(t => {
+              const alreadyAdded = localTreatments.some(lt => lt.name === t.name);
+              const checked = selectedTemplates.has(t.name);
+              return (
+                <label key={t.name}
+                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors select-none ${alreadyAdded ? "opacity-50 cursor-not-allowed border-border bg-muted/30" : checked ? "border-primary/30 bg-primary/5" : "hover:bg-muted/40 border-border"}`}
+                  data-testid={`label-template-${t.name}`}>
+                  <Checkbox checked={checked} disabled={alreadyAdded}
+                    onCheckedChange={v => {
+                      if (alreadyAdded) return;
+                      setSelectedTemplates(prev => {
+                        const next = new Set(prev);
+                        if (v) next.add(t.name); else next.delete(t.name);
+                        return next;
+                      });
+                    }}
+                    className="mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium leading-snug">{t.name}</p>
+                      {alreadyAdded && <Badge variant="secondary" className="text-[10px] shrink-0">Already added</Badge>}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{t.shortDescription}</p>
+                  </div>
+                </label>
+              );
+            })}
+
+            {/* Custom treatment toggle */}
+            <div className="border-t pt-3">
+              {!showCustomForm ? (
+                <Button variant="outline" size="sm" className="w-full" onClick={() => setShowCustomForm(true)}
+                  data-testid="button-show-custom-form">
+                  <Plus className="w-3.5 h-3.5 mr-1.5" />Create custom treatment
+                </Button>
+              ) : (
+                <div className="space-y-3 p-4 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium">Custom treatment</p>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setShowCustomForm(false); setAddName(""); setAddDesc(""); }}>
+                      <X className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-1.5 block">Name <span className="text-destructive">*</span></label>
+                    <Input value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. Payment Holiday"
+                      data-testid="input-add-treatment-name" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-1.5 block">Short description</label>
+                    <Textarea value={addDesc} onChange={e => setAddDesc(e.target.value)}
+                      placeholder="Describe when and how this treatment is applied…"
+                      className="min-h-[72px] text-sm" data-testid="textarea-add-treatment-desc" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Switch checked={addEnabled} onCheckedChange={setAddEnabled} data-testid="switch-add-enabled" />
+                    <Label className="text-sm">Enabled</Label>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleAddTreatment} disabled={!addName.trim()} data-testid="button-confirm-add-treatment">Add Treatment</Button>
+
+          <DialogFooter className="shrink-0 border-t pt-4">
+            <Button variant="outline" onClick={closeAddDialog}>Cancel</Button>
+            <Button onClick={handleAddFromDialog}
+              disabled={selectedTemplates.size === 0 && !(showCustomForm && addName.trim())}
+              data-testid="button-confirm-add-treatment">
+              {(() => {
+                const count = selectedTemplates.size + (showCustomForm && addName.trim() ? 1 : 0);
+                return count > 1 ? `Add ${count} Treatments` : "Add Treatment";
+              })()}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
