@@ -1624,8 +1624,8 @@ function DataConfigTab() {
                                             data-testid={`input-field-desc-${cat.id}-${idx}`}
                                           />
                                         ) : (
-                                          <span
-                                            className={`text-xs block leading-relaxed ${!isReadOnly && !field.ignored ? "cursor-pointer hover:text-primary" : ""}`}
+                                          <div
+                                            className={`flex items-start gap-1.5 ${!isReadOnly && !field.ignored ? "cursor-pointer group" : ""}`}
                                             onClick={() => {
                                               if (!isReadOnly && !field.ignored) {
                                                 setEditingField({ categoryId: cat.id, fieldIndex: idx });
@@ -1634,11 +1634,16 @@ function DataConfigTab() {
                                             }}
                                             data-testid={`text-field-desc-${cat.id}-${idx}`}
                                           >
-                                            {field.userDescription || field.beaconsUnderstanding}
-                                            {field.userDescription && (
-                                              <span className="text-muted-foreground ml-1 text-[10px]">(edited)</span>
+                                            <span className={`text-xs leading-relaxed group-hover:text-primary transition-colors`}>
+                                              {field.userDescription || field.beaconsUnderstanding}
+                                              {field.userDescription && (
+                                                <span className="text-muted-foreground ml-1 text-[10px]">(edited)</span>
+                                              )}
+                                            </span>
+                                            {!isReadOnly && !field.ignored && (
+                                              <Pencil className="w-3 h-3 text-muted-foreground group-hover:text-primary flex-shrink-0 mt-0.5 transition-colors" />
                                             )}
-                                          </span>
+                                          </div>
                                         )}
                                       </td>
                                       <td className="px-3 py-2">
