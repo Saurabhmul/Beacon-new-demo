@@ -788,10 +788,18 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
 
       const extractedLocals: LocalTreatment[] = extracted.map(extractionToLocal);
 
-      // Partition into clean vs conflicting (case-insensitive name match)
+      // De-duplicate within the extracted batch (keep first occurrence by name)
+      const seenInBatch = new Set<string>();
+      const deduped: LocalTreatment[] = [];
+      for (const ex of extractedLocals) {
+        const key = ex.name.trim().toLowerCase();
+        if (!seenInBatch.has(key)) { seenInBatch.add(key); deduped.push(ex); }
+      }
+
+      // Partition into clean vs conflicting (case-insensitive name match against existing)
       const clean: LocalTreatment[] = [];
       const newConflicts: SopConflict[] = [];
-      for (const ex of extractedLocals) {
+      for (const ex of deduped) {
         const existing = localTreatments.find(lt => lt.name.trim().toLowerCase() === ex.name.trim().toLowerCase());
         if (existing) newConflicts.push({ extracted: ex, existing });
         else clean.push(ex);
