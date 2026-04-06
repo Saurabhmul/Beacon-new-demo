@@ -744,31 +744,15 @@ export default function UploadPage() {
 
   const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"], enabled: !noCompanySelected });
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], enabled: !noCompanySelected });
-  const { data: conversationUploads = [] } = useQuery<DataUpload[]>({
-    queryKey: ["/api/uploads", "conversation_history"],
-    queryFn: async () => {
-      const res = await fetch(`/api/uploads?category=conversation_history`, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: !noCompanySelected,
-  });
 
   const categories = useMemo<string[]>(() => {
     const selected = ((dataConfig as any)?.selectedCategories as string[] | undefined) || [];
-    if (selected.length > 0) {
-      return selected
-        .filter(cat => !NON_UPLOAD_CATEGORIES.has(cat))
-        .map(cat => DATA_CONFIG_TO_UPLOAD[cat] || cat)
-        .filter(Boolean);
-    }
-    const base: string[] = ["loan_data", "payment_history"];
-    const enabledInConfig = dataConfig?.optionalFields
-      ? (dataConfig.optionalFields as string[]).includes("conversation_history")
-      : false;
-    if (enabledInConfig || conversationUploads.length > 0) base.push("conversation_history");
-    return base;
-  }, [dataConfig, conversationUploads]);
+    if (selected.length === 0) return [];
+    return selected
+      .filter(cat => !NON_UPLOAD_CATEGORIES.has(cat))
+      .map(cat => DATA_CONFIG_TO_UPLOAD[cat] || cat)
+      .filter(Boolean);
+  }, [dataConfig]);
 
   if (noCompanySelected) {
     return (
@@ -800,6 +784,68 @@ export default function UploadPage() {
     );
   }
 
+  const PLACEHOLDER_CATEGORIES = [
+    { key: "loan_data", label: "Loan Data", icon: Landmark },
+    { key: "payment_history", label: "Payment History", icon: CreditCard },
+    { key: "conversation_history", label: "Conversation History", icon: MessageSquare },
+  ];
+
+  if (categories.length === 0) {
+    return (
+      <div className="p-6 max-w-6xl mx-auto space-y-6">
+        <div>
+          <h1 className="text-2xl font-sans font-bold tracking-tight" data-testid="text-upload-heading">
+            Upload Data
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Upload structured data files for AI analysis. Each section requires specific fields — download the sample CSV for reference.
+          </p>
+        </div>
+
+        <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3 flex items-start gap-3">
+          <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            No data categories have been configured yet. Go to <strong>Client Configuration → Data Configuration</strong> to select and configure your data categories before uploading.
+          </p>
+        </div>
+
+        <Tabs defaultValue="loan_data">
+          <TabsList data-testid="tabs-upload-category" className="opacity-50 pointer-events-none">
+            {PLACEHOLDER_CATEGORIES.map(({ key, label, icon: Icon }) => (
+              <TabsTrigger key={key} value={key} disabled>
+                <Icon className="w-4 h-4 mr-1.5" />
+                {label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          {PLACEHOLDER_CATEGORIES.map(({ key, label, icon: Icon }) => (
+            <TabsContent key={key} value={key} className="mt-4">
+              <Card className="opacity-50">
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <Icon className="w-5 h-5 text-muted-foreground" />
+                      <h2 className="text-lg font-semibold text-muted-foreground">{label}</h2>
+                    </div>
+                    <Button variant="outline" size="sm" disabled data-testid={`button-download-sample-${key}-placeholder`}>
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                      Download Sample CSV
+                    </Button>
+                  </div>
+                  <div className="border-2 border-dashed border-border rounded-md p-10 text-center">
+                    <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground">Configure data categories first to enable uploads.</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          ))}
+        </Tabs>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
@@ -811,14 +857,16 @@ export default function UploadPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="loan_data">
+      <Tabs defaultValue={categories[0]}>
         <TabsList data-testid="tabs-upload-category">
           {categories.map((cat) => {
-            const Icon = CATEGORY_META[cat].icon;
+            const meta = CATEGORY_META[cat];
+            if (!meta) return null;
+            const Icon = meta.icon;
             return (
               <TabsTrigger key={cat} value={cat} data-testid={`tab-${cat}`}>
                 <Icon className="w-4 h-4 mr-1.5" />
-                {CATEGORY_META[cat].label}
+                {meta.label}
               </TabsTrigger>
             );
           })}
