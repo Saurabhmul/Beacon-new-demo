@@ -2734,15 +2734,15 @@ export default function ClientSetupPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="policy" className="w-full">
+      <Tabs defaultValue="data-config" className="w-full">
         <TabsList className="mb-4">
-          <TabsTrigger value="policy" data-testid="tab-policy-config">
-            <Shield className="w-3.5 h-3.5 mr-1.5" />
-            Policy Config
-          </TabsTrigger>
           <TabsTrigger value="data-config" data-testid="tab-data-config">
             <Database className="w-3.5 h-3.5 mr-1.5" />
             Data Configuration
+          </TabsTrigger>
+          <TabsTrigger value="policy" data-testid="tab-policy-config">
+            <Shield className="w-3.5 h-3.5 mr-1.5" />
+            Policy Config
           </TabsTrigger>
           {isSuperAdmin && (
             <TabsTrigger value="prompt-config" data-testid="tab-prompt-config">
@@ -2752,12 +2752,12 @@ export default function ClientSetupPage() {
           )}
         </TabsList>
 
-        <TabsContent value="policy">
-          <PolicyConfigTab />
-        </TabsContent>
-
         <TabsContent value="data-config">
           <DataConfigTab />
+        </TabsContent>
+
+        <TabsContent value="policy">
+          <PolicyConfigTab />
         </TabsContent>
 
         {isSuperAdmin && (
