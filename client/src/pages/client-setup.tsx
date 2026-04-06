@@ -782,6 +782,15 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
       const { treatments: extracted } = await res.json();
       if (!extracted?.length) { toast({ title: "No treatments found", description: "Beacon couldn't extract treatments from this file.", variant: "destructive" }); return; }
       setLocalTreatments(prev => [...prev, ...extracted.map(extractionToLocal)]);
+      // Update pack provenance to reflect SOP extraction
+      if (policyPack && policyPack.sourceType !== "file") {
+        await fetch("/api/policy-pack", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ id: policyPack.id, policyName: policyPack.policyName, sourceType: "file", sourceFileName: sopFile.name }),
+        });
+      }
       setEntryMode(null);
       toast({ title: `${extracted.length} treatment${extracted.length !== 1 ? "s" : ""} extracted`, description: "Review and save each treatment below." });
     } catch {
@@ -1402,24 +1411,30 @@ function PolicyConfigTab() {
             {!policyPack ? (
               <div>
                 <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-1">Policy</p>
-                <p className="text-sm text-muted-foreground mb-4">Give this policy a name to unlock all configuration sections below.</p>
-                <div className="flex items-center gap-3 flex-wrap">
-                  <Input
-                    value={policyNameInput}
-                    onChange={e => setPolicyNameInput(e.target.value)}
-                    placeholder="e.g. Standard Collections Policy 2025"
-                    className="max-w-sm"
-                    onKeyDown={e => { if (e.key === "Enter" && policyNameInput.trim()) createPackMutation.mutate(policyNameInput.trim()); }}
-                    data-testid="input-policy-name"
-                  />
-                  <Button
-                    onClick={() => createPackMutation.mutate(policyNameInput.trim())}
-                    disabled={!policyNameInput.trim() || createPackMutation.isPending}
-                    data-testid="button-create-policy">
-                    {createPackMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                    Create Policy
-                  </Button>
-                </div>
+                {isReadOnly ? (
+                  <p className="text-sm text-muted-foreground">No policy has been created yet. An Admin must create one before configuration sections become available.</p>
+                ) : (
+                  <>
+                    <p className="text-sm text-muted-foreground mb-4">Give this policy a name to unlock all configuration sections below.</p>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <Input
+                        value={policyNameInput}
+                        onChange={e => setPolicyNameInput(e.target.value)}
+                        placeholder="e.g. Standard Collections Policy 2025"
+                        className="max-w-sm"
+                        onKeyDown={e => { if (e.key === "Enter" && policyNameInput.trim()) createPackMutation.mutate(policyNameInput.trim()); }}
+                        data-testid="input-policy-name"
+                      />
+                      <Button
+                        onClick={() => createPackMutation.mutate(policyNameInput.trim())}
+                        disabled={!policyNameInput.trim() || createPackMutation.isPending}
+                        data-testid="button-create-policy">
+                        {createPackMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                        Create Policy
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="flex items-start justify-between gap-4">
