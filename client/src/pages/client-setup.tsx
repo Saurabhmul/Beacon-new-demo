@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -42,9 +42,9 @@ import {
   Building2, Save, Loader2,
   BookOpen, Upload, FileText, Trash2, Plus, File as FileIcon,
   Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
-  Copy, RefreshCw, Info, Eye,
+  Copy, RefreshCw, Info, Eye, ChevronDown, ChevronRight, X, Wand2, FileUp,
 } from "lucide-react";
-import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview } from "@shared/schema";
+import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules } from "@shared/schema";
 
 
 const MANDATORY_LOAN_FIELDS = [
@@ -357,6 +357,633 @@ const DEFAULT_AFFORDABILITY_RULES: AffordabilityRule[] = [
   { id: 4, label: "VERY LOW", operator: "<", percentage: 10, condition: "NMPC = 0 OR NMPC < 10% of MAD. Also applies when no payment data exists.", isDefault: true },
 ];
 
+// ── Policy Pack — Rule Builder ─────────────────────────────────────────────────
+const RULE_OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "contains", "is empty", "is not empty"] as const;
+const NO_VALUE_OPERATORS = new Set(["is empty", "is not empty"]);
+const CUSTOM_FIELD_SENTINEL = "__custom__";
+
+interface LocalRuleRow {
+  localId: string;
+  fieldName: string;
+  useCustom: boolean;
+  customFieldName: string;
+  operator: string;
+  value: string;
+}
+interface LocalRuleGroup {
+  dbId?: number;
+  logicOperator: "AND" | "OR";
+  rows: LocalRuleRow[];
+}
+interface LocalTreatment {
+  localId: string;
+  dbId?: number;
+  name: string;
+  shortDescription: string;
+  enabled: boolean;
+  priority: string;
+  tone: string;
+  whenToOffer: LocalRuleGroup;
+  blockedIf: LocalRuleGroup;
+  isDraft: boolean;
+  expanded: boolean;
+  activeSection: "when" | "blocked";
+}
+
+function makeEmptyRow(): LocalRuleRow {
+  return { localId: crypto.randomUUID(), fieldName: "", useCustom: false, customFieldName: "", operator: "=", value: "" };
+}
+function makeEmptyGroup(): LocalRuleGroup {
+  return { logicOperator: "AND", rows: [] };
+}
+function serverGroupToLocal(ruleType: string, ruleGroups: TreatmentRuleGroupWithRules[]): LocalRuleGroup {
+  const group = ruleGroups.find(g => g.ruleType === ruleType);
+  if (!group) return makeEmptyGroup();
+  return {
+    dbId: group.id,
+    logicOperator: (group.logicOperator as "AND" | "OR") || "AND",
+    rows: group.rules.map(r => ({
+      localId: `r${r.id}`,
+      fieldName: r.fieldName,
+      useCustom: false,
+      customFieldName: "",
+      operator: r.operator,
+      value: r.value || "",
+    })),
+  };
+}
+function serverTxToLocal(tx: TreatmentWithRules): LocalTreatment {
+  return {
+    localId: `db-${tx.id}`,
+    dbId: tx.id,
+    name: tx.name,
+    shortDescription: tx.shortDescription || "",
+    enabled: tx.enabled,
+    priority: tx.priority || "",
+    tone: tx.tone || "",
+    whenToOffer: serverGroupToLocal("when_to_offer", tx.ruleGroups),
+    blockedIf: serverGroupToLocal("blocked_if", tx.ruleGroups),
+    isDraft: false,
+    expanded: false,
+    activeSection: "when",
+  };
+}
+function extractionToLocal(e: { name: string; shortDescription: string; whenToOffer: { fieldName: string; operator: string; value: string }[]; blockedIf: { fieldName: string; operator: string; value: string }[] }): LocalTreatment {
+  return {
+    localId: crypto.randomUUID(),
+    dbId: undefined,
+    name: e.name,
+    shortDescription: e.shortDescription || "",
+    enabled: true,
+    priority: "",
+    tone: "",
+    whenToOffer: { logicOperator: "AND", rows: e.whenToOffer.map(r => ({ localId: crypto.randomUUID(), fieldName: r.fieldName, useCustom: false, customFieldName: "", operator: r.operator, value: r.value })) },
+    blockedIf: { logicOperator: "AND", rows: e.blockedIf.map(r => ({ localId: crypto.randomUUID(), fieldName: r.fieldName, useCustom: false, customFieldName: "", operator: r.operator, value: r.value })) },
+    isDraft: true,
+    expanded: true,
+    activeSection: "when",
+  };
+}
+
+function RuleBuilderGroup({ group, knownFields, onChange, isReadOnly }: { group: LocalRuleGroup; knownFields: string[]; onChange: (g: LocalRuleGroup) => void; isReadOnly: boolean }) {
+  function updateRow(localId: string, patch: Partial<LocalRuleRow>) {
+    onChange({ ...group, rows: group.rows.map(r => r.localId === localId ? { ...r, ...patch } : r) });
+  }
+  function removeRow(localId: string) {
+    onChange({ ...group, rows: group.rows.filter(r => r.localId !== localId) });
+  }
+  return (
+    <div className="space-y-2">
+      {group.rows.length > 1 && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Match:</span>
+          {(["AND", "OR"] as const).map(op => (
+            <button key={op} type="button" disabled={isReadOnly}
+              className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${group.logicOperator === op ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted"}`}
+              onClick={() => onChange({ ...group, logicOperator: op })}>
+              {op === "AND" ? "All conditions" : "Any condition"}
+            </button>
+          ))}
+        </div>
+      )}
+      {group.rows.map((row, idx) => (
+        <div key={row.localId} className="flex items-center gap-2 flex-wrap">
+          {group.rows.length > 1 && (
+            <span className="text-[10px] text-muted-foreground w-6 shrink-0 text-right font-mono">
+              {idx === 0 ? "IF" : group.logicOperator}
+            </span>
+          )}
+          <div className="flex items-center gap-1">
+            {row.useCustom ? (
+              <>
+                <Input value={row.customFieldName}
+                  onChange={e => updateRow(row.localId, { customFieldName: e.target.value, fieldName: e.target.value })}
+                  placeholder="Enter field name..." className="h-8 text-xs w-40" disabled={isReadOnly}
+                  data-testid={`input-custom-field-${row.localId}`} />
+                {!isReadOnly && (
+                  <Button variant="ghost" size="icon" className="h-8 w-8"
+                    onClick={() => updateRow(row.localId, { useCustom: false, customFieldName: "", fieldName: "" })}>
+                    <X className="w-3 h-3" />
+                  </Button>
+                )}
+              </>
+            ) : (
+              <Select value={row.fieldName || ""} disabled={isReadOnly}
+                onValueChange={v => {
+                  if (v === CUSTOM_FIELD_SENTINEL) updateRow(row.localId, { useCustom: true, customFieldName: "", fieldName: "" });
+                  else updateRow(row.localId, { fieldName: v, useCustom: false });
+                }}>
+                <SelectTrigger className="h-8 text-xs w-44" data-testid={`select-field-${row.localId}`}>
+                  <SelectValue placeholder="Select field…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {knownFields.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                  <SelectItem value={CUSTOM_FIELD_SENTINEL} className="text-muted-foreground italic">Use custom field…</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <Select value={row.operator} onValueChange={v => updateRow(row.localId, { operator: v })} disabled={isReadOnly}>
+            <SelectTrigger className="h-8 text-xs w-32" data-testid={`select-operator-${row.localId}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RULE_OPERATORS.map(op => <SelectItem key={op} value={op}>{op}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {!NO_VALUE_OPERATORS.has(row.operator) && (
+            <Input value={row.value} onChange={e => updateRow(row.localId, { value: e.target.value })}
+              placeholder="Value…" className="h-8 text-xs w-32" disabled={isReadOnly}
+              data-testid={`input-value-${row.localId}`} />
+          )}
+          {!isReadOnly && (
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeRow(row.localId)}
+              data-testid={`button-remove-row-${row.localId}`}>
+              <Trash2 className="w-3 h-3 text-destructive" />
+            </Button>
+          )}
+        </div>
+      ))}
+      {!isReadOnly && (
+        <Button variant="outline" size="sm" className="h-7 text-xs"
+          onClick={() => onChange({ ...group, rows: [...group.rows, makeEmptyRow()] })}
+          data-testid="button-add-condition">
+          <Plus className="w-3 h-3 mr-1" />Add Condition
+        </Button>
+      )}
+      {group.rows.length === 0 && (
+        <p className="text-xs text-muted-foreground italic">{isReadOnly ? "No conditions defined." : "No conditions yet — add one above."}</p>
+      )}
+    </div>
+  );
+}
+
+function TreatmentCard({ treatment, knownFields, isReadOnly, onUpdate, onDelete }: {
+  treatment: LocalTreatment;
+  knownFields: string[];
+  isReadOnly: boolean;
+  onUpdate: (updated: LocalTreatment) => void;
+  onDelete: () => void;
+}) {
+  const { toast } = useToast();
+  const [local, setLocal] = useState<LocalTreatment>(treatment);
+  useEffect(() => { setLocal(t => ({ ...treatment, expanded: t.expanded, activeSection: t.activeSection })); }, [treatment.dbId, treatment.isDraft]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      let dbId = local.dbId;
+      if (!dbId) {
+        const tx = await apiRequest("POST", "/api/policy-pack/treatments", {
+          name: local.name, shortDescription: local.shortDescription || null,
+          enabled: local.enabled, priority: local.priority || null, tone: local.tone || null, displayOrder: 0,
+        }).then(r => r.json());
+        dbId = tx.id;
+      } else {
+        await apiRequest("PATCH", `/api/policy-pack/treatments/${dbId}`, {
+          name: local.name, shortDescription: local.shortDescription || null,
+          enabled: local.enabled, priority: local.priority || null, tone: local.tone || null,
+        });
+      }
+      const saveGroup = (g: LocalRuleGroup, ruleType: string) =>
+        apiRequest("POST", `/api/policy-pack/treatments/${dbId}/rules`, {
+          ruleType, logicOperator: g.logicOperator,
+          rows: g.rows.map(r => ({ fieldName: r.fieldName, operator: r.operator, value: r.value })),
+        });
+      await saveGroup(local.whenToOffer, "when_to_offer");
+      await saveGroup(local.blockedIf, "blocked_if");
+      return dbId;
+    },
+    onSuccess: (dbId) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-pack/treatments"] });
+      onUpdate({ ...local, dbId, isDraft: false });
+      toast({ title: `"${local.name}" saved` });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to save treatment", variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => { if (local.dbId) await apiRequest("DELETE", `/api/policy-pack/treatments/${local.dbId}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-pack/treatments"] });
+      onDelete();
+      toast({ title: `"${local.name}" removed` });
+    },
+  });
+
+  return (
+    <div className={`rounded-lg border transition-colors ${local.enabled ? "border-primary/20 bg-primary/5 dark:bg-primary/10" : "bg-muted/20 border-border"} ${local.isDraft ? "border-amber-300 dark:border-amber-700" : ""}`}
+      data-testid={`card-treatment-pack-${local.localId}`}>
+      {/* Header */}
+      <div className="flex items-center gap-2 p-3 flex-wrap">
+        <button type="button" className="text-muted-foreground hover:text-foreground shrink-0"
+          onClick={() => setLocal(l => ({ ...l, expanded: !l.expanded }))}
+          data-testid={`button-expand-${local.localId}`}>
+          {local.expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </button>
+        <Switch checked={local.enabled} onCheckedChange={v => setLocal(l => ({ ...l, enabled: v }))}
+          disabled={isReadOnly} data-testid={`switch-enabled-${local.localId}`} />
+        {!isReadOnly ? (
+          <Input value={local.name} onChange={e => setLocal(l => ({ ...l, name: e.target.value }))}
+            className="h-8 text-sm font-medium flex-1 min-w-[140px] max-w-xs border-transparent bg-transparent hover:border-border focus:border-border focus:bg-background transition-colors"
+            placeholder="Treatment name" data-testid={`input-name-${local.localId}`} />
+        ) : (
+          <span className="font-medium text-sm flex-1">{local.name}</span>
+        )}
+        {local.isDraft && <Badge variant="outline" className="text-amber-600 border-amber-400 text-[10px] shrink-0">Draft — unsaved</Badge>}
+        <Select value={local.priority || "_none"} onValueChange={v => setLocal(l => ({ ...l, priority: v === "_none" ? "" : v }))} disabled={isReadOnly}>
+          <SelectTrigger className="h-8 text-xs w-28 shrink-0" data-testid={`select-priority-${local.localId}`}>
+            <SelectValue placeholder="Priority" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="_none">No priority</SelectItem>
+            <SelectItem value="High">High</SelectItem>
+            <SelectItem value="Medium">Medium</SelectItem>
+            <SelectItem value="Low">Low</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={local.tone || "_none"} onValueChange={v => setLocal(l => ({ ...l, tone: v === "_none" ? "" : v }))} disabled={isReadOnly}>
+          <SelectTrigger className="h-8 text-xs w-32 shrink-0" data-testid={`select-tone-pack-${local.localId}`}>
+            <SelectValue placeholder="Tone" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="_none">No tone</SelectItem>
+            <SelectItem value="Supportive">Supportive</SelectItem>
+            <SelectItem value="Neutral">Neutral</SelectItem>
+            <SelectItem value="Firm">Firm</SelectItem>
+            <SelectItem value="Empathetic">Empathetic</SelectItem>
+          </SelectContent>
+        </Select>
+        {!isReadOnly && (
+          <div className="flex gap-1 shrink-0">
+            <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !local.name.trim()} className="h-8 text-xs" data-testid={`button-save-tx-${local.localId}`}>
+              {saveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+              <span className="ml-1">Save</span>
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}
+              className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+              data-testid={`button-delete-tx-${local.localId}`}>
+              <Trash2 className="w-3 h-3" />
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {local.expanded && (
+        <div className="px-4 pb-4 space-y-4 border-t pt-4">
+          {/* Short description */}
+          {!isReadOnly ? (
+            <Textarea value={local.shortDescription}
+              onChange={e => setLocal(l => ({ ...l, shortDescription: e.target.value }))}
+              placeholder="Short description of when and how this treatment is applied…"
+              className="text-xs min-h-[56px] resize-none" data-testid={`textarea-desc-${local.localId}`} />
+          ) : local.shortDescription ? (
+            <p className="text-xs text-muted-foreground leading-relaxed">{local.shortDescription}</p>
+          ) : null}
+
+          {/* Evaluation logic note */}
+          <div className="flex items-start gap-2 p-2.5 rounded-md bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
+            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>Beacon recommends this treatment when <strong>When to Offer</strong> conditions are met <strong>AND</strong> no <strong>Blocked If</strong> conditions are true.</span>
+          </div>
+
+          {/* Section tabs */}
+          <div className="flex gap-2">
+            {(["when", "blocked"] as const).map(s => {
+              const count = s === "when" ? local.whenToOffer.rows.length : local.blockedIf.rows.length;
+              return (
+                <button key={s} type="button"
+                  className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${local.activeSection === s ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted"}`}
+                  onClick={() => setLocal(l => ({ ...l, activeSection: s }))}>
+                  {s === "when" ? "When to Offer" : "Blocked If"}
+                  {count > 0 && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${local.activeSection === s ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted-foreground/20"}`}>{count}</span>}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Rule builder */}
+          {local.activeSection === "when" ? (
+            <RuleBuilderGroup group={local.whenToOffer} knownFields={knownFields}
+              onChange={g => setLocal(l => ({ ...l, whenToOffer: g }))} isReadOnly={isReadOnly} />
+          ) : (
+            <RuleBuilderGroup group={local.blockedIf} knownFields={knownFields}
+              onChange={g => setLocal(l => ({ ...l, blockedIf: g }))} isReadOnly={isReadOnly} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
+  const { toast } = useToast();
+
+  const { data: policyPack, isLoading: packLoading } = useQuery<PolicyPack>({ queryKey: ["/api/policy-pack"], retry: false });
+  const { data: serverTreatments = [], isLoading: txLoading } = useQuery<TreatmentWithRules[]>({ queryKey: ["/api/policy-pack/treatments"], enabled: true });
+  const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], retry: false });
+
+  const knownFields = useMemo(() => {
+    if (!dataConfig?.categoryData) return [];
+    const fields: string[] = [];
+    for (const entry of Object.values(dataConfig.categoryData as Record<string, { fieldAnalysis?: Array<{ fieldName: string; ignored: boolean }> }>)) {
+      if (entry.fieldAnalysis) for (const f of entry.fieldAnalysis) if (!f.ignored && f.fieldName) fields.push(f.fieldName);
+    }
+    return [...new Set(fields)];
+  }, [dataConfig]);
+
+  const [localTreatments, setLocalTreatments] = useState<LocalTreatment[]>([]);
+  const [entryMode, setEntryMode] = useState<"build" | "upload" | null>(null);
+  const [packNameInput, setPackNameInput] = useState("");
+  const [sopFile, setSopFile] = useState<File | null>(null);
+  const [sopExtracting, setSopExtracting] = useState(false);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addDesc, setAddDesc] = useState("");
+  const [addEnabled, setAddEnabled] = useState(true);
+  const sopInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync from server — preserve expanded/activeSection state
+  useEffect(() => {
+    setLocalTreatments(prev => {
+      const drafts = prev.filter(t => t.isDraft);
+      const serverLocals = serverTreatments.map(tx => {
+        const existing = prev.find(p => p.dbId === tx.id);
+        const base = serverTxToLocal(tx);
+        return existing ? { ...base, expanded: existing.expanded, activeSection: existing.activeSection } : base;
+      });
+      return [...serverLocals, ...drafts];
+    });
+  }, [serverTreatments]);
+
+  const createPackMutation = useMutation({
+    mutationFn: async (data: { policyName: string; sourceType: string; sourceFileName?: string }) => {
+      const pack = policyPack
+        ? await apiRequest("POST", "/api/policy-pack", { id: policyPack.id, ...data }).then(r => r.json())
+        : await apiRequest("POST", "/api/policy-pack", data).then(r => r.json());
+      return pack;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/policy-pack"] }),
+    onError: () => toast({ title: "Error", description: "Failed to create policy pack", variant: "destructive" }),
+  });
+
+  async function handleStartBuild() {
+    if (!packNameInput.trim()) return;
+    await createPackMutation.mutateAsync({ policyName: packNameInput, sourceType: "ui" });
+    setEntryMode(null);
+  }
+
+  async function handleExtractSOP() {
+    if (!sopFile || !packNameInput.trim()) return;
+    setSopExtracting(true);
+    try {
+      if (!policyPack) await createPackMutation.mutateAsync({ policyName: packNameInput, sourceType: "file", sourceFileName: sopFile.name });
+      const form = new FormData();
+      form.append("file", sopFile);
+      const res = await fetch("/api/policy-pack/extract-sop", { method: "POST", body: form, credentials: "include" });
+      if (!res.ok) throw new Error();
+      const { treatments: extracted } = await res.json();
+      if (!extracted?.length) { toast({ title: "No treatments found", description: "Beacon couldn't extract treatments from this file.", variant: "destructive" }); return; }
+      setLocalTreatments(prev => [...prev, ...extracted.map(extractionToLocal)]);
+      setEntryMode(null);
+      toast({ title: `${extracted.length} treatment${extracted.length !== 1 ? "s" : ""} extracted`, description: "Review and save each treatment below." });
+    } catch {
+      toast({ title: "Extraction failed", description: "Could not extract treatments from the file.", variant: "destructive" });
+    } finally { setSopExtracting(false); }
+  }
+
+  function handleAddTreatment() {
+    if (!addName.trim()) return;
+    setLocalTreatments(prev => [...prev, {
+      localId: crypto.randomUUID(), dbId: undefined, name: addName.trim(),
+      shortDescription: addDesc, enabled: addEnabled, priority: "", tone: "",
+      whenToOffer: makeEmptyGroup(), blockedIf: makeEmptyGroup(),
+      isDraft: true, expanded: true, activeSection: "when",
+    }]);
+    setAddDialogOpen(false); setAddName(""); setAddDesc(""); setAddEnabled(true);
+  }
+
+  const hasPack = !!policyPack;
+
+  // Loading state
+  if (packLoading) return <div className="flex items-center gap-2 py-4 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading policy pack…</div>;
+
+  return (
+    <div className="space-y-4">
+      {/* ── Entry selector (when no pack) ──────────────────────────── */}
+      {!hasPack && entryMode === null && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Section D: Treatments</CardTitle>
+            <CardDescription>Define the treatments Beacon can recommend. Start by building them directly or uploading your SOP / policy file.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isReadOnly ? (
+              <p className="text-sm text-muted-foreground">No policy pack configured yet.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-4">
+                <button type="button" onClick={() => setEntryMode("build")}
+                  className="flex flex-col items-center gap-3 p-6 rounded-lg border-2 border-dashed hover:border-primary hover:bg-primary/5 transition-colors text-center"
+                  data-testid="button-mode-build">
+                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center"><Pencil className="w-5 h-5 text-primary" /></div>
+                  <div>
+                    <p className="font-medium text-sm">Build in Beacon</p>
+                    <p className="text-xs text-muted-foreground mt-1">Define treatments and rules directly in the UI</p>
+                  </div>
+                </button>
+                <button type="button" onClick={() => setEntryMode("upload")}
+                  className="flex flex-col items-center gap-3 p-6 rounded-lg border-2 border-dashed hover:border-primary hover:bg-primary/5 transition-colors text-center"
+                  data-testid="button-mode-upload">
+                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center"><FileUp className="w-5 h-5 text-primary" /></div>
+                  <div>
+                    <p className="font-medium text-sm">Upload SOP / Policy File</p>
+                    <p className="text-xs text-muted-foreground mt-1">Let Beacon extract draft treatments from your document</p>
+                  </div>
+                </button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Build mode setup ──────────────────────────────────────── */}
+      {!hasPack && entryMode === "build" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Build in Beacon</CardTitle>
+            <CardDescription>Give your policy pack a name then start adding treatments.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Policy name <span className="text-destructive">*</span></label>
+              <Input value={packNameInput} onChange={e => setPackNameInput(e.target.value)}
+                placeholder="e.g. Standard Collections Policy 2025" className="max-w-md"
+                data-testid="input-pack-name-build" />
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleStartBuild} disabled={!packNameInput.trim() || createPackMutation.isPending} data-testid="button-start-build">
+                {createPackMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}Get Started
+              </Button>
+              <Button variant="outline" onClick={() => setEntryMode(null)}>Back</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Upload SOP mode setup ─────────────────────────────────── */}
+      {!hasPack && entryMode === "upload" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Upload SOP / Policy File</CardTitle>
+            <CardDescription>Beacon will read your document and extract draft treatments for you to review and edit.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Policy name <span className="text-destructive">*</span></label>
+              <Input value={packNameInput} onChange={e => setPackNameInput(e.target.value)}
+                placeholder="e.g. Lendable Collections Policy 2025" className="max-w-md"
+                data-testid="input-pack-name-upload" />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">SOP file</label>
+              <input ref={sopInputRef} type="file" accept=".txt,.pdf,.docx,.doc" className="hidden"
+                onChange={e => setSopFile(e.target.files?.[0] ?? null)} />
+              <div className="flex items-center gap-3">
+                <Button variant="outline" onClick={() => sopInputRef.current?.click()} data-testid="button-browse-sop">
+                  <Upload className="w-4 h-4 mr-2" />Browse
+                </Button>
+                {sopFile && <span className="text-sm text-muted-foreground"><FileText className="w-3.5 h-3.5 inline mr-1" />{sopFile.name}</span>}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1.5">Supported: TXT, PDF, DOCX</p>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleExtractSOP} disabled={!sopFile || !packNameInput.trim() || sopExtracting} data-testid="button-extract-sop">
+                {sopExtracting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Extracting…</> : <><Wand2 className="w-4 h-4 mr-2" />Extract Treatments</>}
+              </Button>
+              <Button variant="outline" onClick={() => setEntryMode(null)}>Back</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Pack exists: treatments header ───────────────────────── */}
+      {hasPack && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Section D: Treatments</CardTitle>
+                <CardDescription>
+                  <span className="font-medium text-foreground">{policyPack!.policyName}</span>
+                  <span className="text-muted-foreground ml-2 text-xs">· {policyPack!.sourceType === "file" ? "Extracted from SOP" : "Built in Beacon"} · {policyPack!.status}</span>
+                </CardDescription>
+              </div>
+              {!isReadOnly && (
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setEntryMode("upload")} data-testid="button-upload-more">
+                    <Wand2 className="w-3.5 h-3.5 mr-1" />Extract from SOP
+                  </Button>
+                  <Button size="sm" onClick={() => setAddDialogOpen(true)} data-testid="button-add-treatment">
+                    <Plus className="w-3.5 h-3.5 mr-1" />Add Treatment
+                  </Button>
+                </div>
+              )}
+            </div>
+          </CardHeader>
+
+          {/* Upload SOP when pack exists */}
+          {entryMode === "upload" && (
+            <CardContent className="border-t pt-4 space-y-3">
+              <p className="text-sm font-medium">Extract additional treatments from a file</p>
+              <input ref={sopInputRef} type="file" accept=".txt,.pdf,.docx,.doc" className="hidden"
+                onChange={e => setSopFile(e.target.files?.[0] ?? null)} />
+              <div className="flex items-center gap-3">
+                <Button variant="outline" size="sm" onClick={() => sopInputRef.current?.click()}>
+                  <Upload className="w-3.5 h-3.5 mr-1" />Browse
+                </Button>
+                {sopFile && <span className="text-xs text-muted-foreground">{sopFile.name}</span>}
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={handleExtractSOP} disabled={!sopFile || sopExtracting}>
+                  {sopExtracting ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Extracting…</> : <><Wand2 className="w-3.5 h-3.5 mr-1" />Extract</>}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setEntryMode(null)}>Cancel</Button>
+              </div>
+            </CardContent>
+          )}
+
+          {/* Treatment list */}
+          <CardContent className="space-y-3">
+            {txLoading ? (
+              <div className="space-y-2">{[1,2].map(i => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>
+            ) : localTreatments.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <Shield className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                <p className="text-sm">No treatments yet.</p>
+                {!isReadOnly && <p className="text-xs mt-1">Click "Add Treatment" or extract from an SOP to get started.</p>}
+              </div>
+            ) : (
+              localTreatments.map(tx => (
+                <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} isReadOnly={isReadOnly}
+                  onUpdate={updated => setLocalTreatments(prev => prev.map(t => t.localId === tx.localId ? updated : t))}
+                  onDelete={() => setLocalTreatments(prev => prev.filter(t => t.localId !== tx.localId))} />
+              ))
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Add Treatment Dialog */}
+      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add Treatment</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Treatment name <span className="text-destructive">*</span></label>
+              <Input value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. Payment Holiday"
+                data-testid="input-add-treatment-name" />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Short description</label>
+              <Textarea value={addDesc} onChange={e => setAddDesc(e.target.value)}
+                placeholder="Briefly describe when and how this treatment is applied…"
+                className="min-h-[80px] text-sm" data-testid="textarea-add-treatment-desc" />
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch checked={addEnabled} onCheckedChange={setAddEnabled} data-testid="switch-add-enabled" />
+              <Label>Enabled</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleAddTreatment} disabled={!addName.trim()} data-testid="button-confirm-add-treatment">Add Treatment</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ── Policy Config Tab ──────────────────────────────────────────────────────────
 function PolicyConfigTab() {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -811,11 +1438,13 @@ function PolicyConfigTab() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Section D: Available Treatments</CardTitle>
-            <CardDescription>Select which treatments Beacon is allowed to recommend. Toggle on the treatments applicable to your business.</CardDescription>
-          </CardHeader>
+        <PolicyPackSection isReadOnly={isReadOnly} />
+
+        {false && (<>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Section D: Available Treatments (LEGACY)</CardTitle>
+            </CardHeader>
           <CardContent className="space-y-4">
             {treatments.map((treatment, index) => (
               <div key={treatment.name} className={`rounded-lg border p-4 ${treatment.enabled ? "bg-primary/5 border-primary/20" : "bg-muted/30"}`} data-testid={`card-treatment-${index}`}>
@@ -1049,6 +1678,7 @@ function PolicyConfigTab() {
             </div>
           </CardContent>
         </Card>
+        </>)}
 
         <Card>
           <CardHeader>

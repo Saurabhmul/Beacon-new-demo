@@ -203,6 +203,68 @@ export const decisions = pgTable("decisions", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const policyPacks = pgTable("policy_packs", {
+  id: serial("id").primaryKey(),
+  clientConfigId: integer("client_config_id").notNull(),
+  policyName: text("policy_name").notNull(),
+  sourceType: text("source_type").notNull().default("ui"),
+  sourceFileName: text("source_file_name"),
+  status: text("status").notNull().default("draft"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const treatments = pgTable("treatments", {
+  id: serial("id").primaryKey(),
+  policyPackId: integer("policy_pack_id").notNull(),
+  name: text("name").notNull(),
+  shortDescription: text("short_description"),
+  enabled: boolean("enabled").notNull().default(true),
+  priority: text("priority"),
+  tone: text("tone"),
+  displayOrder: integer("display_order").notNull().default(0),
+});
+
+export const treatmentRuleGroups = pgTable("treatment_rule_groups", {
+  id: serial("id").primaryKey(),
+  treatmentId: integer("treatment_id").notNull(),
+  ruleType: text("rule_type").notNull(),
+  logicOperator: text("logic_operator").notNull().default("AND"),
+  plainEnglishInput: text("plain_english_input"),
+  groupOrder: integer("group_order").notNull().default(0),
+});
+
+export const treatmentRules = pgTable("treatment_rules", {
+  id: serial("id").primaryKey(),
+  ruleGroupId: integer("rule_group_id").notNull(),
+  fieldName: text("field_name").notNull(),
+  operator: text("operator").notNull(),
+  value: text("value"),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
+export const insertPolicyPackSchema = createInsertSchema(policyPacks).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertTreatmentSchema = createInsertSchema(treatments).omit({ id: true });
+export const insertTreatmentRuleGroupSchema = createInsertSchema(treatmentRuleGroups).omit({ id: true });
+export const insertTreatmentRuleSchema = createInsertSchema(treatmentRules).omit({ id: true });
+
+export type PolicyPack = typeof policyPacks.$inferSelect;
+export type InsertPolicyPack = z.infer<typeof insertPolicyPackSchema>;
+export type Treatment = typeof treatments.$inferSelect;
+export type InsertTreatment = z.infer<typeof insertTreatmentSchema>;
+export type TreatmentRuleGroup = typeof treatmentRuleGroups.$inferSelect;
+export type InsertTreatmentRuleGroup = z.infer<typeof insertTreatmentRuleGroupSchema>;
+export type TreatmentRule = typeof treatmentRules.$inferSelect;
+export type InsertTreatmentRule = z.infer<typeof insertTreatmentRuleSchema>;
+
+export interface TreatmentRuleGroupWithRules extends TreatmentRuleGroup {
+  rules: TreatmentRule[];
+}
+
+export interface TreatmentWithRules extends Treatment {
+  ruleGroups: TreatmentRuleGroupWithRules[];
+}
+
 export const clientConfigRelations = relations(clientConfigs, ({ many }) => ({
   rulebooks: many(rulebooks),
   dataConfigs: many(dataConfigs),

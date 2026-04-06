@@ -5,7 +5,7 @@ import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
 import { authenticate, authorize, companyFilter } from "./middleware/auth";
 import multer from "multer";
 import Papa from "papaparse";
-import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields } from "./ai-engine";
+import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSOPTreatments } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
 import { users, uploadLogs, companies } from "@shared/schema";
 import { db } from "./db";
@@ -566,6 +566,165 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Update policy config error:", error);
       res.status(500).json({ error: "Failed to update policy config" });
+    }
+  });
+
+  // Policy Pack — new structured treatment system
+  app.get("/api/policy-pack", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const clientConfig = await storage.getClientConfig(companyId);
+      if (!clientConfig) return res.status(404).json({ error: "No client config found" });
+      const pack = await storage.getPolicyPack(clientConfig.id);
+      if (!pack) return res.status(404).json({ error: "No policy pack found" });
+      res.json(pack);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch policy pack" });
+    }
+  });
+
+  app.post("/api/policy-pack", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const clientConfig = await storage.getClientConfig(companyId);
+      if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
+      const { policyName, sourceType, sourceFileName, status, id } = req.body;
+      if (!policyName?.trim()) return res.status(400).json({ error: "policyName is required" });
+      const pack = await storage.upsertPolicyPack({
+        id: id || undefined,
+        clientConfigId: clientConfig.id,
+        policyName: policyName.trim(),
+        sourceType: sourceType || "ui",
+        sourceFileName: sourceFileName || null,
+        status: status || "draft",
+      });
+      res.json(pack);
+    } catch (error) {
+      console.error("Upsert policy pack error:", error);
+      res.status(500).json({ error: "Failed to save policy pack" });
+    }
+  });
+
+  app.get("/api/policy-pack/treatments", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const clientConfig = await storage.getClientConfig(companyId);
+      if (!clientConfig) return res.status(404).json({ error: "No client config" });
+      const pack = await storage.getPolicyPack(clientConfig.id);
+      if (!pack) return res.json([]);
+      const txs = await storage.getTreatmentsWithRules(pack.id);
+      res.json(txs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch treatments" });
+    }
+  });
+
+  app.post("/api/policy-pack/treatments", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const clientConfig = await storage.getClientConfig(companyId);
+      if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
+      const pack = await storage.getPolicyPack(clientConfig.id);
+      if (!pack) return res.status(400).json({ error: "Create a policy pack first" });
+      const { name, shortDescription, enabled, priority, tone, displayOrder } = req.body;
+      if (!name?.trim()) return res.status(400).json({ error: "Treatment name is required" });
+      const tx = await storage.createTreatment({
+        policyPackId: pack.id,
+        name: name.trim(),
+        shortDescription: shortDescription || null,
+        enabled: enabled !== false,
+        priority: priority || null,
+        tone: tone || null,
+        displayOrder: displayOrder ?? 0,
+      });
+      res.status(201).json(tx);
+    } catch (error) {
+      console.error("Create treatment error:", error);
+      res.status(500).json({ error: "Failed to create treatment" });
+    }
+  });
+
+  app.patch("/api/policy-pack/treatments/:id", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { name, shortDescription, enabled, priority, tone, displayOrder } = req.body;
+      const tx = await storage.updateTreatment(id, {
+        ...(name !== undefined && { name }),
+        ...(shortDescription !== undefined && { shortDescription }),
+        ...(enabled !== undefined && { enabled }),
+        ...(priority !== undefined && { priority }),
+        ...(tone !== undefined && { tone }),
+        ...(displayOrder !== undefined && { displayOrder }),
+      });
+      res.json(tx);
+    } catch (error) {
+      console.error("Update treatment error:", error);
+      res.status(500).json({ error: "Failed to update treatment" });
+    }
+  });
+
+  app.delete("/api/policy-pack/treatments/:id", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
+    try {
+      await storage.deleteTreatment(parseInt(req.params.id));
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete treatment" });
+    }
+  });
+
+  app.post("/api/policy-pack/treatments/:id/rules", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
+    try {
+      const treatmentId = parseInt(req.params.id);
+      const { ruleType, logicOperator, plainEnglishInput, rows } = req.body;
+      if (!ruleType) return res.status(400).json({ error: "ruleType required" });
+      const group = await storage.upsertRuleGroup({
+        treatmentId,
+        ruleType,
+        logicOperator: logicOperator || "AND",
+        plainEnglishInput: plainEnglishInput || null,
+        groupOrder: 0,
+      });
+      await storage.replaceRuleRows(group.id, (rows || []).map((r: any, i: number) => ({
+        fieldName: r.fieldName,
+        operator: r.operator,
+        value: r.value || null,
+        sortOrder: i,
+      })));
+      const updated = await storage.getTreatmentsWithRules((await storage.getPolicyPack((await storage.getClientConfig(getCompanyId(req)))!.id))!.id);
+      const tx = updated.find(t => t.id === treatmentId);
+      res.json(tx || { id: treatmentId });
+    } catch (error) {
+      console.error("Save rules error:", error);
+      res.status(500).json({ error: "Failed to save rules" });
+    }
+  });
+
+  app.post("/api/policy-pack/extract-sop", authenticate, authorize("admin"), companyFilter, upload.single("file"), async (req: any, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+      let fileText = "";
+      if (file.mimetype === "application/pdf") {
+        try {
+          const base64 = file.buffer.toString("base64");
+          fileText = await extractTextFromImage(base64, "application/pdf");
+        } catch {
+          fileText = "";
+        }
+      } else {
+        fileText = file.buffer.toString("utf8");
+      }
+
+      if (!fileText.trim()) {
+        return res.status(422).json({ error: "Could not extract text from the uploaded file. Please use a TXT or DOCX file." });
+      }
+
+      const treatments = await extractSOPTreatments(fileText);
+      res.json({ treatments, fileName: file.originalname });
+    } catch (error) {
+      console.error("SOP extraction error:", error);
+      res.status(500).json({ error: "Failed to extract treatments from SOP" });
     }
   });
 

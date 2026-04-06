@@ -1,0 +1,353 @@
+# Beacon — Policy Config Changes for Replit
+
+## Objective
+
+Update the existing **Policy Config** tab so Beacon supports both:
+
+1. policies configured directly in the UI
+2. policies drafted from uploaded SOP/files and then edited in the UI
+
+The Policy Config tab should allow each client to define and manage treatments and the minimal decision-rule structure needed for demo decisioning.
+
+---
+
+## Scope
+
+Implement only these policy-config capabilities for now:
+
+* define treatments
+* enable / disable treatments
+* add new treatment
+* define decision rules per treatment
+* allow policy draft creation from uploaded SOP/file
+* make extracted rules editable on UI
+
+Do not build full versioning, audit trail, or advanced workflow governance in this change.
+
+---
+
+## Core model to support in UI
+
+For each treatment, support this minimal structure:
+
+* **Treatment**
+* **When to offer**
+* **Blocked if**
+* **Priority**
+* **Tone**
+
+Also show:
+
+* **Treatment name**
+* **Short description**
+* **Enabled / Disabled**
+
+---
+
+## UX changes in Policy Config tab
+
+### 1. Add two entry paths at the top
+
+At the top of Policy Config, add a choice:
+
+* **Build in Beacon**
+* **Upload SOP / Policy File**
+
+#### If user selects Build in Beacon
+
+Show the editable treatment/rule UI directly.
+
+#### If user selects Upload SOP / Policy File
+
+Allow upload of DOCX / PDF / TXT.
+After upload:
+
+* Beacon analyzes the file
+* Beacon extracts a draft list of treatments and draft decision rules
+* populate the same editable UI below
+* user reviews and edits before saving
+
+Important: both entry paths must end in the same editable UI structure.
+
+---
+
+### 2. Treatments section
+
+Create a section called:
+
+* **Treatments**
+
+For each treatment card show:
+
+* Treatment Name
+* Short Description
+* Enabled toggle
+* Edit button
+* Delete button (optional for demo)
+
+Add CTA:
+
+* **Add New Treatment**
+
+When adding a treatment, open a simple form:
+
+* Treatment Name
+* Short Description
+* Enabled (default true)
+
+Do not ask for Priority or Tone at treatment-creation time. Those should be configured separately in the treatment rules/details area after the treatment is created.
+
+---
+
+### 3. Decision Rules section per treatment
+
+Inside each treatment card, show a rules area with this structure:
+
+#### A. When to Offer
+
+Main section to define when the treatment should be recommended.
+
+UI should support structured rule rows, not free text only.
+Each row should have:
+
+* **Field** selector
+* **Operator** dropdown
+* **Value** input/dropdown
+
+Field behavior:
+
+* Field should be selectable from the existing uploaded/mapped fields already available in the client data configuration
+* Also allow free-text field entry when the desired field is not yet available in the dropdown
+* If free text is used, save it as a custom field reference for that rule
+
+Value behavior:
+
+* use text input by default
+* use dropdown/boolean control where the selected field clearly supports fixed values
+
+Also allow an optional free-text helper input above the structured rows:
+
+* "Describe rule in plain English"
+* Beacon can convert it into draft rule rows
+* user can edit the structured output
+
+##### Multi-rule logic requirements
+
+Replit should implement this as a rule builder that supports multiple conditions.
+
+Minimum required behavior:
+
+* user can add multiple rule rows
+* each rule row is one condition: `Field + Operator + Value`
+* user can choose how rows are combined
+* support both **AND** and **OR**
+
+Recommended UI behavior:
+
+* show a logic selector for the rule set: **Match ALL (AND)** or **Match ANY (OR)**
+* this logic selector applies to all rows inside that rule group
+* allow user to add/remove rows inside the group
+
+Example group:
+
+* Match ALL of the following:
+
+  * arrears_months >= 1
+  * ie_assessment_completed = Yes
+  * active_insolvency = No
+
+Optional next step if easy to implement:
+
+* support multiple rule groups, where each group has internal AND/OR logic
+* example: Group 1 OR Group 2
+* but for demo, a single group with multiple rows and one logic selector is acceptable
+
+Important implementation note:
+
+* Replit should not hardcode rule fields
+* rule builder should read available fields from the saved client data configuration
+* if no matching field exists, free-text entry should still be allowed so policy setup is not blocked
+
+#### B. Blocked If
+
+Same UI pattern as When to Offer.
+Use the same structured rule builder:
+
+* Field selector or free-text field
+* Operator
+* Value
+* multiple rows
+* Match ALL (AND) or Match ANY (OR)
+
+Example:
+
+* breathing_space_active = Yes
+* active_dca_placement = Yes
+
+Also allow optional plain-English helper input that Beacon converts into draft rows.
+
+Important: Blocked If should be evaluated as exclusion logic for the treatment. If the Blocked If group evaluates true, that treatment should not be recommended even if the When to Offer group also evaluates true..
+
+#### C. Priority
+
+Simple dropdown or numeric selector.
+Suggested values:
+
+* High
+* Medium
+* Low
+  or
+* 1, 2, 3
+
+Keep it simple for demo.
+
+#### D. Tone
+
+Simple dropdown.
+Suggested values:
+
+* Supportive
+* Neutral
+* Firm
+* Empathetic
+
+This is mainly to guide later communication/recommendation output.
+
+---
+
+## File-to-UI behavior
+
+If client uploads SOP / policy file:
+
+* Beacon should attempt to extract:
+
+  * treatment name
+  * short description
+  * when to offer draft rules
+  * blocked if draft rules
+  * priority hints if present
+  * tone hints if present
+* populate the editable treatment cards
+* mark extracted items as draft/editable
+
+Important:
+
+* extracted rules do not need to be perfect
+* client must be able to edit all extracted values in the UI
+
+---
+
+## Data model changes
+
+Add or update Policy Config data structures to support:
+
+### policy_pack
+
+* id
+* client_id
+* policy_name
+* source_type (`ui` or `file`)
+* source_file_name (nullable)
+* status (`draft`, `saved`)
+
+### treatment
+
+* id
+* policy_pack_id
+* name
+* short_description
+* enabled
+* priority
+* tone
+* display_order
+
+### treatment_rule_group
+
+* id
+* treatment_id
+* rule_type (`when_to_offer`, `blocked_if`)
+* logic_operator (`AND`, `OR`)
+* group_order
+* plain_english_input (nullable)
+
+For demo, at minimum support one rule group per rule type per treatment.
+If easy, structure backend so multiple groups can be supported later without redesign.
+
+### treatment_rule
+
+* id
+* rule_group_id
+* field_name
+* operator
+* value
+* sort_order
+
+For demo, keep schema simple.
+
+---
+
+## Frontend requirements
+
+Update the existing Policy Config tab to:
+
+* support mode selector: Build in Beacon / Upload SOP
+* support uploading SOP/policy file
+* render treatment cards
+* add new treatment
+* edit treatment metadata
+* toggle enabled/disabled
+* configure When to Offer rules
+* configure Blocked If rules
+* configure Priority
+* configure Tone
+* persist saved draft / saved policy config
+
+Do not create a separate new page unless necessary.
+Keep styling consistent with the current Beacon layout.
+
+---
+
+## Backend requirements
+
+Need endpoints / handlers for:
+
+* create/update policy pack
+* upload SOP/policy file
+* run AI extraction on uploaded file
+* save extracted treatment drafts
+* create/update/delete treatment
+* create/update/delete rule groups and rule rows
+* save final policy config
+
+---
+
+## Acceptance criteria
+
+1. Client can define treatments directly in Policy Config.
+2. Client can upload an SOP/policy file and get editable draft treatments/rules.
+3. Each treatment shows:
+
+   * treatment name
+   * short description
+   * enabled/disabled
+   * add/edit support
+4. Each treatment supports minimal decision-rule structure:
+
+   * When to Offer
+   * Blocked If
+   * Priority
+   * Tone
+5. Field selection in rule builder works from saved client data fields, with free-text fallback.
+6. Rule builder supports multiple rule rows and AND/OR combination logic.
+7. Rules are editable in structured UI form.
+8. Same saved policy structure is used whether policy started from UI or uploaded file.
+
+---
+
+## Implementation note
+
+The goal of this change is not to build a full enterprise rule engine.
+The goal is to make Beacon demo-ready for clients like:
+
+* Prodigy, who may configure policy directly in UI
+* Lendable, who may upload SOP and then edit Beacon’s simplified policy draft

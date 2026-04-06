@@ -1,5 +1,6 @@
 import {
   clientConfigs, rulebooks, dataConfigs, dataUploads, decisions, dpdStages, uploadLogs, policyConfigs,
+  policyPacks, treatments, treatmentRuleGroups, treatmentRules,
   companies, users,
   type ClientConfig, type InsertClientConfig,
   type Rulebook, type InsertRulebook,
@@ -9,6 +10,11 @@ import {
   type Decision, type InsertDecision,
   type UploadLog, type InsertUploadLog,
   type PolicyConfig, type InsertPolicyConfig,
+  type PolicyPack, type InsertPolicyPack,
+  type Treatment, type InsertTreatment,
+  type TreatmentRuleGroup, type InsertTreatmentRuleGroup,
+  type TreatmentRule, type InsertTreatmentRule,
+  type TreatmentWithRules,
   type Company, type InsertCompany,
   type User,
 } from "@shared/schema";
@@ -57,6 +63,15 @@ export interface IStorage {
   getPolicyConfig(companyId: string): Promise<PolicyConfig | undefined>;
   createPolicyConfig(data: InsertPolicyConfig): Promise<PolicyConfig>;
   updatePolicyConfig(companyId: string, data: Partial<InsertPolicyConfig>): Promise<PolicyConfig>;
+
+  getPolicyPack(clientConfigId: number): Promise<PolicyPack | undefined>;
+  upsertPolicyPack(data: InsertPolicyPack & { id?: number }): Promise<PolicyPack>;
+  getTreatmentsWithRules(policyPackId: number): Promise<TreatmentWithRules[]>;
+  createTreatment(data: InsertTreatment): Promise<Treatment>;
+  updateTreatment(id: number, data: Partial<InsertTreatment>): Promise<Treatment>;
+  deleteTreatment(id: number): Promise<void>;
+  upsertRuleGroup(data: InsertTreatmentRuleGroup & { id?: number }): Promise<TreatmentRuleGroup>;
+  replaceRuleRows(groupId: number, rows: Omit<InsertTreatmentRule, 'ruleGroupId'>[]): Promise<void>;
 
   getCompanies(): Promise<Company[]>;
   getCompany(id: string): Promise<Company | undefined>;
@@ -287,6 +302,69 @@ export class DatabaseStorage implements IStorage {
       .where(eq(policyConfigs.companyId, companyId))
       .returning();
     return config;
+  }
+
+  async getPolicyPack(clientConfigId: number): Promise<PolicyPack | undefined> {
+    const [pack] = await db.select().from(policyPacks).where(eq(policyPacks.clientConfigId, clientConfigId)).orderBy(desc(policyPacks.createdAt)).limit(1);
+    return pack || undefined;
+  }
+
+  async upsertPolicyPack(data: InsertPolicyPack & { id?: number }): Promise<PolicyPack> {
+    if (data.id) {
+      const { id, ...rest } = data;
+      const [pack] = await db.update(policyPacks).set({ ...rest, updatedAt: new Date() }).where(eq(policyPacks.id, id)).returning();
+      return pack;
+    }
+    const [pack] = await db.insert(policyPacks).values(data).returning();
+    return pack;
+  }
+
+  async getTreatmentsWithRules(policyPackId: number): Promise<TreatmentWithRules[]> {
+    const txs = await db.select().from(treatments).where(eq(treatments.policyPackId, policyPackId)).orderBy(treatments.displayOrder);
+    const groups = txs.length > 0
+      ? await db.select().from(treatmentRuleGroups).where(inArray(treatmentRuleGroups.treatmentId, txs.map(t => t.id))).orderBy(treatmentRuleGroups.groupOrder)
+      : [];
+    const rules = groups.length > 0
+      ? await db.select().from(treatmentRules).where(inArray(treatmentRules.ruleGroupId, groups.map(g => g.id))).orderBy(treatmentRules.sortOrder)
+      : [];
+    return txs.map(tx => ({
+      ...tx,
+      ruleGroups: groups.filter(g => g.treatmentId === tx.id).map(g => ({
+        ...g,
+        rules: rules.filter(r => r.ruleGroupId === g.id),
+      })),
+    }));
+  }
+
+  async createTreatment(data: InsertTreatment): Promise<Treatment> {
+    const [tx] = await db.insert(treatments).values(data).returning();
+    return tx;
+  }
+
+  async updateTreatment(id: number, data: Partial<InsertTreatment>): Promise<Treatment> {
+    const [tx] = await db.update(treatments).set(data).where(eq(treatments.id, id)).returning();
+    return tx;
+  }
+
+  async deleteTreatment(id: number): Promise<void> {
+    await db.delete(treatments).where(eq(treatments.id, id));
+  }
+
+  async upsertRuleGroup(data: InsertTreatmentRuleGroup & { id?: number }): Promise<TreatmentRuleGroup> {
+    if (data.id) {
+      const { id, ...rest } = data;
+      const [g] = await db.update(treatmentRuleGroups).set(rest).where(eq(treatmentRuleGroups.id, id)).returning();
+      return g;
+    }
+    const [g] = await db.insert(treatmentRuleGroups).values(data).returning();
+    return g;
+  }
+
+  async replaceRuleRows(groupId: number, rows: Omit<InsertTreatmentRule, 'ruleGroupId'>[]): Promise<void> {
+    await db.delete(treatmentRules).where(eq(treatmentRules.ruleGroupId, groupId));
+    if (rows.length > 0) {
+      await db.insert(treatmentRules).values(rows.map((r, i) => ({ ...r, ruleGroupId: groupId, sortOrder: i })));
+    }
   }
 
   async getCompanies(): Promise<Company[]> {

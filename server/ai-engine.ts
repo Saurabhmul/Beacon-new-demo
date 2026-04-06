@@ -510,3 +510,74 @@ Respond ONLY with a valid JSON array. Example:
     confidence: 'Low' as const,
   }));
 }
+
+export interface SOPExtractedRule {
+  fieldName: string;
+  operator: string;
+  value: string;
+}
+
+export interface SOPExtractedTreatment {
+  name: string;
+  shortDescription: string;
+  whenToOffer: SOPExtractedRule[];
+  blockedIf: SOPExtractedRule[];
+}
+
+export async function extractSOPTreatments(fileText: string): Promise<SOPExtractedTreatment[]> {
+  const prompt = `You are an expert collections policy analyst. A client has provided a Standard Operating Procedure (SOP) or policy document for their debt collections process.
+
+Analyze the document and extract each distinct treatment or action that can be offered to customers.
+
+For each treatment extract:
+- name: Short treatment name (e.g. "Payment Holiday", "Loan Restructure", "Clear Arrears Plan")
+- shortDescription: 1-2 sentence description of the treatment
+- whenToOffer: Array of conditions (as structured rules) for when this treatment should be recommended. Each condition has:
+  - fieldName: the data field being evaluated (use realistic field names like "dpd_bucket", "affordability", "willingness", "balance_outstanding" etc.)
+  - operator: one of: =, !=, >, >=, <, <=, contains
+  - value: the value to compare against
+- blockedIf: Array of conditions (same structure) that would block this treatment even if whenToOffer is met
+
+Important rules:
+- Focus on TREATMENTS only (forbearance, restructure, payment plans, write-offs, etc.)
+- Do NOT extract vulnerability, escalation, or DPD stage definitions as treatments
+- whenToOffer and blockedIf should have 1-4 conditions each based on what the document says
+- If the document does not specify blocking conditions, return an empty array for blockedIf
+- If the document is vague, make reasonable inferences based on standard collections practice
+- Extract 2-8 treatments maximum
+
+Document text:
+"""
+${fileText.slice(0, 12000)}
+"""
+
+Respond ONLY with a valid JSON array of treatment objects. Example:
+[{
+  "name": "Payment Holiday",
+  "shortDescription": "Temporarily pause payments for customers facing short-term financial difficulty.",
+  "whenToOffer": [
+    {"fieldName": "affordability", "operator": "=", "value": "VERY LOW"},
+    {"fieldName": "willingness", "operator": "!=", "value": "VERY LOW"}
+  ],
+  "blockedIf": [
+    {"fieldName": "active_insolvency", "operator": "=", "value": "Yes"}
+  ]
+}]`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-pro",
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: { maxOutputTokens: 8192 },
+  });
+
+  const text = response.text || "";
+  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0]) as SOPExtractedTreatment[];
+    } catch {
+      // fall through
+    }
+  }
+  return [];
+}
