@@ -241,11 +241,43 @@ export const treatmentRules = pgTable("treatment_rules", {
   operator: text("operator").notNull(),
   value: text("value"),
   sortOrder: integer("sort_order").notNull().default(0),
+  leftFieldId: text("left_field_id"),
+  rightMode: text("right_mode"),
+  rightConstantValue: text("right_constant_value"),
+  rightFieldId: text("right_field_id"),
+});
+
+export interface DerivationConfig {
+  fieldA: string;
+  fieldALabel: string;
+  operator1: string;
+  operandBType: "field" | "constant";
+  operandBValue: string;
+  operandBLabel?: string;
+  operator2?: string;
+  operandCType?: "field" | "constant";
+  operandCValue?: string;
+  operandCLabel?: string;
+}
+
+export const policyFields = pgTable("policy_fields", {
+  id: serial("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  policyPackId: integer("policy_pack_id"),
+  label: text("label").notNull(),
+  description: text("description"),
+  sourceType: text("source_type").notNull(),
+  derivationConfig: jsonb("derivation_config").$type<DerivationConfig>(),
+  derivationSummary: text("derivation_summary"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const insertPolicyPackSchema = createInsertSchema(policyPacks).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertTreatmentSchema = createInsertSchema(treatments).omit({ id: true });
 export const insertTreatmentRuleGroupSchema = createInsertSchema(treatmentRuleGroups).omit({ id: true });
+export const insertPolicyFieldSchema = createInsertSchema(policyFields).omit({ id: true, createdAt: true });
+export type InsertPolicyField = z.infer<typeof insertPolicyFieldSchema>;
+export type PolicyFieldRecord = typeof policyFields.$inferSelect;
 export const insertTreatmentRuleSchema = createInsertSchema(treatmentRules).omit({ id: true });
 
 export type PolicyPack = typeof policyPacks.$inferSelect;

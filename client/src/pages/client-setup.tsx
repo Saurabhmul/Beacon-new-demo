@@ -32,10 +32,14 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
@@ -361,6 +365,29 @@ const DEFAULT_AFFORDABILITY_RULES: AffordabilityRule[] = [
 const RULE_OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "contains", "is empty", "is not empty"] as const;
 const NO_VALUE_OPERATORS = new Set(["is empty", "is not empty"]);
 const CUSTOM_FIELD_SENTINEL = "__custom__";
+const ADD_FIELD_SENTINEL = "__add_field__";
+const DERIVATION_OPERATORS = ["+", "-", "*", "/"] as const;
+
+interface DerivationConfig {
+  fieldA: string;
+  fieldALabel: string;
+  operator1: string;
+  operandBType: "field" | "constant";
+  operandBValue: string;
+  operandBLabel?: string;
+  operator2?: string;
+  operandCType?: "field" | "constant";
+  operandCValue?: string;
+  operandCLabel?: string;
+}
+interface PolicyField {
+  id: string;
+  label: string;
+  description?: string | null;
+  sourceType: "source_field" | "business_field" | "derived_field";
+  derivationConfig?: DerivationConfig | null;
+  derivationSummary?: string | null;
+}
 
 interface LocalRuleRow {
   localId: string;
@@ -369,6 +396,10 @@ interface LocalRuleRow {
   customFieldName: string;
   operator: string;
   value: string;
+  leftFieldId: string | null;
+  rightMode: "constant" | "field";
+  rightConstantValue: string;
+  rightFieldId: string | null;
 }
 interface LocalRuleGroup {
   dbId?: number;
@@ -391,7 +422,11 @@ interface LocalTreatment {
 }
 
 function makeEmptyRow(): LocalRuleRow {
-  return { localId: crypto.randomUUID(), fieldName: "", useCustom: false, customFieldName: "", operator: "=", value: "" };
+  return {
+    localId: crypto.randomUUID(), fieldName: "", useCustom: false, customFieldName: "",
+    operator: "=", value: "",
+    leftFieldId: null, rightMode: "constant", rightConstantValue: "", rightFieldId: null,
+  };
 }
 function makeEmptyGroup(): LocalRuleGroup {
   return { logicOperator: "AND", rows: [] };
@@ -402,13 +437,17 @@ function serverGroupToLocal(ruleType: string, ruleGroups: TreatmentRuleGroupWith
   return {
     dbId: group.id,
     logicOperator: (group.logicOperator as "AND" | "OR") || "AND",
-    rows: group.rules.map(r => ({
+    rows: group.rules.map((r: any) => ({
       localId: `r${r.id}`,
       fieldName: r.fieldName,
       useCustom: false,
       customFieldName: "",
       operator: r.operator,
       value: r.value || "",
+      leftFieldId: r.leftFieldId || null,
+      rightMode: (r.rightMode as "constant" | "field") || "constant",
+      rightConstantValue: r.rightConstantValue || r.value || "",
+      rightFieldId: r.rightFieldId || null,
     })),
   };
 }
@@ -429,6 +468,11 @@ function serverTxToLocal(tx: TreatmentWithRules): LocalTreatment {
   };
 }
 function extractionToLocal(e: { name: string; shortDescription: string; whenToOffer: { fieldName: string; operator: string; value: string }[]; blockedIf: { fieldName: string; operator: string; value: string }[] }): LocalTreatment {
+  const mapRow = (r: { fieldName: string; operator: string; value: string }) => ({
+    localId: crypto.randomUUID(), fieldName: r.fieldName, useCustom: false, customFieldName: "",
+    operator: r.operator, value: r.value,
+    leftFieldId: null, rightMode: "constant" as const, rightConstantValue: r.value, rightFieldId: null,
+  });
   return {
     localId: crypto.randomUUID(),
     dbId: undefined,
@@ -437,93 +481,451 @@ function extractionToLocal(e: { name: string; shortDescription: string; whenToOf
     enabled: true,
     priority: "",
     tone: "",
-    whenToOffer: { logicOperator: "AND", rows: e.whenToOffer.map(r => ({ localId: crypto.randomUUID(), fieldName: r.fieldName, useCustom: false, customFieldName: "", operator: r.operator, value: r.value })) },
-    blockedIf: { logicOperator: "AND", rows: e.blockedIf.map(r => ({ localId: crypto.randomUUID(), fieldName: r.fieldName, useCustom: false, customFieldName: "", operator: r.operator, value: r.value })) },
+    whenToOffer: { logicOperator: "AND", rows: e.whenToOffer.map(mapRow) },
+    blockedIf: { logicOperator: "AND", rows: e.blockedIf.map(mapRow) },
     isDraft: true,
     expanded: true,
     activeSection: "when",
   };
 }
 
-function RuleBuilderGroup({ group, knownFields, onChange, isReadOnly }: { group: LocalRuleGroup; knownFields: string[]; onChange: (g: LocalRuleGroup) => void; isReadOnly: boolean }) {
+// ── FieldInfoPopover ────────────────────────────────────────────────────────
+function FieldInfoPopover({ field }: { field: PolicyField }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className="text-muted-foreground hover:text-foreground shrink-0 p-0.5 rounded hover:bg-muted" data-testid={`btn-field-info-${field.id}`}>
+          <Info className="w-3 h-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" className="w-60 text-xs p-3 space-y-1.5" onClick={e => e.stopPropagation()}>
+        <div className="font-semibold">{field.label}</div>
+        <div className="text-muted-foreground">
+          {field.sourceType === "source_field" ? "Source field" : field.sourceType === "business_field" ? "Business field" : "Derived field"}
+        </div>
+        {field.description && <div className="text-muted-foreground leading-snug">{field.description}</div>}
+        {field.derivationSummary && (
+          <div className="border-t pt-1.5 mt-1.5">
+            <div className="text-[10px] uppercase font-semibold text-muted-foreground mb-0.5">Derived from</div>
+            <div className="font-mono text-[11px] bg-muted px-2 py-1 rounded">{field.derivationSummary}</div>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ── FieldPicker ─────────────────────────────────────────────────────────────
+function FieldPicker({ value, policyFields, onChange, onAddField, disabled, testId }: {
+  value: string | null;
+  policyFields: PolicyField[];
+  onChange: (fieldId: string) => void;
+  onAddField?: () => void;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  const sources = policyFields.filter(f => f.sourceType === "source_field").sort((a, b) => a.label.localeCompare(b.label));
+  const business = policyFields.filter(f => f.sourceType === "business_field").sort((a, b) => a.label.localeCompare(b.label));
+  const derived = policyFields.filter(f => f.sourceType === "derived_field").sort((a, b) => a.label.localeCompare(b.label));
+  return (
+    <Select value={value || ""} onValueChange={v => { if (v === ADD_FIELD_SENTINEL) onAddField?.(); else onChange(v); }} disabled={disabled}>
+      <SelectTrigger className="h-8 text-xs w-44" data-testid={testId}>
+        <SelectValue placeholder="Select field…" />
+      </SelectTrigger>
+      <SelectContent>
+        {sources.length > 0 && (
+          <SelectGroup>
+            <SelectLabel className="text-[10px]">Source Fields</SelectLabel>
+            {sources.map(f => <SelectItem key={f.id} value={f.id} className="text-xs">{f.label}</SelectItem>)}
+          </SelectGroup>
+        )}
+        {business.length > 0 && (
+          <SelectGroup>
+            <SelectLabel className="text-[10px]">Business Fields</SelectLabel>
+            {business.map(f => <SelectItem key={f.id} value={f.id} className="text-xs">{f.label}</SelectItem>)}
+          </SelectGroup>
+        )}
+        {derived.length > 0 && (
+          <SelectGroup>
+            <SelectLabel className="text-[10px]">Derived Fields</SelectLabel>
+            {derived.map(f => <SelectItem key={f.id} value={f.id} className="text-xs">{f.label}</SelectItem>)}
+          </SelectGroup>
+        )}
+        {sources.length === 0 && business.length === 0 && derived.length === 0 && (
+          <div className="px-2 py-3 text-xs text-muted-foreground text-center">No fields configured yet</div>
+        )}
+        {onAddField && (
+          <>
+            <SelectSeparator />
+            <SelectItem value={ADD_FIELD_SENTINEL} className="text-xs text-primary font-medium">
+              + Add customer field
+            </SelectItem>
+          </>
+        )}
+      </SelectContent>
+    </Select>
+  );
+}
+
+// ── AddCustomFieldModal ──────────────────────────────────────────────────────
+function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
+  open: boolean;
+  policyFields: PolicyField[];
+  onClose: () => void;
+  onFieldCreated: (field: PolicyField) => void;
+}) {
+  const { toast } = useToast();
+  const [fieldType, setFieldType] = useState<"business_field" | "derived_field">("business_field");
+  const [label, setLabel] = useState("");
+  const [description, setDescription] = useState("");
+  const [derivFieldA, setDerivFieldA] = useState<string | null>(null);
+  const [derivOp1, setDerivOp1] = useState("+");
+  const [derivBType, setDerivBType] = useState<"field" | "constant">("constant");
+  const [derivBValue, setDerivBValue] = useState("");
+  const [derivHasStep2, setDerivHasStep2] = useState(false);
+  const [derivOp2, setDerivOp2] = useState("+");
+  const [derivCType, setDerivCType] = useState<"field" | "constant">("constant");
+  const [derivCValue, setDerivCValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [dupError, setDupError] = useState<string | null>(null);
+
+  function resetForm() {
+    setLabel(""); setDescription(""); setFieldType("business_field");
+    setDerivFieldA(null); setDerivOp1("+"); setDerivBType("constant"); setDerivBValue("");
+    setDerivHasStep2(false); setDerivOp2("+"); setDerivCType("constant"); setDerivCValue("");
+    setSaving(false); setDupError(null);
+  }
+  function handleClose() { resetForm(); onClose(); }
+
+  async function handleSave() {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    if (fieldType === "derived_field" && (!derivFieldA || !derivBValue.trim())) return;
+    if (fieldType === "derived_field" && derivHasStep2 && !derivCValue.trim()) return;
+    setSaving(true); setDupError(null);
+    const fieldAField = derivFieldA ? policyFields.find(f => f.id === derivFieldA) : null;
+    const operandBField = derivBType === "field" ? policyFields.find(f => f.id === derivBValue) : null;
+    const operandCField = derivHasStep2 && derivCType === "field" ? policyFields.find(f => f.id === derivCValue) : null;
+    const derivationConfig = fieldType === "derived_field" ? {
+      fieldA: derivFieldA!, fieldALabel: fieldAField?.label || derivFieldA!,
+      operator1: derivOp1, operandBType: derivBType, operandBValue: derivBValue,
+      ...(operandBField ? { operandBLabel: operandBField.label } : {}),
+      ...(derivHasStep2 ? {
+        operator2: derivOp2, operandCType: derivCType, operandCValue: derivCValue,
+        ...(operandCField ? { operandCLabel: operandCField.label } : {}),
+      } : {}),
+    } : null;
+    try {
+      const res = await fetch("/api/policy-fields", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: trimmed, description: description.trim() || null, sourceType: fieldType, derivationConfig }),
+      });
+      if (res.status === 409) { const d = await res.json(); setDupError(d.error || `"${trimmed}" already exists.`); return; }
+      if (!res.ok) throw new Error();
+      const newField: PolicyField = await res.json();
+      onFieldCreated(newField);
+      handleClose();
+      toast({ title: `Field "${newField.label}" created` });
+    } catch { toast({ title: "Failed to create field", variant: "destructive" }); }
+    finally { setSaving(false); }
+  }
+
+  const canSave = !!label.trim() && (
+    fieldType !== "derived_field" || (!!derivFieldA && !!derivBValue.trim() && (!derivHasStep2 || !!derivCValue.trim()))
+  );
+
+  const OperandToggle = ({ type, onType, onClear }: { type: "field" | "constant"; onType: (t: "field" | "constant") => void; onClear: () => void }) => (
+    <div className="flex rounded-md border overflow-hidden text-[10px] shrink-0">
+      {(["constant", "field"] as const).map(t => (
+        <button key={t} type="button"
+          className={`px-2 py-1 transition-colors capitalize ${type === t ? "bg-primary text-primary-foreground" : "bg-background hover:bg-muted"}`}
+          onClick={() => { onType(t); onClear(); }}>{t}</button>
+      ))}
+    </div>
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={v => !v && handleClose()}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader><DialogTitle>Add Customer Field</DialogTitle></DialogHeader>
+        <div className="space-y-4 pt-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">Field Type</Label>
+            <div className="flex gap-2">
+              {([["business_field", "Business Field"], ["derived_field", "Derived Field"]] as const).map(([t, l]) => (
+                <button key={t} type="button"
+                  className={`flex-1 px-3 py-2 text-xs rounded-md border transition-colors ${fieldType === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
+                  onClick={() => setFieldType(t)}>{l}</button>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {fieldType === "business_field" ? "A custom field not present in source data — e.g. a manual assessment or category." : "A field computed from other fields using a formula — e.g. Debt-to-Income Ratio."}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">Field Label <span className="text-destructive">*</span></Label>
+            <Input value={label} onChange={e => { setLabel(e.target.value); setDupError(null); }}
+              placeholder={fieldType === "derived_field" ? "e.g. Net Monthly Payment Capacity" : "e.g. Loan Purpose"}
+              className="text-sm" data-testid="input-field-label" />
+            {dupError && <p className="text-xs text-destructive">{dupError}</p>}
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">Description</Label>
+            <Textarea value={description} onChange={e => setDescription(e.target.value)}
+              placeholder="Optional — describe how this field is used…"
+              className="text-xs min-h-[56px] resize-none" data-testid="textarea-field-desc" />
+          </div>
+          {fieldType === "derived_field" && (
+            <div className="space-y-3 rounded-md border p-3 bg-muted/30">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Derivation Formula</div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] text-muted-foreground w-20 shrink-0">Field A (required)</span>
+                  <FieldPicker value={derivFieldA} policyFields={policyFields} onChange={setDerivFieldA} testId="picker-deriv-a" />
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] text-muted-foreground w-20 shrink-0">Operator</span>
+                  <Select value={derivOp1} onValueChange={setDerivOp1}>
+                    <SelectTrigger className="h-8 text-xs w-20"><SelectValue /></SelectTrigger>
+                    <SelectContent>{DERIVATION_OPERATORS.map(op => <SelectItem key={op} value={op}>{op}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] text-muted-foreground w-20 shrink-0">Operand B</span>
+                  <OperandToggle type={derivBType} onType={setDerivBType} onClear={() => setDerivBValue("")} />
+                  {derivBType === "field"
+                    ? <FieldPicker value={derivBValue || null} policyFields={policyFields} onChange={setDerivBValue} testId="picker-deriv-b" />
+                    : <Input value={derivBValue} onChange={e => setDerivBValue(e.target.value)} placeholder="e.g. 0.3" className="h-8 text-xs w-32" data-testid="input-deriv-b" />}
+                </div>
+              </div>
+              {!derivHasStep2 ? (
+                <button type="button" className="text-xs text-primary hover:underline" onClick={() => setDerivHasStep2(true)}>
+                  + Add second operation
+                </button>
+              ) : (
+                <div className="space-y-2 border-t pt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-muted-foreground font-medium">Then apply:</span>
+                    <button type="button" className="text-[10px] text-destructive hover:underline"
+                      onClick={() => { setDerivHasStep2(false); setDerivOp2("+"); setDerivCType("constant"); setDerivCValue(""); }}>
+                      Remove
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] text-muted-foreground w-20 shrink-0">Operator</span>
+                    <Select value={derivOp2} onValueChange={setDerivOp2}>
+                      <SelectTrigger className="h-8 text-xs w-20"><SelectValue /></SelectTrigger>
+                      <SelectContent>{DERIVATION_OPERATORS.map(op => <SelectItem key={op} value={op}>{op}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] text-muted-foreground w-20 shrink-0">Operand C</span>
+                    <OperandToggle type={derivCType} onType={setDerivCType} onClear={() => setDerivCValue("")} />
+                    {derivCType === "field"
+                      ? <FieldPicker value={derivCValue || null} policyFields={policyFields} onChange={setDerivCValue} testId="picker-deriv-c" />
+                      : <Input value={derivCValue} onChange={e => setDerivCValue(e.target.value)} placeholder="e.g. 6" className="h-8 text-xs w-32" data-testid="input-deriv-c" />}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={handleClose} disabled={saving}>Cancel</Button>
+          <Button onClick={handleSave} disabled={!canSave || saving} data-testid="button-save-field">
+            {saving && <Loader2 className="w-3 h-3 animate-spin mr-1" />}Create Field
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── RuleBuilderGroup ─────────────────────────────────────────────────────────
+function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOnly, onFieldCreated }: {
+  group: LocalRuleGroup;
+  knownFields?: string[];
+  policyFields?: PolicyField[];
+  onChange: (g: LocalRuleGroup) => void;
+  isReadOnly: boolean;
+  onFieldCreated?: (field: PolicyField) => void;
+}) {
+  const [addFieldOpen, setAddFieldOpen] = useState(false);
+  const [pendingFieldTarget, setPendingFieldTarget] = useState<{ rowId: string; side: "left" | "right" } | null>(null);
+
   function updateRow(localId: string, patch: Partial<LocalRuleRow>) {
     onChange({ ...group, rows: group.rows.map(r => r.localId === localId ? { ...r, ...patch } : r) });
   }
   function removeRow(localId: string) {
     onChange({ ...group, rows: group.rows.filter(r => r.localId !== localId) });
   }
-  return (
-    <div className="space-y-2">
-      {group.rows.length > 1 && (
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Match:</span>
-          {(["AND", "OR"] as const).map(op => (
-            <button key={op} type="button" disabled={isReadOnly}
-              className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${group.logicOperator === op ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted"}`}
-              onClick={() => onChange({ ...group, logicOperator: op })}>
-              {op === "AND" ? "All conditions" : "Any condition"}
-            </button>
-          ))}
-        </div>
-      )}
-      {group.rows.map((row, idx) => (
-        <div key={row.localId} className="flex items-center gap-2 flex-wrap">
-          {group.rows.length > 1 && (
-            <span className="text-[10px] text-muted-foreground w-6 shrink-0 text-right font-mono">
-              {idx === 0 ? "IF" : group.logicOperator}
-            </span>
-          )}
-          <div className="flex items-center gap-1">
-            {row.useCustom ? (
-              <>
-                <Input value={row.customFieldName}
-                  onChange={e => updateRow(row.localId, { customFieldName: e.target.value, fieldName: e.target.value })}
-                  placeholder="Enter field name..." className="h-8 text-xs w-40" disabled={isReadOnly}
-                  data-testid={`input-custom-field-${row.localId}`} />
-                {!isReadOnly && (
-                  <Button variant="ghost" size="icon" className="h-8 w-8"
-                    onClick={() => updateRow(row.localId, { useCustom: false, customFieldName: "", fieldName: "" })}>
-                    <X className="w-3 h-3" />
-                  </Button>
-                )}
-              </>
-            ) : (
-              <Select value={row.fieldName || ""} disabled={isReadOnly}
-                onValueChange={v => {
-                  if (v === CUSTOM_FIELD_SENTINEL) updateRow(row.localId, { useCustom: true, customFieldName: "", fieldName: "" });
-                  else updateRow(row.localId, { fieldName: v, useCustom: false });
-                }}>
-                <SelectTrigger className="h-8 text-xs w-44" data-testid={`select-field-${row.localId}`}>
-                  <SelectValue placeholder="Select field…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {knownFields.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-                  <SelectItem value={CUSTOM_FIELD_SENTINEL} className="text-muted-foreground italic">Use custom field…</SelectItem>
-                </SelectContent>
-              </Select>
+  function openAddField(rowId: string, side: "left" | "right") {
+    setPendingFieldTarget({ rowId, side });
+    setAddFieldOpen(true);
+  }
+  function handleNewFieldCreated(field: PolicyField) {
+    setAddFieldOpen(false);
+    onFieldCreated?.(field);
+    if (pendingFieldTarget) {
+      const { rowId, side } = pendingFieldTarget;
+      if (side === "left") updateRow(rowId, { leftFieldId: field.id });
+      else updateRow(rowId, { rightFieldId: field.id, rightMode: "field" });
+      setPendingFieldTarget(null);
+    }
+  }
+
+  // Shared logic operator toggle
+  const LogicToggle = () => group.rows.length > 1 ? (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground">Match:</span>
+      {(["AND", "OR"] as const).map(op => (
+        <button key={op} type="button" disabled={isReadOnly}
+          className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${group.logicOperator === op ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted"}`}
+          onClick={() => onChange({ ...group, logicOperator: op })}>
+          {op === "AND" ? "All conditions" : "Any condition"}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  // ── OLD ENGINE (Blocked If — no policyFields provided) ───────────────────
+  if (!policyFields) {
+    return (
+      <div className="space-y-2">
+        <LogicToggle />
+        {group.rows.map((row, idx) => (
+          <div key={row.localId} className="flex items-center gap-2 flex-wrap">
+            {group.rows.length > 1 && (
+              <span className="text-[10px] text-muted-foreground w-6 shrink-0 text-right font-mono">
+                {idx === 0 ? "IF" : group.logicOperator}
+              </span>
+            )}
+            <div className="flex items-center gap-1">
+              {row.useCustom ? (
+                <>
+                  <Input value={row.customFieldName}
+                    onChange={e => updateRow(row.localId, { customFieldName: e.target.value, fieldName: e.target.value })}
+                    placeholder="Enter field name..." className="h-8 text-xs w-40" disabled={isReadOnly}
+                    data-testid={`input-custom-field-${row.localId}`} />
+                  {!isReadOnly && (
+                    <Button variant="ghost" size="icon" className="h-8 w-8"
+                      onClick={() => updateRow(row.localId, { useCustom: false, customFieldName: "", fieldName: "" })}>
+                      <X className="w-3 h-3" />
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <Select value={row.fieldName || ""} disabled={isReadOnly}
+                  onValueChange={v => {
+                    if (v === CUSTOM_FIELD_SENTINEL) updateRow(row.localId, { useCustom: true, customFieldName: "", fieldName: "" });
+                    else updateRow(row.localId, { fieldName: v, useCustom: false });
+                  }}>
+                  <SelectTrigger className="h-8 text-xs w-44" data-testid={`select-field-${row.localId}`}>
+                    <SelectValue placeholder="Select field…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(knownFields || []).map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                    <SelectItem value={CUSTOM_FIELD_SENTINEL} className="text-muted-foreground italic">Use custom field…</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            <Select value={row.operator} onValueChange={v => updateRow(row.localId, { operator: v })} disabled={isReadOnly}>
+              <SelectTrigger className="h-8 text-xs w-32" data-testid={`select-operator-${row.localId}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>{RULE_OPERATORS.map(op => <SelectItem key={op} value={op}>{op}</SelectItem>)}</SelectContent>
+            </Select>
+            {!NO_VALUE_OPERATORS.has(row.operator) && (
+              <Input value={row.value} onChange={e => updateRow(row.localId, { value: e.target.value })}
+                placeholder="Value…" className="h-8 text-xs w-32" disabled={isReadOnly}
+                data-testid={`input-value-${row.localId}`} />
+            )}
+            {!isReadOnly && (
+              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeRow(row.localId)}
+                data-testid={`button-remove-row-${row.localId}`}>
+                <Trash2 className="w-3 h-3 text-destructive" />
+              </Button>
             )}
           </div>
-          <Select value={row.operator} onValueChange={v => updateRow(row.localId, { operator: v })} disabled={isReadOnly}>
-            <SelectTrigger className="h-8 text-xs w-32" data-testid={`select-operator-${row.localId}`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {RULE_OPERATORS.map(op => <SelectItem key={op} value={op}>{op}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          {!NO_VALUE_OPERATORS.has(row.operator) && (
-            <Input value={row.value} onChange={e => updateRow(row.localId, { value: e.target.value })}
-              placeholder="Value…" className="h-8 text-xs w-32" disabled={isReadOnly}
-              data-testid={`input-value-${row.localId}`} />
-          )}
-          {!isReadOnly && (
-            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeRow(row.localId)}
-              data-testid={`button-remove-row-${row.localId}`}>
-              <Trash2 className="w-3 h-3 text-destructive" />
-            </Button>
-          )}
-        </div>
-      ))}
+        ))}
+        {!isReadOnly && (
+          <Button variant="outline" size="sm" className="h-7 text-xs"
+            onClick={() => onChange({ ...group, rows: [...group.rows, makeEmptyRow()] })}
+            data-testid="button-add-condition">
+            <Plus className="w-3 h-3 mr-1" />Add Condition
+          </Button>
+        )}
+        {group.rows.length === 0 && (
+          <p className="text-xs text-muted-foreground italic">{isReadOnly ? "No conditions defined." : "No conditions yet — add one above."}</p>
+        )}
+      </div>
+    );
+  }
+
+  // ── NEW ENGINE (When to Offer — policyFields provided) ───────────────────
+  return (
+    <div className="space-y-2">
+      <LogicToggle />
+      {group.rows.map((row, idx) => {
+        const leftField = row.leftFieldId ? policyFields.find(f => f.id === row.leftFieldId) : null;
+        const rightField = row.rightMode === "field" && row.rightFieldId ? policyFields.find(f => f.id === row.rightFieldId) : null;
+        return (
+          <div key={row.localId} className="flex items-center gap-2 flex-wrap">
+            {group.rows.length > 1 && (
+              <span className="text-[10px] text-muted-foreground w-6 shrink-0 text-right font-mono">
+                {idx === 0 ? "IF" : group.logicOperator}
+              </span>
+            )}
+            <div className="flex items-center gap-1">
+              <FieldPicker value={row.leftFieldId} policyFields={policyFields}
+                onChange={fieldId => updateRow(row.localId, { leftFieldId: fieldId })}
+                onAddField={() => openAddField(row.localId, "left")}
+                disabled={isReadOnly} testId={`picker-left-${row.localId}`} />
+              {leftField && <FieldInfoPopover field={leftField} />}
+            </div>
+            <Select value={row.operator} onValueChange={v => updateRow(row.localId, { operator: v })} disabled={isReadOnly}>
+              <SelectTrigger className="h-8 text-xs w-32" data-testid={`select-operator-${row.localId}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>{RULE_OPERATORS.map(op => <SelectItem key={op} value={op}>{op}</SelectItem>)}</SelectContent>
+            </Select>
+            {!NO_VALUE_OPERATORS.has(row.operator) && (
+              <>
+                <div className="flex rounded-md border overflow-hidden text-[10px] shrink-0">
+                  {(["constant", "field"] as const).map(m => (
+                    <button key={m} type="button" disabled={isReadOnly}
+                      className={`px-2 py-1 transition-colors capitalize ${row.rightMode === m ? "bg-primary text-primary-foreground" : "bg-background hover:bg-muted"}`}
+                      onClick={() => updateRow(row.localId, { rightMode: m, rightFieldId: null, rightConstantValue: "" })}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                {row.rightMode === "field" ? (
+                  <div className="flex items-center gap-1">
+                    <FieldPicker value={row.rightFieldId} policyFields={policyFields}
+                      onChange={fieldId => updateRow(row.localId, { rightFieldId: fieldId })}
+                      onAddField={() => openAddField(row.localId, "right")}
+                      disabled={isReadOnly} testId={`picker-right-${row.localId}`} />
+                    {rightField && <FieldInfoPopover field={rightField} />}
+                  </div>
+                ) : (
+                  <Input value={row.rightConstantValue} onChange={e => updateRow(row.localId, { rightConstantValue: e.target.value })}
+                    placeholder="Value…" className="h-8 text-xs w-32" disabled={isReadOnly}
+                    data-testid={`input-value-${row.localId}`} />
+                )}
+              </>
+            )}
+            {!isReadOnly && (
+              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeRow(row.localId)}
+                data-testid={`button-remove-row-${row.localId}`}>
+                <Trash2 className="w-3 h-3 text-destructive" />
+              </Button>
+            )}
+          </div>
+        );
+      })}
       {!isReadOnly && (
         <Button variant="outline" size="sm" className="h-7 text-xs"
           onClick={() => onChange({ ...group, rows: [...group.rows, makeEmptyRow()] })}
@@ -534,13 +936,18 @@ function RuleBuilderGroup({ group, knownFields, onChange, isReadOnly }: { group:
       {group.rows.length === 0 && (
         <p className="text-xs text-muted-foreground italic">{isReadOnly ? "No conditions defined." : "No conditions yet — add one above."}</p>
       )}
+      <AddCustomFieldModal open={addFieldOpen} policyFields={policyFields}
+        onClose={() => { setAddFieldOpen(false); setPendingFieldTarget(null); }}
+        onFieldCreated={handleNewFieldCreated} />
     </div>
   );
 }
 
-function TreatmentCard({ treatment, knownFields, isReadOnly, onUpdate, onDelete }: {
+function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, isReadOnly, onUpdate, onDelete }: {
   treatment: LocalTreatment;
   knownFields: string[];
+  policyFields: PolicyField[];
+  onFieldCreated: (field: PolicyField) => void;
   isReadOnly: boolean;
   onUpdate: (updated: LocalTreatment) => void;
   onDelete: () => void;
@@ -567,7 +974,15 @@ function TreatmentCard({ treatment, knownFields, isReadOnly, onUpdate, onDelete 
       const saveGroup = (g: LocalRuleGroup, ruleType: string) =>
         apiRequest("POST", `/api/policy-pack/treatments/${dbId}/rules`, {
           ruleType, logicOperator: g.logicOperator,
-          rows: g.rows.map(r => ({ fieldName: r.fieldName, operator: r.operator, value: r.value })),
+          rows: g.rows.map(r => ({
+            fieldName: r.leftFieldId || r.fieldName,
+            operator: r.operator,
+            value: r.rightMode === "constant" ? r.rightConstantValue : null,
+            leftFieldId: r.leftFieldId || null,
+            rightMode: r.rightMode || "constant",
+            rightConstantValue: r.rightMode === "constant" ? r.rightConstantValue : null,
+            rightFieldId: r.rightMode === "field" ? r.rightFieldId : null,
+          })),
         });
       await saveGroup(local.whenToOffer, "when_to_offer");
       await saveGroup(local.blockedIf, "blocked_if");
@@ -683,8 +1098,9 @@ function TreatmentCard({ treatment, knownFields, isReadOnly, onUpdate, onDelete 
 
           {/* Rule builder */}
           {local.activeSection === "when" ? (
-            <RuleBuilderGroup group={local.whenToOffer} knownFields={knownFields}
-              onChange={g => setLocal(l => ({ ...l, whenToOffer: g }))} isReadOnly={isReadOnly} />
+            <RuleBuilderGroup group={local.whenToOffer} policyFields={policyFields}
+              onChange={g => setLocal(l => ({ ...l, whenToOffer: g }))} isReadOnly={isReadOnly}
+              onFieldCreated={onFieldCreated} />
           ) : (
             <RuleBuilderGroup group={local.blockedIf} knownFields={knownFields}
               onChange={g => setLocal(l => ({ ...l, blockedIf: g }))} isReadOnly={isReadOnly} />
@@ -711,6 +1127,7 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
 
   const { data: serverTreatmentsData, isLoading: txLoading } = useQuery<TreatmentWithRules[]>({ queryKey: ["/api/policy-pack/treatments"] });
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], retry: false });
+  const { data: serverPolicyFields } = useQuery<PolicyField[]>({ queryKey: ["/api/policy-fields"], retry: false });
 
   const knownFields = useMemo(() => {
     if (!dataConfig?.categoryData) return [];
@@ -720,6 +1137,16 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
     }
     return [...new Set(fields)];
   }, [dataConfig]);
+
+  const [policyFields, setPolicyFields] = useState<PolicyField[]>([]);
+  useEffect(() => { if (serverPolicyFields) setPolicyFields(serverPolicyFields); }, [serverPolicyFields]);
+
+  function handleFieldCreated(field: PolicyField) {
+    setPolicyFields(prev => {
+      if (prev.find(f => f.id === field.id)) return prev;
+      return [...prev, field];
+    });
+  }
 
   const [localTreatments, setLocalTreatments] = useState<LocalTreatment[]>([]);
 
@@ -981,7 +1408,8 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
             </div>
           ) : (
             localTreatments.map(tx => (
-              <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} isReadOnly={isReadOnly}
+              <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} policyFields={policyFields}
+                onFieldCreated={handleFieldCreated} isReadOnly={isReadOnly}
                 onUpdate={updated => setLocalTreatments(prev => prev.map(t => t.localId === tx.localId ? updated : t))}
                 onDelete={() => setLocalTreatments(prev => prev.filter(t => t.localId !== tx.localId))} />
             ))

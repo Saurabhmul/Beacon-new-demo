@@ -1,6 +1,6 @@
 import {
   clientConfigs, rulebooks, dataConfigs, dataUploads, decisions, dpdStages, uploadLogs, policyConfigs,
-  policyPacks, treatments, treatmentRuleGroups, treatmentRules,
+  policyPacks, treatments, treatmentRuleGroups, treatmentRules, policyFields,
   companies, users,
   type ClientConfig, type InsertClientConfig,
   type Rulebook, type InsertRulebook,
@@ -15,6 +15,7 @@ import {
   type TreatmentRuleGroup, type InsertTreatmentRuleGroup,
   type TreatmentRule, type InsertTreatmentRule,
   type TreatmentWithRules,
+  type PolicyFieldRecord, type InsertPolicyField,
   type Company, type InsertCompany,
   type User,
 } from "@shared/schema";
@@ -72,6 +73,9 @@ export interface IStorage {
   deleteTreatment(id: number): Promise<void>;
   upsertRuleGroup(data: InsertTreatmentRuleGroup & { id?: number }): Promise<TreatmentRuleGroup>;
   replaceRuleRows(groupId: number, rows: Omit<InsertTreatmentRule, 'ruleGroupId'>[]): Promise<void>;
+
+  getPolicyFields(companyId: string): Promise<PolicyFieldRecord[]>;
+  createPolicyField(data: InsertPolicyField): Promise<PolicyFieldRecord>;
 
   getCompanies(): Promise<Company[]>;
   getCompany(id: string): Promise<Company | undefined>;
@@ -365,6 +369,17 @@ export class DatabaseStorage implements IStorage {
     if (rows.length > 0) {
       await db.insert(treatmentRules).values(rows.map((r, i) => ({ ...r, ruleGroupId: groupId, sortOrder: i })));
     }
+  }
+
+  async getPolicyFields(companyId: string): Promise<PolicyFieldRecord[]> {
+    return db.select().from(policyFields)
+      .where(eq(policyFields.companyId, companyId))
+      .orderBy(policyFields.label);
+  }
+
+  async createPolicyField(data: InsertPolicyField): Promise<PolicyFieldRecord> {
+    const [field] = await db.insert(policyFields).values(data).returning();
+    return field;
   }
 
   async getCompanies(): Promise<Company[]> {

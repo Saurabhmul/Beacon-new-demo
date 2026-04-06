@@ -685,10 +685,14 @@ export async function registerRoutes(
         groupOrder: 0,
       });
       await storage.replaceRuleRows(group.id, (rows || []).map((r: any, i: number) => ({
-        fieldName: r.fieldName,
+        fieldName: r.fieldName || r.leftFieldId || "",
         operator: r.operator,
         value: r.value || null,
         sortOrder: i,
+        leftFieldId: r.leftFieldId || null,
+        rightMode: r.rightMode || null,
+        rightConstantValue: r.rightConstantValue || null,
+        rightFieldId: r.rightFieldId || null,
       })));
       const updated = await storage.getTreatmentsWithRules((await storage.getPolicyPack((await storage.getClientConfig(getCompanyId(req)))!.id))!.id);
       const tx = updated.find(t => t.id === treatmentId);
@@ -696,6 +700,94 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Save rules error:", error);
       res.status(500).json({ error: "Failed to save rules" });
+    }
+  });
+
+  // Policy Fields API
+  function generateDerivationSummary(config: any): string {
+    const labelA = config.fieldALabel || config.fieldA || "?";
+    const labelB = config.operandBType === "field"
+      ? (config.operandBLabel || config.operandBValue || "?")
+      : (config.operandBValue || "?");
+    if (!config.operator2) return `${labelA} ${config.operator1} ${labelB}`;
+    const labelC = config.operandCType === "field"
+      ? (config.operandCLabel || config.operandCValue || "?")
+      : (config.operandCValue || "?");
+    return `(${labelA} ${config.operator1} ${labelB}) ${config.operator2} ${labelC}`;
+  }
+
+  app.get("/api/policy-fields", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const dataConfig = await storage.getDataConfig(companyId!);
+      const categoryData = (dataConfig?.categoryData as Record<string, any>) || {};
+      const sourceFields: any[] = [];
+      for (const [, catEntry] of Object.entries(categoryData)) {
+        if (catEntry?.fieldAnalysis && Array.isArray(catEntry.fieldAnalysis)) {
+          for (const f of catEntry.fieldAnalysis) {
+            if (!f.ignored && f.fieldName) {
+              const id = `source:${f.fieldName}`;
+              if (!sourceFields.find((sf: any) => sf.id === id)) {
+                sourceFields.push({
+                  id,
+                  label: f.fieldName,
+                  description: f.beaconsUnderstanding || null,
+                  sourceType: "source_field",
+                  derivationConfig: null,
+                  derivationSummary: null,
+                });
+              }
+            }
+          }
+        }
+      }
+      sourceFields.sort((a, b) => a.label.localeCompare(b.label));
+      const dbFields = await storage.getPolicyFields(companyId!);
+      const businessFields = dbFields
+        .filter(f => f.sourceType === "business_field")
+        .map(f => ({ id: String(f.id), label: f.label, description: f.description, sourceType: f.sourceType, derivationConfig: f.derivationConfig, derivationSummary: f.derivationSummary }));
+      const derivedFields = dbFields
+        .filter(f => f.sourceType === "derived_field")
+        .map(f => ({ id: String(f.id), label: f.label, description: f.description, sourceType: f.sourceType, derivationConfig: f.derivationConfig, derivationSummary: f.derivationSummary }));
+      res.json([...sourceFields, ...businessFields, ...derivedFields]);
+    } catch (error) {
+      console.error("Get policy fields error:", error);
+      res.status(500).json({ error: "Failed to fetch policy fields" });
+    }
+  });
+
+  app.post("/api/policy-fields", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const { label, description, sourceType, derivationConfig } = req.body;
+      if (!label?.trim()) return res.status(400).json({ error: "label is required" });
+      if (!["business_field", "derived_field"].includes(sourceType)) return res.status(400).json({ error: "sourceType must be business_field or derived_field" });
+      const existing = await storage.getPolicyFields(companyId!);
+      const dup = existing.find(f => f.label.trim().toLowerCase() === label.trim().toLowerCase());
+      if (dup) return res.status(409).json({ error: `Field "${label.trim()}" already exists` });
+      const derivationSummary = sourceType === "derived_field" && derivationConfig
+        ? generateDerivationSummary(derivationConfig)
+        : null;
+      const field = await storage.createPolicyField({
+        companyId: companyId!,
+        policyPackId: null,
+        label: label.trim(),
+        description: description?.trim() || null,
+        sourceType,
+        derivationConfig: derivationConfig || null,
+        derivationSummary,
+      });
+      res.status(201).json({
+        id: String(field.id),
+        label: field.label,
+        description: field.description,
+        sourceType: field.sourceType,
+        derivationConfig: field.derivationConfig,
+        derivationSummary: field.derivationSummary,
+      });
+    } catch (error) {
+      console.error("Create policy field error:", error);
+      res.status(500).json({ error: "Failed to create policy field" });
     }
   });
 

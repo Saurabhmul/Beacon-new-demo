@@ -11,6 +11,19 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - **AI**: Gemini 2.5 Pro via Replit AI Integrations (no API key needed)
 - **File Processing**: Multer for uploads, PapaParse for CSV parsing
 
+## Rule Engine (Phase 1)
+- `policy_fields` table: company-scoped field registry for custom Business and Derived fields
+  - `source_field`: synthesized from Data Config field analysis (stable ID = `source:<fieldName>`)
+  - `business_field` / `derived_field`: stored in DB, ID = row integer as string
+  - Derived fields have `derivationConfig` (jsonb) and auto-generated `derivationSummary`
+- `treatment_rules` enhanced with: `leftFieldId`, `rightMode` (constant/field), `rightConstantValue`, `rightFieldId`
+- **GET /api/policy-fields**: returns unified field list (source + business + derived), sorted Source→Business→Derived
+- **POST /api/policy-fields**: creates business/derived field with server-side duplicate check (case-insensitive, per companyId) and derivation summary generation
+- **When to Offer** rule section uses new FieldPicker + RHS Const/Field toggle + info popover
+- **Blocked If** rule section uses the legacy knownFields dropdown (Phase 1 only)
+- `FieldPicker`: grouped Select (Source / Business / Derived) with "+ Add customer field" action
+- `AddCustomFieldModal`: creates business or derived field with optional derivation builder (Field A op Operand B, optional op Operand C)
+
 ## Multi-Tenant Architecture
 - **Companies**: `companies` table — each lender organization
 - **Users**: Expanded `users` table with role (superadmin/admin/manager/agent), companyId, status (invited/active/deactivated), invite token flow
