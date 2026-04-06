@@ -490,7 +490,7 @@ Respond ONLY with a valid JSON array. Example:
 [{"fieldName": "dpd_bucket", "beaconsUnderstanding": "Number of days the account is past due, grouped into buckets (e.g. 1-30, 31-60).", "confidence": "High"}]`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-pro",
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: { maxOutputTokens: 4096 },
   });
