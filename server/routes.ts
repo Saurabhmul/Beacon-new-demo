@@ -689,7 +689,7 @@ export async function registerRoutes(
       await storage.replaceRuleRows(group.id, typedRows.map((r, i) => ({
         fieldName: r.fieldName || r.leftFieldId || "",
         operator: r.operator,
-        value: r.value ?? null,
+        value: r.value || null,
         sortOrder: i,
         leftFieldId: r.leftFieldId,
         rightMode: r.rightMode,
