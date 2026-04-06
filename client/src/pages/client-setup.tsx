@@ -706,10 +706,9 @@ const PRELOADED_TREATMENTS = [
   { name: "Write-Off / Debt Settlement", shortDescription: "Offering a reduced lump-sum settlement to close the account. Used in late-stage collections when full recovery is unlikely. Typically requires management approval." },
 ];
 
-function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
+function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; policyPack: PolicyPack }) {
   const { toast } = useToast();
 
-  const { data: policyPack, isLoading: packLoading } = useQuery<PolicyPack>({ queryKey: ["/api/policy-pack"], retry: false });
   const { data: serverTreatmentsData, isLoading: txLoading } = useQuery<TreatmentWithRules[]>({ queryKey: ["/api/policy-pack/treatments"] });
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], retry: false });
 
@@ -724,7 +723,6 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
 
   const [localTreatments, setLocalTreatments] = useState<LocalTreatment[]>([]);
   const [entryMode, setEntryMode] = useState<"build" | "upload" | null>(null);
-  const [packNameInput, setPackNameInput] = useState("");
   const [sopFile, setSopFile] = useState<File | null>(null);
   const [sopExtracting, setSopExtracting] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -751,16 +749,7 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
     });
   }, [serverTreatmentsData]);
 
-  const createPackMutation = useMutation({
-    mutationFn: async (data: { policyName: string; sourceType: string; sourceFileName?: string }) => {
-      const pack = policyPack
-        ? await apiRequest("POST", "/api/policy-pack", { id: policyPack.id, ...data }).then(r => r.json())
-        : await apiRequest("POST", "/api/policy-pack", data).then(r => r.json());
-      return pack;
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/policy-pack"] }),
-    onError: () => toast({ title: "Error", description: "Failed to create policy pack", variant: "destructive" }),
-  });
+  const hasTreatments = localTreatments.length > 0 || (serverTreatmentsData?.length ?? 0) > 0;
 
   function makeTemplateLocal(name: string, shortDescription: string, expanded = false): LocalTreatment {
     return {
@@ -771,23 +760,21 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
     };
   }
 
-  async function handleStartBuild() {
-    if (!packNameInput.trim()) return;
-    await createPackMutation.mutateAsync({ policyName: packNameInput, sourceType: "ui" });
+  function handleStartBuild() {
     if (buildSelectedTemplates.size > 0) {
       const drafts = PRELOADED_TREATMENTS
         .filter(t => buildSelectedTemplates.has(t.name))
         .map(t => makeTemplateLocal(t.name, t.shortDescription));
       setLocalTreatments(prev => [...prev, ...drafts]);
     }
+    setBuildSelectedTemplates(new Set());
     setEntryMode(null);
   }
 
   async function handleExtractSOP() {
-    if (!sopFile || !packNameInput.trim()) return;
+    if (!sopFile) return;
     setSopExtracting(true);
     try {
-      if (!policyPack) await createPackMutation.mutateAsync({ policyName: packNameInput, sourceType: "file", sourceFileName: sopFile.name });
       const form = new FormData();
       form.append("file", sopFile);
       const res = await fetch("/api/policy-pack/extract-sop", { method: "POST", body: form, credentials: "include" });
@@ -823,15 +810,10 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
     closeAddDialog();
   }
 
-  const hasPack = !!policyPack;
-
-  // Loading state
-  if (packLoading) return <div className="flex items-center gap-2 py-4 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading policy pack…</div>;
-
   return (
     <div className="space-y-4">
-      {/* ── Entry selector (when no pack) ──────────────────────────── */}
-      {!hasPack && entryMode === null && (
+      {/* ── Entry selector (no treatments yet) ─────────────────────── */}
+      {!hasTreatments && entryMode === null && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Section D: Treatments</CardTitle>
@@ -839,7 +821,7 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
           </CardHeader>
           <CardContent>
             {isReadOnly ? (
-              <p className="text-sm text-muted-foreground">No policy pack configured yet.</p>
+              <p className="text-sm text-muted-foreground">No treatments configured yet.</p>
             ) : (
               <div className="grid grid-cols-2 gap-4">
                 <button type="button" onClick={() => setEntryMode("build")}
@@ -867,20 +849,13 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
       )}
 
       {/* ── Build mode setup ──────────────────────────────────────── */}
-      {!hasPack && entryMode === "build" && (
+      {entryMode === "build" && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Build in Beacon</CardTitle>
-            <CardDescription>Name your policy pack and pick from our treatment library — or start with an empty pack and add treatments later.</CardDescription>
+            <CardDescription>Pick from our treatment library to get started — or skip to begin with an empty list and add treatments manually later.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
-            <div>
-              <label className="text-sm font-medium mb-1.5 block">Policy name <span className="text-destructive">*</span></label>
-              <Input value={packNameInput} onChange={e => setPackNameInput(e.target.value)}
-                placeholder="e.g. Standard Collections Policy 2025" className="max-w-md"
-                data-testid="input-pack-name-build" />
-            </div>
-
             <div>
               <p className="text-sm font-medium mb-2">Select treatments to include</p>
               <p className="text-xs text-muted-foreground mb-3">You can always add or remove treatments later. Select any that apply to your business.</p>
@@ -909,8 +884,7 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
             </div>
 
             <div className="flex gap-2 pt-1">
-              <Button onClick={handleStartBuild} disabled={!packNameInput.trim() || createPackMutation.isPending} data-testid="button-start-build">
-                {createPackMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              <Button onClick={handleStartBuild} data-testid="button-start-build">
                 {buildSelectedTemplates.size > 0 ? `Get Started with ${buildSelectedTemplates.size} Treatment${buildSelectedTemplates.size !== 1 ? "s" : ""}` : "Get Started"}
               </Button>
               <Button variant="outline" onClick={() => setEntryMode(null)}>Back</Button>
@@ -919,20 +893,14 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
         </Card>
       )}
 
-      {/* ── Upload SOP mode setup ─────────────────────────────────── */}
-      {!hasPack && entryMode === "upload" && (
+      {/* ── Upload SOP mode setup (first-time) ───────────────────── */}
+      {!hasTreatments && entryMode === "upload" && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Upload SOP / Policy File</CardTitle>
             <CardDescription>Beacon will read your document and extract draft treatments for you to review and edit.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div>
-              <label className="text-sm font-medium mb-1.5 block">Policy name <span className="text-destructive">*</span></label>
-              <Input value={packNameInput} onChange={e => setPackNameInput(e.target.value)}
-                placeholder="e.g. Lendable Collections Policy 2025" className="max-w-md"
-                data-testid="input-pack-name-upload" />
-            </div>
             <div>
               <label className="text-sm font-medium mb-1.5 block">SOP file</label>
               <input ref={sopInputRef} type="file" accept=".txt,.pdf,.docx,.doc" className="hidden"
@@ -946,7 +914,7 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
               <p className="text-xs text-muted-foreground mt-1.5">Supported: TXT, PDF, DOCX</p>
             </div>
             <div className="flex gap-2">
-              <Button onClick={handleExtractSOP} disabled={!sopFile || !packNameInput.trim() || sopExtracting} data-testid="button-extract-sop">
+              <Button onClick={handleExtractSOP} disabled={!sopFile || sopExtracting} data-testid="button-extract-sop">
                 {sopExtracting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Extracting…</> : <><Wand2 className="w-4 h-4 mr-2" />Extract Treatments</>}
               </Button>
               <Button variant="outline" onClick={() => setEntryMode(null)}>Back</Button>
@@ -955,16 +923,15 @@ function PolicyPackSection({ isReadOnly }: { isReadOnly: boolean }) {
         </Card>
       )}
 
-      {/* ── Pack exists: treatments header ───────────────────────── */}
-      {hasPack && (
+      {/* ── Treatments card (once treatments exist) ──────────────── */}
+      {hasTreatments && (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
                 <CardTitle className="text-base">Section D: Treatments</CardTitle>
                 <CardDescription>
-                  <span className="font-medium text-foreground">{policyPack!.policyName}</span>
-                  <span className="text-muted-foreground ml-2 text-xs">· {policyPack!.sourceType === "file" ? "Extracted from SOP" : "Built in Beacon"} · {policyPack!.status}</span>
+                  {policyPack.sourceType === "file" ? "Extracted from SOP" : "Built in Beacon"}
                 </CardDescription>
               </div>
               {!isReadOnly && (
@@ -1125,6 +1092,36 @@ function PolicyConfigTab() {
     retry: false,
   });
   const { data: dpdStages = [] } = useQuery<DpdStage[]>({ queryKey: ["/api/dpd-stages"] });
+
+  // Policy pack — lifted here so the header can use it
+  const { data: policyPack, isLoading: packLoading } = useQuery<PolicyPack>({ queryKey: ["/api/policy-pack"], retry: false });
+  const [policyNameInput, setPolicyNameInput] = useState("");
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editingNameValue, setEditingNameValue] = useState("");
+
+  const createPackMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest("POST", "/api/policy-pack", { policyName: name, sourceType: "ui" });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-pack"] });
+      setPolicyNameInput("");
+    },
+    onError: () => toast({ title: "Error", description: "Failed to create policy", variant: "destructive" }),
+  });
+
+  const renamePackMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest("POST", "/api/policy-pack", { id: policyPack!.id, policyName: name, sourceType: policyPack!.sourceType });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-pack"] });
+      setIsEditingName(false);
+    },
+    onError: () => toast({ title: "Error", description: "Failed to rename policy", variant: "destructive" }),
+  });
 
   const [vulnerabilityDefinition, setVulnerabilityDefinition] = useState("");
   const [affordabilityRules, setAffordabilityRules] = useState<AffordabilityRule[]>(DEFAULT_AFFORDABILITY_RULES);
@@ -1391,13 +1388,94 @@ function PolicyConfigTab() {
 
   const enabledTreatments = treatments.filter(t => t.enabled);
 
-  if (policyLoading) {
-    return <div className="space-y-6"><Skeleton className="h-64 w-full" /></div>;
+  if (policyLoading || packLoading) {
+    return <div className="space-y-6"><Skeleton className="h-28 w-full rounded-xl" /><Skeleton className="h-64 w-full" /></div>;
   }
 
   return (
     <>
       <div className="space-y-6">
+
+        {/* ── Policy Header ──────────────────────────────────────────── */}
+        <Card>
+          <CardContent className="py-5">
+            {!policyPack ? (
+              <div>
+                <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-1">Policy</p>
+                <p className="text-sm text-muted-foreground mb-4">Give this policy a name to unlock all configuration sections below.</p>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Input
+                    value={policyNameInput}
+                    onChange={e => setPolicyNameInput(e.target.value)}
+                    placeholder="e.g. Standard Collections Policy 2025"
+                    className="max-w-sm"
+                    onKeyDown={e => { if (e.key === "Enter" && policyNameInput.trim()) createPackMutation.mutate(policyNameInput.trim()); }}
+                    data-testid="input-policy-name"
+                  />
+                  <Button
+                    onClick={() => createPackMutation.mutate(policyNameInput.trim())}
+                    disabled={!policyNameInput.trim() || createPackMutation.isPending}
+                    data-testid="button-create-policy">
+                    {createPackMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                    Create Policy
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-1">Policy</p>
+                  {isEditingName ? (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={editingNameValue}
+                        onChange={e => setEditingNameValue(e.target.value)}
+                        className="text-lg font-semibold h-9 max-w-sm"
+                        autoFocus
+                        onKeyDown={e => {
+                          if (e.key === "Enter" && editingNameValue.trim()) renamePackMutation.mutate(editingNameValue.trim());
+                          if (e.key === "Escape") setIsEditingName(false);
+                        }}
+                        onBlur={() => {
+                          if (editingNameValue.trim() && editingNameValue !== policyPack.policyName) renamePackMutation.mutate(editingNameValue.trim());
+                          else setIsEditingName(false);
+                        }}
+                        data-testid="input-rename-policy"
+                      />
+                      {renamePackMutation.isPending && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 group cursor-default">
+                      <h2 className="text-lg font-semibold leading-tight" data-testid="text-policy-name">{policyPack.policyName}</h2>
+                      {!isReadOnly && (
+                        <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => { setEditingNameValue(policyPack.policyName); setIsEditingName(true); }}
+                          data-testid="button-rename-policy">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 pt-1 shrink-0">
+                  <Badge variant={policyPack.status === "active" ? "default" : "secondary"} className="capitalize" data-testid="badge-policy-status">
+                    {policyPack.status}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">Updated {new Date(policyPack.updatedAt).toLocaleDateString()}</span>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ── Gate: show lock message if no policy created yet ──────── */}
+        {!policyPack ? (
+          <div className="rounded-xl border-2 border-dashed border-border/60 p-10 text-center text-muted-foreground">
+            <Lock className="w-8 h-8 mx-auto mb-3 opacity-25" />
+            <p className="text-sm font-medium">All configuration sections will appear here once you name your policy above.</p>
+          </div>
+        ) : (
+          <>
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -1568,7 +1646,7 @@ function PolicyConfigTab() {
           </CardContent>
         </Card>
 
-        <PolicyPackSection isReadOnly={isReadOnly} />
+        <PolicyPackSection isReadOnly={isReadOnly} policyPack={policyPack!} />
 
         {false && (<>
           <Card>
@@ -1983,6 +2061,8 @@ function PolicyConfigTab() {
               Save Policy Configuration
             </Button>
           </div>
+        )}
+          </>
         )}
       </div>
 
