@@ -722,20 +722,28 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
   }, [dataConfig]);
 
   const [localTreatments, setLocalTreatments] = useState<LocalTreatment[]>([]);
-  const [entryMode, setEntryMode] = useState<"build" | "upload" | null>(null);
+
+  // Upload panel toggle (replaces old entryMode "build"/"upload")
+  const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [sopFile, setSopFile] = useState<File | null>(null);
   const [sopExtracting, setSopExtracting] = useState(false);
+  const sopInputRef = useRef<HTMLInputElement>(null);
+
+  // Library selection (inline checklist)
+  const [librarySelected, setLibrarySelected] = useState<Set<string>>(new Set());
+
+  // Add Treatment dialog
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [addName, setAddName] = useState("");
   const [addDesc, setAddDesc] = useState("");
   const [addEnabled, setAddEnabled] = useState(true);
-  const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set());
-  const [showCustomForm, setShowCustomForm] = useState(false);
-  const [buildSelectedTemplates, setBuildSelectedTemplates] = useState<Set<string>>(new Set());
-  const sopInputRef = useRef<HTMLInputElement>(null);
+
+  // Duplicate-resolution state
+  type SopConflict = { extracted: LocalTreatment; existing: LocalTreatment };
+  const [conflicts, setConflicts] = useState<SopConflict[]>([]);
+  const [conflictIndex, setConflictIndex] = useState(0);
 
   // Sync from server — preserve expanded/activeSection state
-  // Note: use serverTreatmentsData (not a defaulted alias) to keep stable reference when undefined
   useEffect(() => {
     if (!serverTreatmentsData) return;
     setLocalTreatments(prev => {
@@ -749,26 +757,22 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
     });
   }, [serverTreatmentsData]);
 
-  const hasTreatments = localTreatments.length > 0 || (serverTreatmentsData?.length ?? 0) > 0;
-
-  function makeTemplateLocal(name: string, shortDescription: string, expanded = false): LocalTreatment {
+  function makeTemplateLocal(name: string, shortDescription: string, enabled = true, expanded = false): LocalTreatment {
     return {
       localId: crypto.randomUUID(), dbId: undefined, name, shortDescription,
-      enabled: true, priority: "", tone: "",
+      enabled, priority: "", tone: "",
       whenToOffer: makeEmptyGroup(), blockedIf: makeEmptyGroup(),
       isDraft: true, expanded, activeSection: "when",
     };
   }
 
-  function handleStartBuild() {
-    if (buildSelectedTemplates.size > 0) {
-      const drafts = PRELOADED_TREATMENTS
-        .filter(t => buildSelectedTemplates.has(t.name))
-        .map(t => makeTemplateLocal(t.name, t.shortDescription));
-      setLocalTreatments(prev => [...prev, ...drafts]);
-    }
-    setBuildSelectedTemplates(new Set());
-    setEntryMode(null);
+  function handleAddFromLibrary() {
+    if (librarySelected.size === 0) return;
+    const drafts = PRELOADED_TREATMENTS
+      .filter(t => librarySelected.has(t.name))
+      .map(t => makeTemplateLocal(t.name, t.shortDescription));
+    setLocalTreatments(prev => [...prev, ...drafts]);
+    setLibrarySelected(new Set());
   }
 
   async function handleExtractSOP() {
@@ -781,9 +785,23 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
       if (!res.ok) throw new Error();
       const { treatments: extracted } = await res.json();
       if (!extracted?.length) { toast({ title: "No treatments found", description: "Beacon couldn't extract treatments from this file.", variant: "destructive" }); return; }
-      setLocalTreatments(prev => [...prev, ...extracted.map(extractionToLocal)]);
+
+      const extractedLocals: LocalTreatment[] = extracted.map(extractionToLocal);
+
+      // Partition into clean vs conflicting (case-insensitive name match)
+      const clean: LocalTreatment[] = [];
+      const newConflicts: SopConflict[] = [];
+      for (const ex of extractedLocals) {
+        const existing = localTreatments.find(lt => lt.name.trim().toLowerCase() === ex.name.trim().toLowerCase());
+        if (existing) newConflicts.push({ extracted: ex, existing });
+        else clean.push(ex);
+      }
+
+      // Append non-conflicting treatments immediately
+      if (clean.length > 0) setLocalTreatments(prev => [...prev, ...clean]);
+
       // Update pack provenance to reflect SOP extraction
-      if (policyPack && policyPack.sourceType !== "file") {
+      if (policyPack.sourceType !== "file") {
         await fetch("/api/policy-pack", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -791,296 +809,241 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
           body: JSON.stringify({ id: policyPack.id, policyName: policyPack.policyName, sourceType: "file", sourceFileName: sopFile.name }),
         });
       }
-      setEntryMode(null);
-      toast({ title: `${extracted.length} treatment${extracted.length !== 1 ? "s" : ""} extracted`, description: "Review and save each treatment below." });
+
+      setShowUploadPanel(false);
+      setSopFile(null);
+
+      if (newConflicts.length > 0) {
+        setConflicts(newConflicts);
+        setConflictIndex(0);
+        if (clean.length > 0) {
+          toast({ title: `${clean.length} treatment${clean.length !== 1 ? "s" : ""} added`, description: `${newConflicts.length} duplicate${newConflicts.length !== 1 ? "s" : ""} need resolution.` });
+        }
+      } else {
+        toast({ title: `${extractedLocals.length} treatment${extractedLocals.length !== 1 ? "s" : ""} extracted`, description: "Review and save each treatment below." });
+      }
     } catch {
       toast({ title: "Extraction failed", description: "Could not extract treatments from the file.", variant: "destructive" });
     } finally { setSopExtracting(false); }
   }
 
+  function handleConflictAction(action: "replace" | "skip" | "add-draft") {
+    const conflict = conflicts[conflictIndex];
+    if (!conflict) return;
+    if (action === "replace") {
+      setLocalTreatments(prev => prev.map(t =>
+        t.localId === conflict.existing.localId
+          ? { ...conflict.extracted, localId: t.localId, dbId: t.dbId }
+          : t
+      ));
+    } else if (action === "add-draft") {
+      const copy = { ...conflict.extracted, localId: crypto.randomUUID(), name: `${conflict.extracted.name} (copy)` };
+      setLocalTreatments(prev => [...prev, copy]);
+    }
+    // "skip" → discard, do nothing
+
+    const nextIndex = conflictIndex + 1;
+    if (nextIndex >= conflicts.length) {
+      const resolved = conflicts.length;
+      setConflicts([]);
+      setConflictIndex(0);
+      toast({ title: `${resolved} conflict${resolved !== 1 ? "s" : ""} resolved`, description: "Review and save your treatments below." });
+    } else {
+      setConflictIndex(nextIndex);
+    }
+  }
+
   function closeAddDialog() {
     setAddDialogOpen(false);
-    setSelectedTemplates(new Set());
-    setShowCustomForm(false);
     setAddName(""); setAddDesc(""); setAddEnabled(true);
   }
 
   function handleAddFromDialog() {
-    const newTreatments: LocalTreatment[] = [];
-    for (const name of selectedTemplates) {
-      const t = PRELOADED_TREATMENTS.find(p => p.name === name);
-      if (t) newTreatments.push(makeTemplateLocal(t.name, t.shortDescription, true));
-    }
-    if (showCustomForm && addName.trim()) {
-      newTreatments.push(makeTemplateLocal(addName.trim(), addDesc, true));
-    }
-    if (!newTreatments.length) return;
-    setLocalTreatments(prev => [...prev, ...newTreatments]);
+    if (!addName.trim()) return;
+    setLocalTreatments(prev => [...prev, makeTemplateLocal(addName.trim(), addDesc, addEnabled, true)]);
     closeAddDialog();
   }
 
+  const conflictDialogOpen = conflicts.length > 0 && conflictIndex < conflicts.length;
+  const currentConflict = conflictDialogOpen ? conflicts[conflictIndex] : null;
+
   return (
     <div className="space-y-4">
-      {/* ── Entry selector (no treatments yet) ─────────────────────── */}
-      {!hasTreatments && entryMode === null && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Section D: Treatments</CardTitle>
-            <CardDescription>Define the treatments Beacon can recommend. Start by building them directly or uploading your SOP / policy file.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isReadOnly ? (
-              <p className="text-sm text-muted-foreground">No treatments configured yet.</p>
-            ) : (
-              <div className="grid grid-cols-2 gap-4">
-                <button type="button" onClick={() => setEntryMode("build")}
-                  className="flex flex-col items-center gap-3 p-6 rounded-lg border-2 border-dashed hover:border-primary hover:bg-primary/5 transition-colors text-center"
-                  data-testid="button-mode-build">
-                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center"><Pencil className="w-5 h-5 text-primary" /></div>
-                  <div>
-                    <p className="font-medium text-sm">Build in Beacon</p>
-                    <p className="text-xs text-muted-foreground mt-1">Define treatments and rules directly in the UI</p>
-                  </div>
-                </button>
-                <button type="button" onClick={() => setEntryMode("upload")}
-                  className="flex flex-col items-center gap-3 p-6 rounded-lg border-2 border-dashed hover:border-primary hover:bg-primary/5 transition-colors text-center"
-                  data-testid="button-mode-upload">
-                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center"><FileUp className="w-5 h-5 text-primary" /></div>
-                  <div>
-                    <p className="font-medium text-sm">Upload SOP / Policy File</p>
-                    <p className="text-xs text-muted-foreground mt-1">Let Beacon extract draft treatments from your document</p>
-                  </div>
-                </button>
+      {/* ── Unified Section D card ──────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="text-base">Section D: Treatments</CardTitle>
+              <CardDescription>Define the treatments Beacon can recommend. Select from the library, create your own, or extract from a policy file.</CardDescription>
+            </div>
+            {!isReadOnly && (
+              <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+                <Button
+                  variant={showUploadPanel ? "secondary" : "outline"}
+                  size="sm"
+                  onClick={() => { setShowUploadPanel(v => !v); setSopFile(null); }}
+                  data-testid="button-toggle-upload">
+                  <FileUp className="w-3.5 h-3.5 mr-1" />Upload SOP / Policy File
+                </Button>
+                <Button size="sm" onClick={() => setAddDialogOpen(true)} data-testid="button-add-treatment">
+                  <Plus className="w-3.5 h-3.5 mr-1" />Add Treatment
+                </Button>
               </div>
             )}
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        </CardHeader>
 
-      {/* ── Build mode setup ──────────────────────────────────────── */}
-      {entryMode === "build" && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Build in Beacon</CardTitle>
-            <CardDescription>Pick from our treatment library to get started — or skip to begin with an empty list and add treatments manually later.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div>
-              <p className="text-sm font-medium mb-2">Select treatments to include</p>
-              <p className="text-xs text-muted-foreground mb-3">You can always add or remove treatments later. Select any that apply to your business.</p>
-              <div className="space-y-2">
-                {PRELOADED_TREATMENTS.map(t => {
-                  const checked = buildSelectedTemplates.has(t.name);
-                  return (
-                    <label key={t.name}
-                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors select-none ${checked ? "border-primary/30 bg-primary/5" : "hover:bg-muted/40 border-border"}`}
-                      data-testid={`label-build-template-${t.name}`}>
-                      <Checkbox checked={checked}
-                        onCheckedChange={v => setBuildSelectedTemplates(prev => {
-                          const next = new Set(prev);
-                          if (v) next.add(t.name); else next.delete(t.name);
-                          return next;
-                        })}
-                        className="mt-0.5 shrink-0" />
-                      <div>
-                        <p className="text-sm font-medium leading-snug">{t.name}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{t.shortDescription}</p>
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="flex gap-2 pt-1">
-              <Button onClick={handleStartBuild} data-testid="button-start-build">
-                {buildSelectedTemplates.size > 0 ? `Get Started with ${buildSelectedTemplates.size} Treatment${buildSelectedTemplates.size !== 1 ? "s" : ""}` : "Get Started"}
+        {/* ── Inline Upload Panel ─────────────────────────────────── */}
+        {showUploadPanel && !isReadOnly && (
+          <CardContent className="border-t pt-4 space-y-3">
+            <p className="text-sm font-medium">Extract treatments from a file</p>
+            <input ref={sopInputRef} type="file" accept=".txt,.pdf,.docx,.doc" className="hidden"
+              onChange={e => setSopFile(e.target.files?.[0] ?? null)} />
+            <div className="flex items-center gap-3 flex-wrap">
+              <Button variant="outline" size="sm" onClick={() => sopInputRef.current?.click()} data-testid="button-browse-sop">
+                <Upload className="w-3.5 h-3.5 mr-1" />Browse
               </Button>
-              <Button variant="outline" onClick={() => setEntryMode(null)}>Back</Button>
+              {sopFile && <span className="text-xs text-muted-foreground"><FileText className="w-3 h-3 inline mr-1" />{sopFile.name}</span>}
             </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── Upload SOP mode setup (first-time) ───────────────────── */}
-      {!hasTreatments && entryMode === "upload" && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Upload SOP / Policy File</CardTitle>
-            <CardDescription>Beacon will read your document and extract draft treatments for you to review and edit.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label className="text-sm font-medium mb-1.5 block">SOP file</label>
-              <input ref={sopInputRef} type="file" accept=".txt,.pdf,.docx,.doc" className="hidden"
-                onChange={e => setSopFile(e.target.files?.[0] ?? null)} />
-              <div className="flex items-center gap-3">
-                <Button variant="outline" onClick={() => sopInputRef.current?.click()} data-testid="button-browse-sop">
-                  <Upload className="w-4 h-4 mr-2" />Browse
-                </Button>
-                {sopFile && <span className="text-sm text-muted-foreground"><FileText className="w-3.5 h-3.5 inline mr-1" />{sopFile.name}</span>}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1.5">Supported: TXT, PDF, DOCX</p>
-            </div>
+            <p className="text-xs text-muted-foreground">Supported: TXT, PDF, DOCX</p>
             <div className="flex gap-2">
-              <Button onClick={handleExtractSOP} disabled={!sopFile || sopExtracting} data-testid="button-extract-sop">
-                {sopExtracting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Extracting…</> : <><Wand2 className="w-4 h-4 mr-2" />Extract Treatments</>}
+              <Button size="sm" onClick={handleExtractSOP} disabled={!sopFile || sopExtracting} data-testid="button-extract-sop">
+                {sopExtracting ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Extracting…</> : <><Wand2 className="w-3.5 h-3.5 mr-1" />Extract Treatments</>}
               </Button>
-              <Button variant="outline" onClick={() => setEntryMode(null)}>Back</Button>
+              <Button size="sm" variant="outline" onClick={() => { setShowUploadPanel(false); setSopFile(null); }}>Cancel</Button>
             </div>
           </CardContent>
-        </Card>
-      )}
+        )}
 
-      {/* ── Treatments card (once treatments exist) ──────────────── */}
-      {hasTreatments && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
+        {/* ── Treatment Library (always visible for editors) ──────── */}
+        {!isReadOnly && (
+          <CardContent className="border-t pt-4">
+            <div className="flex items-center justify-between mb-1">
               <div>
-                <CardTitle className="text-base">Section D: Treatments</CardTitle>
-                <CardDescription>
-                  {policyPack.sourceType === "file" ? "Extracted from SOP" : "Built in Beacon"}
-                </CardDescription>
+                <p className="text-sm font-medium">Treatment Library</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Select any to add to your policy.</p>
               </div>
-              {!isReadOnly && (
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setEntryMode("upload")} data-testid="button-upload-more">
-                    <Wand2 className="w-3.5 h-3.5 mr-1" />Extract from SOP
-                  </Button>
-                  <Button size="sm" onClick={() => setAddDialogOpen(true)} data-testid="button-add-treatment">
-                    <Plus className="w-3.5 h-3.5 mr-1" />Add Treatment
-                  </Button>
-                </div>
+              {librarySelected.size > 0 && (
+                <Button size="sm" onClick={handleAddFromLibrary} data-testid="button-add-library-selected">
+                  Add {librarySelected.size} Treatment{librarySelected.size !== 1 ? "s" : ""}
+                </Button>
               )}
             </div>
-          </CardHeader>
-
-          {/* Upload SOP when pack exists */}
-          {entryMode === "upload" && (
-            <CardContent className="border-t pt-4 space-y-3">
-              <p className="text-sm font-medium">Extract additional treatments from a file</p>
-              <input ref={sopInputRef} type="file" accept=".txt,.pdf,.docx,.doc" className="hidden"
-                onChange={e => setSopFile(e.target.files?.[0] ?? null)} />
-              <div className="flex items-center gap-3">
-                <Button variant="outline" size="sm" onClick={() => sopInputRef.current?.click()}>
-                  <Upload className="w-3.5 h-3.5 mr-1" />Browse
-                </Button>
-                {sopFile && <span className="text-xs text-muted-foreground">{sopFile.name}</span>}
-              </div>
-              <div className="flex gap-2">
-                <Button size="sm" onClick={handleExtractSOP} disabled={!sopFile || sopExtracting}>
-                  {sopExtracting ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Extracting…</> : <><Wand2 className="w-3.5 h-3.5 mr-1" />Extract</>}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => setEntryMode(null)}>Cancel</Button>
-              </div>
-            </CardContent>
-          )}
-
-          {/* Treatment list */}
-          <CardContent className="space-y-3">
-            {txLoading ? (
-              <div className="space-y-2">{[1,2].map(i => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>
-            ) : localTreatments.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <Shield className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                <p className="text-sm">No treatments yet.</p>
-                {!isReadOnly && <p className="text-xs mt-1">Click "Add Treatment" or extract from an SOP to get started.</p>}
-              </div>
-            ) : (
-              localTreatments.map(tx => (
-                <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} isReadOnly={isReadOnly}
-                  onUpdate={updated => setLocalTreatments(prev => prev.map(t => t.localId === tx.localId ? updated : t))}
-                  onDelete={() => setLocalTreatments(prev => prev.filter(t => t.localId !== tx.localId))} />
-              ))
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Add Treatment Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={v => { if (!v) closeAddDialog(); else setAddDialogOpen(true); }}>
-        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
-          <DialogHeader className="shrink-0">
-            <DialogTitle>Add Treatments</DialogTitle>
-            <p className="text-sm text-muted-foreground">Pick from our treatment library, create your own, or both.</p>
-          </DialogHeader>
-
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-            {/* Template library */}
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Treatment library</p>
-            {PRELOADED_TREATMENTS.map(t => {
-              const alreadyAdded = localTreatments.some(lt => lt.name === t.name);
-              const checked = selectedTemplates.has(t.name);
-              return (
-                <label key={t.name}
-                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors select-none ${alreadyAdded ? "opacity-50 cursor-not-allowed border-border bg-muted/30" : checked ? "border-primary/30 bg-primary/5" : "hover:bg-muted/40 border-border"}`}
-                  data-testid={`label-template-${t.name}`}>
-                  <Checkbox checked={checked} disabled={alreadyAdded}
-                    onCheckedChange={v => {
-                      if (alreadyAdded) return;
-                      setSelectedTemplates(prev => {
-                        const next = new Set(prev);
-                        if (v) next.add(t.name); else next.delete(t.name);
-                        return next;
-                      });
-                    }}
-                    className="mt-0.5 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-medium leading-snug">{t.name}</p>
-                      {alreadyAdded && <Badge variant="secondary" className="text-[10px] shrink-0">Already added</Badge>}
+            <div className="space-y-2 mt-3">
+              {PRELOADED_TREATMENTS.map(t => {
+                const alreadyAdded = localTreatments.some(lt => lt.name.trim().toLowerCase() === t.name.trim().toLowerCase());
+                const checked = librarySelected.has(t.name);
+                return (
+                  <label key={t.name}
+                    className={`flex items-start gap-3 p-3 rounded-lg border transition-colors select-none ${alreadyAdded ? "opacity-50 cursor-not-allowed border-border bg-muted/30" : "cursor-pointer " + (checked ? "border-primary/30 bg-primary/5" : "hover:bg-muted/40 border-border")}`}
+                    data-testid={`label-library-${t.name}`}>
+                    <Checkbox checked={checked} disabled={alreadyAdded}
+                      onCheckedChange={v => {
+                        if (alreadyAdded) return;
+                        setLibrarySelected(prev => { const next = new Set(prev); if (v) next.add(t.name); else next.delete(t.name); return next; });
+                      }}
+                      className="mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-medium leading-snug">{t.name}</p>
+                        {alreadyAdded && <Badge variant="secondary" className="text-[10px] shrink-0">Added</Badge>}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{t.shortDescription}</p>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{t.shortDescription}</p>
-                  </div>
-                </label>
-              );
-            })}
+                  </label>
+                );
+              })}
+            </div>
+          </CardContent>
+        )}
 
-            {/* Custom treatment toggle */}
-            <div className="border-t pt-3">
-              {!showCustomForm ? (
-                <Button variant="outline" size="sm" className="w-full" onClick={() => setShowCustomForm(true)}
-                  data-testid="button-show-custom-form">
-                  <Plus className="w-3.5 h-3.5 mr-1.5" />Create custom treatment
-                </Button>
-              ) : (
-                <div className="space-y-3 p-4 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium">Custom treatment</p>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setShowCustomForm(false); setAddName(""); setAddDesc(""); }}>
-                      <X className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1.5 block">Name <span className="text-destructive">*</span></label>
-                    <Input value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. Payment Holiday"
-                      data-testid="input-add-treatment-name" />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1.5 block">Short description</label>
-                    <Textarea value={addDesc} onChange={e => setAddDesc(e.target.value)}
-                      placeholder="Describe when and how this treatment is applied…"
-                      className="min-h-[72px] text-sm" data-testid="textarea-add-treatment-desc" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Switch checked={addEnabled} onCheckedChange={setAddEnabled} data-testid="switch-add-enabled" />
-                    <Label className="text-sm">Enabled</Label>
-                  </div>
-                </div>
-              )}
+        {/* ── Treatment list ──────────────────────────────────────── */}
+        <CardContent className="border-t pt-4 space-y-3">
+          {txLoading ? (
+            <div className="space-y-2">{[1,2].map(i => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>
+          ) : localTreatments.length === 0 ? (
+            <div className="text-center py-6 text-muted-foreground">
+              <Shield className="w-7 h-7 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">
+                {isReadOnly
+                  ? "No treatments configured yet."
+                  : "No treatments added yet. Select from the library above or click Add Treatment."}
+              </p>
+            </div>
+          ) : (
+            localTreatments.map(tx => (
+              <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} isReadOnly={isReadOnly}
+                onUpdate={updated => setLocalTreatments(prev => prev.map(t => t.localId === tx.localId ? updated : t))}
+                onDelete={() => setLocalTreatments(prev => prev.filter(t => t.localId !== tx.localId))} />
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Duplicate-resolution dialog ─────────────────────────────── */}
+      <Dialog open={conflictDialogOpen} onOpenChange={() => {}}>
+        <DialogContent className="max-w-lg" onPointerDownOutside={e => e.preventDefault()}>
+          <DialogHeader>
+            <DialogTitle>Duplicate Treatment Found</DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              Conflict {conflictIndex + 1} of {conflicts.length} — a treatment with this name already exists. How would you like to proceed?
+            </p>
+          </DialogHeader>
+          {currentConflict && (
+            <div className="space-y-3 py-1">
+              <div className="rounded-lg border p-3 bg-muted/40">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Extracted from SOP</p>
+                <p className="text-sm font-medium">{currentConflict.extracted.name}</p>
+                {currentConflict.extracted.shortDescription && (
+                  <p className="text-xs text-muted-foreground mt-0.5">{currentConflict.extracted.shortDescription}</p>
+                )}
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Currently in policy</p>
+                <p className="text-sm font-medium">{currentConflict.existing.name}</p>
+                {currentConflict.existing.shortDescription && (
+                  <p className="text-xs text-muted-foreground mt-0.5">{currentConflict.existing.shortDescription}</p>
+                )}
+              </div>
+            </div>
+          )}
+          <DialogFooter className="flex-col sm:flex-row gap-2 pt-2">
+            <Button variant="outline" onClick={() => handleConflictAction("skip")} data-testid="button-conflict-skip">Skip</Button>
+            <Button variant="outline" onClick={() => handleConflictAction("add-draft")} data-testid="button-conflict-add-draft">Add as New Draft</Button>
+            <Button onClick={() => handleConflictAction("replace")} data-testid="button-conflict-replace">Replace Existing</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Add Treatment dialog ────────────────────────────────────── */}
+      <Dialog open={addDialogOpen} onOpenChange={v => { if (!v) closeAddDialog(); else setAddDialogOpen(true); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Treatment</DialogTitle>
+            <p className="text-sm text-muted-foreground">Create a custom treatment to add to your policy.</p>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Name <span className="text-destructive">*</span></label>
+              <Input value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. Payment Holiday"
+                data-testid="input-add-treatment-name" />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Short description</label>
+              <Textarea value={addDesc} onChange={e => setAddDesc(e.target.value)}
+                placeholder="Describe when and how this treatment is applied…"
+                className="min-h-[80px] text-sm" data-testid="textarea-add-treatment-desc" />
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch checked={addEnabled} onCheckedChange={setAddEnabled} data-testid="switch-add-enabled" />
+              <Label className="text-sm">Enabled</Label>
             </div>
           </div>
-
-          <DialogFooter className="shrink-0 border-t pt-4">
+          <DialogFooter>
             <Button variant="outline" onClick={closeAddDialog}>Cancel</Button>
-            <Button onClick={handleAddFromDialog}
-              disabled={selectedTemplates.size === 0 && !(showCustomForm && addName.trim())}
-              data-testid="button-confirm-add-treatment">
-              {(() => {
-                const count = selectedTemplates.size + (showCustomForm && addName.trim() ? 1 : 0);
-                return count > 1 ? `Add ${count} Treatments` : "Add Treatment";
-              })()}
+            <Button onClick={handleAddFromDialog} disabled={!addName.trim()} data-testid="button-confirm-add-treatment">
+              Add Treatment
             </Button>
           </DialogFooter>
         </DialogContent>
