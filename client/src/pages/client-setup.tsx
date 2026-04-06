@@ -437,14 +437,14 @@ function serverGroupToLocal(ruleType: string, ruleGroups: TreatmentRuleGroupWith
   return {
     dbId: group.id,
     logicOperator: (group.logicOperator as "AND" | "OR") || "AND",
-    rows: group.rules.map((r: any) => ({
+    rows: group.rules.map(r => ({
       localId: `r${r.id}`,
       fieldName: r.fieldName,
       useCustom: false,
       customFieldName: "",
       operator: r.operator,
       value: r.value || "",
-      leftFieldId: r.leftFieldId || null,
+      leftFieldId: r.leftFieldId || (r.fieldName ? `source:${r.fieldName}` : null),
       rightMode: (r.rightMode as "constant" | "field") || "constant",
       rightConstantValue: r.rightConstantValue || r.value || "",
       rightFieldId: r.rightFieldId || null,
@@ -971,9 +971,9 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
           enabled: local.enabled, priority: local.priority || null, tone: local.tone || null,
         });
       }
-      const saveGroup = (g: LocalRuleGroup, ruleType: string) =>
+      const saveWhenGroup = (g: LocalRuleGroup) =>
         apiRequest("POST", `/api/policy-pack/treatments/${dbId}/rules`, {
-          ruleType, logicOperator: g.logicOperator,
+          ruleType: "when_to_offer", logicOperator: g.logicOperator,
           rows: g.rows.map(r => ({
             fieldName: r.leftFieldId || r.fieldName,
             operator: r.operator,
@@ -984,8 +984,17 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
             rightFieldId: r.rightMode === "field" ? r.rightFieldId : null,
           })),
         });
-      await saveGroup(local.whenToOffer, "when_to_offer");
-      await saveGroup(local.blockedIf, "blocked_if");
+      const saveBlockedGroup = (g: LocalRuleGroup) =>
+        apiRequest("POST", `/api/policy-pack/treatments/${dbId}/rules`, {
+          ruleType: "blocked_if", logicOperator: g.logicOperator,
+          rows: g.rows.map(r => ({
+            fieldName: r.fieldName,
+            operator: r.operator,
+            value: r.value,
+          })),
+        });
+      await saveWhenGroup(local.whenToOffer);
+      await saveBlockedGroup(local.blockedIf);
       return dbId;
     },
     onSuccess: (dbId) => {

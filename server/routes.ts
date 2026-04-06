@@ -762,6 +762,15 @@ export async function registerRoutes(
       const { label, description, sourceType, derivationConfig } = req.body;
       if (!label?.trim()) return res.status(400).json({ error: "label is required" });
       if (!["business_field", "derived_field"].includes(sourceType)) return res.status(400).json({ error: "sourceType must be business_field or derived_field" });
+      if (sourceType === "derived_field") {
+        if (!derivationConfig) return res.status(400).json({ error: "derivationConfig is required for derived_field" });
+        if (!derivationConfig.fieldA) return res.status(400).json({ error: "derivationConfig.fieldA is required" });
+        if (!derivationConfig.operator1) return res.status(400).json({ error: "derivationConfig.operator1 is required" });
+        if (!derivationConfig.operandBType || !derivationConfig.operandBValue?.toString().trim()) return res.status(400).json({ error: "derivationConfig operandB (type and value) is required" });
+        if (derivationConfig.operator2 !== undefined && derivationConfig.operator2 !== "") {
+          if (!derivationConfig.operandCType || !derivationConfig.operandCValue?.toString().trim()) return res.status(400).json({ error: "derivationConfig operandC (type and value) is required when operator2 is set" });
+        }
+      }
       const existing = await storage.getPolicyFields(companyId!);
       const dup = existing.find(f => f.label.trim().toLowerCase() === label.trim().toLowerCase());
       if (dup) return res.status(409).json({ error: `Field "${label.trim()}" already exists` });
