@@ -1,0 +1,5 @@
+customer / account / loan id,dpd_bucket,amount_due,minimum_due,due_date
+customer_id_1,90,1020,251,2026-03-28
+customer_id_2,150,1990,341,2026-03-28
+customer_id_3,60,1920,847,2026-03-28
+customer_id_4,90,4910,1205,2026-03-28
