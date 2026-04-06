@@ -764,26 +764,41 @@ export async function registerRoutes(
       const dataConfig = await storage.getDataConfig(companyId);
 
       let fields: string[] = [];
-      let filename = "sample.csv";
+      const filename = `sample_${category}.csv`;
 
-      if (category === "loan_data") {
+      // Map upload category key → Data Config category ID
+      const uploadToDataConfig: Record<string, string> = {
+        loan_data: "loan_account",
+        payment_history: "payment_history",
+        conversation_history: "conversation_history",
+        income_employment: "income_employment",
+        credit_bureau: "credit_bureau",
+      };
+
+      const dataCatId = uploadToDataConfig[category];
+      const categoryData = (dataConfig?.categoryData as Record<string, any>) || {};
+      const catEntry = dataCatId ? categoryData[dataCatId] : undefined;
+
+      if (catEntry?.fieldAnalysis && Array.isArray(catEntry.fieldAnalysis) && catEntry.fieldAnalysis.length > 0) {
+        // Use saved field analysis as source of truth for column headers
+        const activeFields = catEntry.fieldAnalysis.filter((f: any) => !f.ignored);
+        fields = activeFields.map((f: any) => f.fieldName);
+      } else if (category === "loan_data") {
         fields = [...MANDATORY_LOAN_FIELDS];
         if (dataConfig?.optionalFields) {
           const optional = dataConfig.optionalFields as string[];
           fields.push(...optional.filter(f => f !== "conversation_history"));
         }
-        filename = "sample_loan_data.csv";
       } else if (category === "payment_history") {
         fields = [...MANDATORY_PAYMENT_FIELDS];
         if (dataConfig?.paymentAdditionalFields) {
           fields.push(...(dataConfig.paymentAdditionalFields as string[]));
         }
-        filename = "sample_payment_history.csv";
       } else if (category === "conversation_history") {
         fields = [...CONVERSATION_HISTORY_FIELDS];
-        filename = "sample_conversation_history.csv";
       } else {
-        return res.status(400).json({ error: "Invalid category" });
+        // Generic fallback for any other category with no field analysis yet
+        fields = ["id"];
       }
 
       const SAMPLE_VALUES: Record<string, string> = {

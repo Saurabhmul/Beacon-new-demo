@@ -39,7 +39,7 @@ import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, Chev
 import { useAuth } from "@/hooks/use-auth";
 import type { DataUpload, ClientConfig, DataConfig } from "@shared/schema";
 
-type UploadCategory = "loan_data" | "payment_history" | "conversation_history";
+type UploadCategory = string;
 
 interface UploadLogEntry {
   id: number;
@@ -56,7 +56,7 @@ interface UploadLogEntry {
   uploaderEmail: string;
 }
 
-const CATEGORY_META: Record<UploadCategory, { label: string; icon: typeof Landmark; description: string }> = {
+const CATEGORY_META: Record<string, { label: string; icon: typeof Landmark; description: string }> = {
   loan_data: {
     label: "Loan Data",
     icon: Landmark,
@@ -72,11 +72,31 @@ const CATEGORY_META: Record<UploadCategory, { label: string; icon: typeof Landma
     icon: MessageSquare,
     description: "Upload customer interaction and conversation logs.",
   },
+  income_employment: {
+    label: "Income & Employment",
+    icon: FileText,
+    description: "Upload income and employment data for affordability assessment.",
+  },
+  credit_bureau: {
+    label: "Credit Bureau Data",
+    icon: AlertCircle,
+    description: "Upload credit scores and delinquency data from credit bureaus.",
+  },
 };
+
+const DATA_CONFIG_TO_UPLOAD: Record<string, string> = {
+  loan_account: "loan_data",
+  payment_history: "payment_history",
+  conversation_history: "conversation_history",
+  income_employment: "income_employment",
+  credit_bureau: "credit_bureau",
+};
+
+const NON_UPLOAD_CATEGORIES = new Set(["compliance_policy", "knowledge_base"]);
 
 const PAGE_SIZE = 50;
 
-const FIELD_ORDER: Record<UploadCategory, string[]> = {
+const FIELD_ORDER: Record<string, string[]> = {
   loan_data: ["customer / account / loan id", "dpd_bucket", "amount_due", "minimum_due", "due_date"],
   payment_history: ["customer / account / loan id", "payment_reference", "date_of_payment", "amount_paid", "payment_status"],
   conversation_history: ["customer / account / loan id", "date_and_timestamp", "message"],
@@ -734,12 +754,20 @@ export default function UploadPage() {
     enabled: !noCompanySelected,
   });
 
-  const showConversationHistory = useMemo(() => {
+  const categories = useMemo<string[]>(() => {
+    const selected = ((dataConfig as any)?.selectedCategories as string[] | undefined) || [];
+    if (selected.length > 0) {
+      return selected
+        .filter(cat => !NON_UPLOAD_CATEGORIES.has(cat))
+        .map(cat => DATA_CONFIG_TO_UPLOAD[cat] || cat)
+        .filter(Boolean);
+    }
+    const base: string[] = ["loan_data", "payment_history"];
     const enabledInConfig = dataConfig?.optionalFields
       ? (dataConfig.optionalFields as string[]).includes("conversation_history")
       : false;
-    const hasExistingData = conversationUploads.length > 0;
-    return enabledInConfig || hasExistingData;
+    if (enabledInConfig || conversationUploads.length > 0) base.push("conversation_history");
+    return base;
   }, [dataConfig, conversationUploads]);
 
   if (noCompanySelected) {
@@ -771,10 +799,6 @@ export default function UploadPage() {
       </div>
     );
   }
-
-  const categories: UploadCategory[] = showConversationHistory
-    ? ["loan_data", "payment_history", "conversation_history"]
-    : ["loan_data", "payment_history"];
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
