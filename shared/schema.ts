@@ -272,6 +272,25 @@ export const policyFields = pgTable("policy_fields", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export interface PolicyFieldDto {
+  id: string;
+  label: string;
+  description: string | null;
+  sourceType: "source_field" | "business_field" | "derived_field";
+  derivationConfig: DerivationConfig | null;
+  derivationSummary: string | null;
+}
+
+export interface RuleSaveRow {
+  leftFieldId: string | null;
+  operator: string;
+  rightMode: "constant" | "field" | null;
+  rightConstantValue: string | null;
+  rightFieldId: string | null;
+  fieldName?: string | null;
+  value?: string | null;
+}
+
 export const insertPolicyPackSchema = createInsertSchema(policyPacks).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertTreatmentSchema = createInsertSchema(treatments).omit({ id: true });
 export const insertTreatmentRuleGroupSchema = createInsertSchema(treatmentRuleGroups).omit({ id: true });

@@ -48,7 +48,7 @@ import {
   Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
   Copy, RefreshCw, Info, Eye, ChevronDown, ChevronRight, X, Wand2, FileUp,
 } from "lucide-react";
-import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules } from "@shared/schema";
+import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules, PolicyFieldDto, RuleSaveRow, DerivationConfig } from "@shared/schema";
 
 
 const MANDATORY_LOAN_FIELDS = [
@@ -368,26 +368,6 @@ const CUSTOM_FIELD_SENTINEL = "__custom__";
 const ADD_FIELD_SENTINEL = "__add_field__";
 const DERIVATION_OPERATORS = ["+", "-", "*", "/"] as const;
 
-interface DerivationConfig {
-  fieldA: string;
-  fieldALabel: string;
-  operator1: string;
-  operandBType: "field" | "constant";
-  operandBValue: string;
-  operandBLabel?: string;
-  operator2?: string;
-  operandCType?: "field" | "constant";
-  operandCValue?: string;
-  operandCLabel?: string;
-}
-interface PolicyField {
-  id: string;
-  label: string;
-  description?: string | null;
-  sourceType: "source_field" | "business_field" | "derived_field";
-  derivationConfig?: DerivationConfig | null;
-  derivationSummary?: string | null;
-}
 
 interface LocalRuleRow {
   localId: string;
@@ -437,7 +417,7 @@ function serverGroupToLocal(ruleType: string, ruleGroups: TreatmentRuleGroupWith
   return {
     dbId: group.id,
     logicOperator: (group.logicOperator as "AND" | "OR") || "AND",
-    rows: group.rules.map(r => ({
+    rows: group.rules.map((r): LocalRuleRow => ({
       localId: `r${r.id}`,
       fieldName: r.fieldName,
       useCustom: false,
@@ -490,7 +470,7 @@ function extractionToLocal(e: { name: string; shortDescription: string; whenToOf
 }
 
 // ── FieldInfoPopover ────────────────────────────────────────────────────────
-function FieldInfoPopover({ field }: { field: PolicyField }) {
+function FieldInfoPopover({ field }: { field: PolicyFieldDto }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -518,7 +498,7 @@ function FieldInfoPopover({ field }: { field: PolicyField }) {
 // ── FieldPicker ─────────────────────────────────────────────────────────────
 function FieldPicker({ value, policyFields, onChange, onAddField, disabled, testId }: {
   value: string | null;
-  policyFields: PolicyField[];
+  policyFields: PolicyFieldDto[];
   onChange: (fieldId: string) => void;
   onAddField?: () => void;
   disabled?: boolean;
@@ -570,9 +550,9 @@ function FieldPicker({ value, policyFields, onChange, onAddField, disabled, test
 // ── AddCustomFieldModal ──────────────────────────────────────────────────────
 function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
   open: boolean;
-  policyFields: PolicyField[];
+  policyFields: PolicyFieldDto[];
   onClose: () => void;
-  onFieldCreated: (field: PolicyField) => void;
+  onFieldCreated: (field: PolicyFieldDto) => void;
 }) {
   const { toast } = useToast();
   const [fieldType, setFieldType] = useState<"business_field" | "derived_field">("business_field");
@@ -623,7 +603,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
       });
       if (res.status === 409) { const d = await res.json(); setDupError(d.error || `"${trimmed}" already exists.`); return; }
       if (!res.ok) throw new Error();
-      const newField: PolicyField = await res.json();
+      const newField: PolicyFieldDto = await res.json();
       onFieldCreated(newField);
       handleClose();
       toast({ title: `Field "${newField.label}" created` });
@@ -746,10 +726,10 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
 function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOnly, onFieldCreated }: {
   group: LocalRuleGroup;
   knownFields?: string[];
-  policyFields?: PolicyField[];
+  policyFields?: PolicyFieldDto[];
   onChange: (g: LocalRuleGroup) => void;
   isReadOnly: boolean;
-  onFieldCreated?: (field: PolicyField) => void;
+  onFieldCreated?: (field: PolicyFieldDto) => void;
 }) {
   const [addFieldOpen, setAddFieldOpen] = useState(false);
   const [pendingFieldTarget, setPendingFieldTarget] = useState<{ rowId: string; side: "left" | "right" } | null>(null);
@@ -764,7 +744,7 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
     setPendingFieldTarget({ rowId, side });
     setAddFieldOpen(true);
   }
-  function handleNewFieldCreated(field: PolicyField) {
+  function handleNewFieldCreated(field: PolicyFieldDto) {
     setAddFieldOpen(false);
     onFieldCreated?.(field);
     if (pendingFieldTarget) {
@@ -946,8 +926,8 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
 function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, isReadOnly, onUpdate, onDelete }: {
   treatment: LocalTreatment;
   knownFields: string[];
-  policyFields: PolicyField[];
-  onFieldCreated: (field: PolicyField) => void;
+  policyFields: PolicyFieldDto[];
+  onFieldCreated: (field: PolicyFieldDto) => void;
   isReadOnly: boolean;
   onUpdate: (updated: LocalTreatment) => void;
   onDelete: () => void;
@@ -974,22 +954,26 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
       const saveWhenGroup = (g: LocalRuleGroup) =>
         apiRequest("POST", `/api/policy-pack/treatments/${dbId}/rules`, {
           ruleType: "when_to_offer", logicOperator: g.logicOperator,
-          rows: g.rows.map(r => ({
-            fieldName: r.leftFieldId || r.fieldName,
+          rows: g.rows.map((r): RuleSaveRow => ({
+            leftFieldId: r.leftFieldId,
             operator: r.operator,
-            value: r.rightMode === "constant" ? r.rightConstantValue : null,
-            leftFieldId: r.leftFieldId || null,
-            rightMode: r.rightMode || "constant",
+            rightMode: r.rightMode,
             rightConstantValue: r.rightMode === "constant" ? r.rightConstantValue : null,
             rightFieldId: r.rightMode === "field" ? r.rightFieldId : null,
+            fieldName: r.leftFieldId || r.fieldName || null,
+            value: r.rightMode === "constant" ? r.rightConstantValue : null,
           })),
         });
       const saveBlockedGroup = (g: LocalRuleGroup) =>
         apiRequest("POST", `/api/policy-pack/treatments/${dbId}/rules`, {
           ruleType: "blocked_if", logicOperator: g.logicOperator,
-          rows: g.rows.map(r => ({
-            fieldName: r.fieldName,
+          rows: g.rows.map((r): RuleSaveRow => ({
+            leftFieldId: null,
             operator: r.operator,
+            rightMode: null,
+            rightConstantValue: null,
+            rightFieldId: null,
+            fieldName: r.fieldName,
             value: r.value,
           })),
         });
@@ -1136,7 +1120,7 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
 
   const { data: serverTreatmentsData, isLoading: txLoading } = useQuery<TreatmentWithRules[]>({ queryKey: ["/api/policy-pack/treatments"] });
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], retry: false });
-  const { data: serverPolicyFields } = useQuery<PolicyField[]>({ queryKey: ["/api/policy-fields"], retry: false });
+  const { data: serverPolicyFields } = useQuery<PolicyFieldDto[]>({ queryKey: ["/api/policy-fields"], retry: false });
 
   const knownFields = useMemo(() => {
     if (!dataConfig?.categoryData) return [];
@@ -1147,10 +1131,10 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
     return [...new Set(fields)];
   }, [dataConfig]);
 
-  const [policyFields, setPolicyFields] = useState<PolicyField[]>([]);
+  const [policyFields, setPolicyFields] = useState<PolicyFieldDto[]>([]);
   useEffect(() => { if (serverPolicyFields) setPolicyFields(serverPolicyFields); }, [serverPolicyFields]);
 
-  function handleFieldCreated(field: PolicyField) {
+  function handleFieldCreated(field: PolicyFieldDto) {
     setPolicyFields(prev => {
       if (prev.find(f => f.id === field.id)) return prev;
       return [...prev, field];

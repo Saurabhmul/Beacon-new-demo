@@ -8,6 +8,7 @@ import Papa from "papaparse";
 import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSOPTreatments } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
 import { users, uploadLogs, companies } from "@shared/schema";
+import type { PolicyFieldDto, RuleSaveRow, DerivationConfig } from "@shared/schema";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import fs from "fs";
@@ -684,15 +685,16 @@ export async function registerRoutes(
         plainEnglishInput: plainEnglishInput || null,
         groupOrder: 0,
       });
-      await storage.replaceRuleRows(group.id, (rows || []).map((r: any, i: number) => ({
+      const typedRows = (rows ?? []) as RuleSaveRow[];
+      await storage.replaceRuleRows(group.id, typedRows.map((r, i) => ({
         fieldName: r.fieldName || r.leftFieldId || "",
         operator: r.operator,
-        value: r.value || null,
+        value: r.value ?? null,
         sortOrder: i,
-        leftFieldId: r.leftFieldId || null,
-        rightMode: r.rightMode || null,
-        rightConstantValue: r.rightConstantValue || null,
-        rightFieldId: r.rightFieldId || null,
+        leftFieldId: r.leftFieldId,
+        rightMode: r.rightMode,
+        rightConstantValue: r.rightConstantValue,
+        rightFieldId: r.rightFieldId,
       })));
       const updated = await storage.getTreatmentsWithRules((await storage.getPolicyPack((await storage.getClientConfig(getCompanyId(req)))!.id))!.id);
       const tx = updated.find(t => t.id === treatmentId);
@@ -704,7 +706,7 @@ export async function registerRoutes(
   });
 
   // Policy Fields API
-  function generateDerivationSummary(config: any): string {
+  function generateDerivationSummary(config: DerivationConfig): string {
     const labelA = config.fieldALabel || config.fieldA || "?";
     const labelB = config.operandBType === "field"
       ? (config.operandBLabel || config.operandBValue || "?")
@@ -716,22 +718,33 @@ export async function registerRoutes(
     return `(${labelA} ${config.operator1} ${labelB}) ${config.operator2} ${labelC}`;
   }
 
+  function toFieldDto(f: { id: number; label: string; description: string | null; sourceType: string; derivationConfig: DerivationConfig | null | undefined; derivationSummary: string | null | undefined }): PolicyFieldDto {
+    return {
+      id: String(f.id),
+      label: f.label,
+      description: f.description,
+      sourceType: f.sourceType as PolicyFieldDto["sourceType"],
+      derivationConfig: f.derivationConfig ?? null,
+      derivationSummary: f.derivationSummary ?? null,
+    };
+  }
+
   app.get("/api/policy-fields", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const dataConfig = await storage.getDataConfig(companyId!);
-      const categoryData = (dataConfig?.categoryData as Record<string, any>) || {};
-      const sourceFields: any[] = [];
+      const categoryData = (dataConfig?.categoryData as Record<string, { fieldAnalysis?: { fieldName: string; ignored: boolean; beaconsUnderstanding?: string }[] }>) || {};
+      const sourceFields: PolicyFieldDto[] = [];
       for (const [, catEntry] of Object.entries(categoryData)) {
         if (catEntry?.fieldAnalysis && Array.isArray(catEntry.fieldAnalysis)) {
           for (const f of catEntry.fieldAnalysis) {
             if (!f.ignored && f.fieldName) {
               const id = `source:${f.fieldName}`;
-              if (!sourceFields.find((sf: any) => sf.id === id)) {
+              if (!sourceFields.find(sf => sf.id === id)) {
                 sourceFields.push({
                   id,
                   label: f.fieldName,
-                  description: f.beaconsUnderstanding || null,
+                  description: f.beaconsUnderstanding ?? null,
                   sourceType: "source_field",
                   derivationConfig: null,
                   derivationSummary: null,
@@ -743,12 +756,8 @@ export async function registerRoutes(
       }
       sourceFields.sort((a, b) => a.label.localeCompare(b.label));
       const dbFields = await storage.getPolicyFields(companyId!);
-      const businessFields = dbFields
-        .filter(f => f.sourceType === "business_field")
-        .map(f => ({ id: String(f.id), label: f.label, description: f.description, sourceType: f.sourceType, derivationConfig: f.derivationConfig, derivationSummary: f.derivationSummary }));
-      const derivedFields = dbFields
-        .filter(f => f.sourceType === "derived_field")
-        .map(f => ({ id: String(f.id), label: f.label, description: f.description, sourceType: f.sourceType, derivationConfig: f.derivationConfig, derivationSummary: f.derivationSummary }));
+      const businessFields: PolicyFieldDto[] = dbFields.filter(f => f.sourceType === "business_field").map(toFieldDto);
+      const derivedFields: PolicyFieldDto[] = dbFields.filter(f => f.sourceType === "derived_field").map(toFieldDto);
       res.json([...sourceFields, ...businessFields, ...derivedFields]);
     } catch (error) {
       console.error("Get policy fields error:", error);
