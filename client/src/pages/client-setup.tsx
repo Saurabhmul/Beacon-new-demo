@@ -923,7 +923,7 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
   );
 }
 
-function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, isReadOnly, onUpdate, onDelete }: {
+function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, isReadOnly, onUpdate, onDelete, onExpandToggle }: {
   treatment: LocalTreatment;
   knownFields: string[];
   policyFields: PolicyFieldDto[];
@@ -931,10 +931,11 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
   isReadOnly: boolean;
   onUpdate: (updated: LocalTreatment) => void;
   onDelete: () => void;
+  onExpandToggle: () => void;
 }) {
   const { toast } = useToast();
   const [local, setLocal] = useState<LocalTreatment>(treatment);
-  useEffect(() => { setLocal(t => ({ ...treatment, expanded: t.expanded, activeSection: t.activeSection })); }, [treatment.dbId, treatment.isDraft]);
+  useEffect(() => { setLocal(t => ({ ...treatment, activeSection: t.activeSection })); }, [treatment.dbId, treatment.isDraft]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -1004,9 +1005,9 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
       {/* Header */}
       <div className="flex items-center gap-2 p-3 flex-wrap">
         <button type="button" className="text-muted-foreground hover:text-foreground shrink-0"
-          onClick={() => setLocal(l => ({ ...l, expanded: !l.expanded }))}
+          onClick={onExpandToggle}
           data-testid={`button-expand-${local.localId}`}>
-          {local.expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          {treatment.expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
         <Switch checked={local.enabled} onCheckedChange={v => setLocal(l => ({ ...l, enabled: v }))}
           disabled={isReadOnly} data-testid={`switch-enabled-${local.localId}`} />
@@ -1060,7 +1061,7 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
         )}
       </div>
 
-      {local.expanded && (
+      {treatment.expanded && (
         <div className="px-4 pb-4 space-y-4 border-t pt-4">
           {/* Short description */}
           {!isReadOnly ? (
@@ -1071,12 +1072,6 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
           ) : local.shortDescription ? (
             <p className="text-xs text-muted-foreground leading-relaxed">{local.shortDescription}</p>
           ) : null}
-
-          {/* Evaluation logic note */}
-          <div className="flex items-start gap-2 p-2.5 rounded-md bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
-            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>Beacon recommends this treatment when <strong>When to Offer</strong> conditions are met <strong>AND</strong> no <strong>Blocked If</strong> conditions are true.</span>
-          </div>
 
           {/* Section tabs */}
           <div className="flex gap-2">
@@ -1157,6 +1152,9 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
   // Library selection (inline checklist)
   const [librarySelected, setLibrarySelected] = useState<Set<string>>(new Set());
 
+  // Library expand/collapse (default open)
+  const [libraryExpanded, setLibraryExpanded] = useState(true);
+
   // Add Treatment dialog
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [addName, setAddName] = useState("");
@@ -1168,6 +1166,14 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
   const [conflicts, setConflicts] = useState<SopConflict[]>([]);
   const [conflictIndex, setConflictIndex] = useState(0);
 
+  function sortByPriority(list: LocalTreatment[]): LocalTreatment[] {
+    return [...list].sort((a, b) => {
+      const pa = /^\d+$/.test(a.priority) ? parseInt(a.priority, 10) : Infinity;
+      const pb = /^\d+$/.test(b.priority) ? parseInt(b.priority, 10) : Infinity;
+      return pa - pb;
+    });
+  }
+
   // Sync from server — preserve expanded/activeSection state
   useEffect(() => {
     if (!serverTreatmentsData) return;
@@ -1178,9 +1184,15 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
         const base = serverTxToLocal(tx);
         return existing ? { ...base, expanded: existing.expanded, activeSection: existing.activeSection } : base;
       });
-      return [...serverLocals, ...drafts];
+      return sortByPriority([...serverLocals, ...drafts]);
     });
   }, [serverTreatmentsData]);
+
+  function handleExpandToggle(localId: string) {
+    const wasExpanded = localTreatments.find(t => t.localId === localId)?.expanded ?? false;
+    if (!wasExpanded) setLibraryExpanded(false);
+    setLocalTreatments(prev => prev.map(t => ({ ...t, expanded: t.localId === localId ? !wasExpanded : false })));
+  }
 
   function makeTemplateLocal(name: string, shortDescription: string, enabled = true, expanded = false): LocalTreatment {
     return {
@@ -1196,7 +1208,7 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
     const drafts = PRELOADED_TREATMENTS
       .filter(t => librarySelected.has(t.name))
       .map(t => makeTemplateLocal(t.name, t.shortDescription));
-    setLocalTreatments(prev => [...prev, ...drafts]);
+    setLocalTreatments(prev => sortByPriority([...prev, ...drafts]));
     setLibrarySelected(new Set());
   }
 
@@ -1293,7 +1305,7 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
 
   function handleAddFromDialog() {
     if (!addName.trim()) return;
-    setLocalTreatments(prev => [...prev, makeTemplateLocal(addName.trim(), addDesc, addEnabled, true)]);
+    setLocalTreatments(prev => sortByPriority([...prev, makeTemplateLocal(addName.trim(), addDesc, addEnabled, true)]));
     closeAddDialog();
   }
 
@@ -1353,41 +1365,48 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
         {!isReadOnly && (
           <CardContent className="border-t pt-4">
             <div className="flex items-center justify-between mb-1">
-              <div>
-                <p className="text-sm font-medium">Treatment Library</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Select any to add to your policy.</p>
-              </div>
-              {librarySelected.size > 0 && (
+              <button type="button" className="flex items-center gap-2 group text-left"
+                onClick={() => setLibraryExpanded(v => !v)}
+                data-testid="button-toggle-library">
+                {libraryExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" /> : <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />}
+                <div>
+                  <p className="text-sm font-medium">Treatment Library</p>
+                  {libraryExpanded && <p className="text-xs text-muted-foreground mt-0.5">Select any to add to your policy.</p>}
+                </div>
+              </button>
+              {libraryExpanded && librarySelected.size > 0 && (
                 <Button size="sm" onClick={handleAddFromLibrary} data-testid="button-add-library-selected">
                   Add {librarySelected.size} Treatment{librarySelected.size !== 1 ? "s" : ""}
                 </Button>
               )}
             </div>
-            <div className="space-y-2 mt-3">
-              {PRELOADED_TREATMENTS.map(t => {
-                const alreadyAdded = localTreatments.some(lt => lt.name.trim().toLowerCase() === t.name.trim().toLowerCase());
-                const checked = librarySelected.has(t.name);
-                return (
-                  <label key={t.name}
-                    className={`flex items-start gap-3 p-3 rounded-lg border transition-colors select-none ${alreadyAdded ? "opacity-50 cursor-not-allowed border-border bg-muted/30" : "cursor-pointer " + (checked ? "border-primary/30 bg-primary/5" : "hover:bg-muted/40 border-border")}`}
-                    data-testid={`label-library-${t.name}`}>
-                    <Checkbox checked={checked} disabled={alreadyAdded}
-                      onCheckedChange={v => {
-                        if (alreadyAdded) return;
-                        setLibrarySelected(prev => { const next = new Set(prev); if (v) next.add(t.name); else next.delete(t.name); return next; });
-                      }}
-                      className="mt-0.5 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-medium leading-snug">{t.name}</p>
-                        {alreadyAdded && <Badge variant="secondary" className="text-[10px] shrink-0">Added</Badge>}
+            {libraryExpanded && (
+              <div className="space-y-2 mt-3">
+                {PRELOADED_TREATMENTS.map(t => {
+                  const alreadyAdded = localTreatments.some(lt => lt.name.trim().toLowerCase() === t.name.trim().toLowerCase());
+                  const checked = librarySelected.has(t.name);
+                  return (
+                    <label key={t.name}
+                      className={`flex items-start gap-3 p-3 rounded-lg border transition-colors select-none ${alreadyAdded ? "opacity-50 cursor-not-allowed border-border bg-muted/30" : "cursor-pointer " + (checked ? "border-primary/30 bg-primary/5" : "hover:bg-muted/40 border-border")}`}
+                      data-testid={`label-library-${t.name}`}>
+                      <Checkbox checked={checked} disabled={alreadyAdded}
+                        onCheckedChange={v => {
+                          if (alreadyAdded) return;
+                          setLibrarySelected(prev => { const next = new Set(prev); if (v) next.add(t.name); else next.delete(t.name); return next; });
+                        }}
+                        className="mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium leading-snug">{t.name}</p>
+                          {alreadyAdded && <Badge variant="secondary" className="text-[10px] shrink-0">Added</Badge>}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{t.shortDescription}</p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{t.shortDescription}</p>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
           </CardContent>
         )}
 
@@ -1408,8 +1427,9 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
             localTreatments.map(tx => (
               <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} policyFields={policyFields}
                 onFieldCreated={handleFieldCreated} isReadOnly={isReadOnly}
-                onUpdate={updated => setLocalTreatments(prev => prev.map(t => t.localId === tx.localId ? updated : t))}
-                onDelete={() => setLocalTreatments(prev => prev.filter(t => t.localId !== tx.localId))} />
+                onExpandToggle={() => handleExpandToggle(tx.localId)}
+                onUpdate={updated => setLocalTreatments(prev => sortByPriority(prev.map(t => t.localId === tx.localId ? { ...updated, expanded: t.expanded } : t)))}
+                onDelete={() => setLocalTreatments(prev => sortByPriority(prev.filter(t => t.localId !== tx.localId)))} />
             ))
           )}
         </CardContent>
