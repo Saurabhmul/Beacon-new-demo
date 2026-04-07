@@ -913,7 +913,7 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
   );
 }
 
-function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, isReadOnly, onUpdate, onDelete, onExpandToggle }: {
+function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, isReadOnly, onUpdate, onDelete, onExpandToggle, onRegisterSave, onUnregisterSave }: {
   treatment: LocalTreatment;
   knownFields: string[];
   policyFields: PolicyFieldDto[];
@@ -922,6 +922,8 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
   onUpdate: (updated: LocalTreatment) => void;
   onDelete: () => void;
   onExpandToggle: () => void;
+  onRegisterSave?: (localId: string, saveFn: () => Promise<void>) => void;
+  onUnregisterSave?: (localId: string) => void;
 }) {
   const { toast } = useToast();
   const [local, setLocal] = useState<LocalTreatment>(treatment);
@@ -975,10 +977,19 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
     onSuccess: (dbId) => {
       queryClient.invalidateQueries({ queryKey: ["/api/policy-pack/treatments"] });
       onUpdate({ ...local, dbId, isDraft: false });
-      toast({ title: `"${local.name}" saved` });
     },
-    onError: () => toast({ title: "Error", description: "Failed to save treatment", variant: "destructive" }),
   });
+
+  // Keep a ref so the registered save function always uses the latest mutation/state
+  const saveFnRef = useRef<() => Promise<void>>(async () => {});
+  saveFnRef.current = async () => { await saveMutation.mutateAsync(); };
+
+  useEffect(() => {
+    if (!onRegisterSave) return;
+    onRegisterSave(treatment.localId, () => saveFnRef.current());
+    return () => { onUnregisterSave?.(treatment.localId); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [treatment.localId]);
 
   const deleteMutation = useMutation({
     mutationFn: async () => { if (local.dbId) await apiRequest("DELETE", `/api/policy-pack/treatments/${local.dbId}`); },
@@ -1038,10 +1049,6 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
         </Select>
         {!isReadOnly && (
           <div className="flex gap-1 shrink-0">
-            <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !local.name.trim()} className="h-8 text-xs" data-testid={`button-save-tx-${local.localId}`}>
-              {saveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-              <span className="ml-1">Save</span>
-            </Button>
             <Button size="sm" variant="ghost" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}
               className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
               data-testid={`button-delete-tx-${local.localId}`}>
@@ -1106,18 +1113,43 @@ const PRELOADED_TREATMENTS = [
   { name: "None — encourage payment", shortDescription: "Customer is encouraged to pay at least the minimum amount due. No loan modification or system intervention — focus is on positive reinforcement: explaining the credit score benefits of on-time payment, the long-term risk of further arrears, and motivating the customer to bring their account back on track." },
 ];
 
-function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, onFieldCreated }: {
+function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, onFieldCreated, onSaveReady }: {
   isReadOnly: boolean;
   policyPack: PolicyPack;
   policyFields: PolicyFieldDto[];
   knownFields: string[];
   onFieldCreated: (field: PolicyFieldDto) => void;
+  onSaveReady?: (saveAll: () => Promise<void>) => void;
 }) {
   const { toast } = useToast();
 
   const { data: serverTreatmentsData, isLoading: txLoading } = useQuery<TreatmentWithRules[]>({ queryKey: ["/api/policy-pack/treatments"] });
 
   const [localTreatments, setLocalTreatments] = useState<LocalTreatment[]>([]);
+
+  // Registry of per-treatment save functions, keyed by localId
+  const saveFnsRef = useRef<Map<string, () => Promise<void>>>(new Map());
+
+  const handleRegisterSave = useCallback((localId: string, saveFn: () => Promise<void>) => {
+    saveFnsRef.current.set(localId, saveFn);
+  }, []);
+
+  const handleUnregisterSave = useCallback((localId: string) => {
+    saveFnsRef.current.delete(localId);
+  }, []);
+
+  // Expose saveAll to parent whenever the registry or treatment list changes
+  useEffect(() => {
+    if (!onSaveReady) return;
+    onSaveReady(async () => {
+      const results = await Promise.allSettled(
+        Array.from(saveFnsRef.current.values()).map(fn => fn())
+      );
+      const failed = results.filter(r => r.status === "rejected");
+      if (failed.length > 0) throw new Error(`${failed.length} treatment(s) failed to save`);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onSaveReady, localTreatments]);
 
   // Upload panel toggle (replaces old entryMode "build"/"upload")
   const [showUploadPanel, setShowUploadPanel] = useState(false);
@@ -1407,7 +1439,9 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                 onFieldCreated={onFieldCreated} isReadOnly={isReadOnly}
                 onExpandToggle={() => handleExpandToggle(tx.localId)}
                 onUpdate={updated => setLocalTreatments(prev => sortByPriority(prev.map(t => t.localId === tx.localId ? { ...updated, expanded: t.expanded } : t)))}
-                onDelete={() => setLocalTreatments(prev => sortByPriority(prev.filter(t => t.localId !== tx.localId)))} />
+                onDelete={() => setLocalTreatments(prev => sortByPriority(prev.filter(t => t.localId !== tx.localId)))}
+                onRegisterSave={handleRegisterSave}
+                onUnregisterSave={handleUnregisterSave} />
             ))
           )}
         </CardContent>
@@ -1490,6 +1524,9 @@ function PolicyConfigTab() {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "superadmin";
   const isReadOnly = user?.role === "superadmin" || user?.role === "manager";
+
+  // Ref to the function that saves all treatment cards (registered by PolicyPackSection)
+  const saveTreatmentsRef = useRef<(() => Promise<void>) | null>(null);
 
   const { data: policyConfig, isLoading: policyLoading } = useQuery<PolicyConfig>({
     queryKey: ["/api/policy-config"],
@@ -1668,12 +1705,35 @@ function PolicyConfigTab() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policy-config"] });
       queryClient.invalidateQueries({ queryKey: ["/api/prompt-preview"] });
-      toast({ title: "Policy configuration saved" });
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to save policy config.", variant: "destructive" });
     },
   });
+
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleGlobalSave = async () => {
+    setIsSaving(true);
+    let treatmentErrors = false;
+    try {
+      await saveTreatmentsRef.current?.();
+    } catch {
+      treatmentErrors = true;
+    }
+    try {
+      await savePolicyMutation.mutateAsync();
+      toast({
+        title: treatmentErrors ? "Policy saved with warnings" : "Policy configuration saved",
+        description: treatmentErrors ? "Some treatments failed to save — please check them individually." : undefined,
+        variant: treatmentErrors ? "destructive" : "default",
+      });
+    } catch {
+      // onError already shows a toast
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const createStageMutation = useMutation({
     mutationFn: async (data: { name: string; description: string; fromDays: number; toDays: number; color: string }) => {
@@ -1985,7 +2045,8 @@ function PolicyConfigTab() {
         </Card>
 
         <PolicyPackSection isReadOnly={isReadOnly} policyPack={policyPack!}
-          policyFields={policyFields} knownFields={knownFields} onFieldCreated={handleFieldCreated} />
+          policyFields={policyFields} knownFields={knownFields} onFieldCreated={handleFieldCreated}
+          onSaveReady={fn => { saveTreatmentsRef.current = fn; }} />
 
 
         <Card>
@@ -2163,8 +2224,8 @@ For example:
 
         {!isReadOnly && (
           <div className="pt-2 pb-8">
-            <Button onClick={() => savePolicyMutation.mutate()} disabled={savePolicyMutation.isPending} data-testid="button-save-policy-config">
-              {savePolicyMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+            <Button onClick={handleGlobalSave} disabled={isSaving} data-testid="button-save-policy-config">
+              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
               Save Policy Configuration
             </Button>
           </div>
