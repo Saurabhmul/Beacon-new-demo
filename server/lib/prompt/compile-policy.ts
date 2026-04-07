@@ -64,7 +64,7 @@ export function compileVulnerability(def: string | null | undefined, rules?: Vul
   const hasRules = rules && rules.rows && rules.rows.length > 0;
 
   if (!hasText && !hasRules) {
-    return 'VULNERABILITY POLICY:\nNo vulnerability definition configured. Use general judgment to identify vulnerable customers.\nIf vulnerability = TRUE, Beacon MUST recommend Agent Review.';
+    return '';
   }
 
   let text = 'VULNERABILITY POLICY:\nA customer is vulnerable if:\n';
