@@ -1138,15 +1138,25 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
     saveFnsRef.current.delete(localId);
   }, []);
 
-  // Expose saveAll to parent whenever the registry or treatment list changes
+  // Expose saveAll to parent whenever the registry or treatment list changes.
+  // On failure, throws an error with a `failedNames` property listing the affected treatments.
   useEffect(() => {
     if (!onSaveReady) return;
     onSaveReady(async () => {
-      const results = await Promise.allSettled(
-        Array.from(saveFnsRef.current.values()).map(fn => fn())
-      );
-      const failed = results.filter(r => r.status === "rejected");
-      if (failed.length > 0) throw new Error(`${failed.length} treatment(s) failed to save`);
+      const currentEntries = Array.from(saveFnsRef.current.entries());
+      const results = await Promise.allSettled(currentEntries.map(([, fn]) => fn()));
+      const failedNames = results
+        .map((r, i) =>
+          r.status === "rejected"
+            ? (localTreatments.find(t => t.localId === currentEntries[i][0])?.name || "Unknown treatment")
+            : null
+        )
+        .filter((n): n is string => n !== null);
+      if (failedNames.length > 0) {
+        const err: Error & { failedNames?: string[] } = new Error(`${failedNames.length} treatment(s) failed to save`);
+        err.failedNames = failedNames;
+        throw err;
+      }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onSaveReady, localTreatments]);
@@ -1715,21 +1725,34 @@ function PolicyConfigTab() {
 
   const handleGlobalSave = async () => {
     setIsSaving(true);
-    let treatmentErrors = false;
+    let failedTreatmentNames: string[] = [];
     try {
       await saveTreatmentsRef.current?.();
-    } catch {
-      treatmentErrors = true;
+    } catch (e: unknown) {
+      failedTreatmentNames = (e as { failedNames?: string[] })?.failedNames ?? [];
     }
+    const hasTreatmentErrors = failedTreatmentNames.length > 0;
     try {
       await savePolicyMutation.mutateAsync();
-      toast({
-        title: treatmentErrors ? "Policy saved with warnings" : "Policy configuration saved",
-        description: treatmentErrors ? "Some treatments failed to save — please check them individually." : undefined,
-        variant: treatmentErrors ? "destructive" : "default",
-      });
+      if (hasTreatmentErrors) {
+        toast({
+          title: "Policy saved — some treatments failed",
+          description: `Could not save: ${failedTreatmentNames.join(", ")}. Please check and retry.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Policy configuration saved" });
+      }
     } catch {
-      // onError already shows a toast
+      // onError from savePolicyMutation already surfaces "Failed to save policy config"
+      // If treatments also failed, surface that too so it isn't lost
+      if (hasTreatmentErrors) {
+        toast({
+          title: "Treatment save failures",
+          description: `Could not save: ${failedTreatmentNames.join(", ")}.`,
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsSaving(false);
     }
