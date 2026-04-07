@@ -1,0 +1,342 @@
+Policy Config Simplification + Shared Rule Engine Expansion
+Objective
+
+Simplify Policy Config into 3 main sections and make rule-building behavior consistent across Treatments and Escalation.
+
+Target structure
+Section A: DPD Configuration
+Section B: Treatments
+Section C: Escalation & Guardrails
+
+The goal is to reduce duplicated logic, reduce the number of sections clients need to fill, and make Beacon feel like one coherent policy engine.
+
+High-level product decisions
+1. Blocked If should have the same flexibility as When to Offer
+
+The same rule-engine capabilities currently available in When to Offer must also be available in Blocked If.
+
+This includes:
+
+source fields
+business fields
+derived fields
+inline + Add customer field
+business field creation
+derived field creation
+field vs constant comparison
+field vs field comparison
+info popover/metadata behavior
+same field picker behavior
+same operator support
+same RHS mode support
+Why
+
+Blocked If is part of the same policy logic system as When to Offer. It should not be a weaker or different rule builder.
+
+2. Merge Vulnerability Definition into Escalation & Guardrails
+
+Remove Vulnerability Definition as a standalone section and merge it into Escalation & Guardrails.
+
+The merged section should still keep vulnerability conceptually distinct inside it.
+
+New structure inside Section C
+Vulnerability
+definition text and/or structured rules
+Escalation Conditions / Guardrails
+existing escalation conditions
+custom rule-based conditions
+Why
+
+Vulnerability and escalation are operationally linked and should live in one place rather than separate sections.
+
+3. Vulnerability should support either text definition or rules
+
+Inside Section C, the user should be able to define vulnerability using either:
+
+definition text
+structured rules
+or both
+Important
+
+Do not force users into structured rules only.
+
+Some clients will want:
+
+policy-style definition text for governance / explanation
+
+Others will want:
+
+structured logic for operational detection
+
+Both should be supported.
+
+4. Custom conditions in Escalation & Guardrails should use the same flexible rule engine
+
+The current Add Custom Condition area in Escalation & Guardrails should be upgraded to use the same rule-engine flexibility already built for When to Offer.
+
+This means custom escalation conditions should support:
+
+source fields
+business fields
+derived fields
+field vs constant
+field vs field
+inline field creation
+derived field creation
+same field picker and metadata
+Why
+
+Escalation logic often needs the same policy variables and derived metrics as treatment logic. The experience should be consistent.
+
+Required UI / product changes
+A. Policy Config section structure
+
+After this change, Policy Config should be presented as:
+
+Section A: DPD Configuration
+
+Keep as-is.
+
+Section B: Treatments
+
+Contains treatment cards with:
+
+enabled toggle
+name
+description
+priority
+tone
+When to Offer
+Blocked If
+Section C: Escalation & Guardrails
+
+Contains:
+
+vulnerability definition text and/or vulnerability rules
+escalation conditions / guardrails
+custom escalation conditions using the shared rule engine
+Detailed requirements
+1. Bring full rule-engine parity to Blocked If
+
+Upgrade Blocked If to use the same rule builder system as When to Offer.
+
+Required behavior
+
+Everything supported in When to Offer should work the same way in Blocked If, including:
+
+grouped field list:
+Source
+Business
+Derived
++ Add customer field
+business field creation
+derived field creation
+RHS mode:
+Constant
+Field
+same operator list
+same info popover behavior
+same hydration / save behavior
+same use of stable string field IDs
+Important
+
+Do not create a separate implementation path if avoidable. Reuse the shared rule-engine components already introduced for When to Offer.
+
+2. Merge Vulnerability Definition into Section C
+
+Remove the standalone Vulnerability Definition section/card from Policy Config.
+
+Instead, include vulnerability inside Escalation & Guardrails.
+
+New vulnerability area inside Section C should support:
+a text definition input/textarea
+optional structured vulnerability rules
+Recommended UI structure
+
+Inside Section C, create a clear sub-area such as:
+
+Vulnerability Definition
+text area for policy definition
+optional structured rule builder below or behind a toggle
+Escalation Conditions
+existing checklist/guardrail conditions
+custom rule conditions
+Important
+
+Keep the section understandable:
+
+vulnerability is part of Section C
+but visually separate it from general escalation conditions
+3. Vulnerability text and rules should both be allowed
+
+Do not make this a forced either/or if that adds unnecessary restriction.
+
+Desired behavior
+
+The user may:
+
+provide only text
+provide only rules
+provide both
+
+This is the most flexible and practical approach.
+
+Why
+
+Some clients may want narrative policy language plus structured operational rules.
+
+4. Upgrade Add Custom Condition in Escalation & Guardrails
+
+Replace the current simple custom condition inputs in Section F / Escalation & Guardrails with the same flexible rule-engine pattern used in Treatments.
+
+Current simple pattern to replace
+Data Field
+Operator
+Value
+New pattern
+
+Use the shared rule row model:
+
+left field picker
+operator
+RHS mode:
+Constant
+Field
+right value / field picker
+same field sources:
+Source
+Business
+Derived
+same + Add customer field
+same metadata/info support
+Important
+
+This should feel like the same system the user already learned in Treatments.
+
+Reuse / architecture requirement
+Build this as one shared policy rule engine, not multiple similar widgets
+
+Do not build:
+
+one implementation for When to Offer
+another separate one for Blocked If
+another separate one for Escalation custom conditions
+another separate one for Vulnerability rules
+
+Instead, reuse the same underlying components and patterns wherever possible.
+
+Shared pieces to reuse
+FieldPicker
+Add customer field modal
+Business field creation flow
+Derived field creation flow
+RHS Constant / Field toggle
+rule row shape
+info popover
+stable string field ID handling
+hydration / save mapping logic
+
+This is very important.
+
+Data / persistence expectations
+1. Blocked If should persist with the same richer rule shape as When to Offer
+
+Ensure Blocked If stores and hydrates:
+
+leftFieldId
+operator
+rightMode
+rightConstantValue
+rightFieldId
+
+and any other current shared rule-engine fields already used by When to Offer.
+
+2. Vulnerability definition text must continue to persist
+
+If vulnerability definition text already has a storage path, reuse it.
+
+If a structured rule path for vulnerability does not yet exist, implement it in a way consistent with the rest of the policy rule model.
+
+3. Escalation custom conditions should persist in a structured way
+
+Custom escalation conditions should persist using the same field-aware structure rather than a weaker string-only model.
+
+UX goals
+
+Please optimize for:
+
+fewer sections
+less duplicated logic
+more consistent behavior across policy setup
+easier explanation in B2B demos
+reusable policy fields across different policy areas
+
+The experience should feel like:
+
+define fields once
+use them consistently everywhere
+Implementation order (recommended)
+
+Please implement in this order to reduce risk:
+
+Phase 1
+
+Bring Blocked If to full parity with When to Offer
+
+Phase 2
+
+Upgrade Escalation & Guardrails → Add Custom Condition to use the same flexible rule engine
+
+Phase 3
+
+Merge Vulnerability Definition into Escalation & Guardrails
+
+preserve text definition
+add optional structured vulnerability rules
+Phase 4
+
+Finalize Policy Config section structure and labeling:
+
+Section A: DPD Configuration
+Section B: Treatments
+Section C: Escalation & Guardrails
+Out of scope
+
+Do not include in this task unless required:
+
+automatic migration of old vulnerability text into rules
+advanced nested rule groups
+rule testing engine
+versioning / governance workflow
+compile-policy redesign unless required to avoid breakage
+broader redesign outside these policy sections
+Acceptance criteria
+
+This work is complete when all of the following are true:
+
+Blocked If supports the same flexible rule-engine behavior as When to Offer
+Blocked If supports:
+source/business/derived fields
+inline custom field creation
+derived fields
+constant vs field RHS
+Escalation custom conditions use the same flexible rule-engine behavior
+Vulnerability Definition no longer exists as a standalone section
+Vulnerability is now part of Section C: Escalation & Guardrails
+In Section C, user can define vulnerability using text, rules, or both
+Policy Config is simplified into:
+Section A: DPD Configuration
+Section B: Treatments
+Section C: Escalation & Guardrails
+Existing save/load behavior is not broken
+Existing policy data does not cause runtime errors
+Shared rule-engine components are reused rather than duplicated
+Important implementation note
+
+This should be treated as a policy-config simplification and shared-rule-engine expansion, not as four unrelated UI tweaks.
+
+The final result should feel like one coherent system:
+
+Treatments and Escalation both use the same policy rule language
+vulnerability lives naturally inside escalation/guardrails
+the number of sections clients need to fill is reduced
