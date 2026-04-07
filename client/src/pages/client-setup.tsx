@@ -351,16 +351,6 @@ function MultiSelectDropdown({ values, options, onChange, testIdPrefix }: {
 }
 const ESCALATION_OPERATORS = [">", "<", "=", ">=", "<=", "contains"];
 
-const AFFORDABILITY_OPERATORS = [">", ">=", "<", "<=", "="];
-const AFFORDABILITY_LABELS = ["HIGH", "MEDIUM", "LOW", "VERY LOW"];
-
-const DEFAULT_AFFORDABILITY_RULES: AffordabilityRule[] = [
-  { id: 1, label: "HIGH", operator: ">", percentage: 100, condition: "", isDefault: true },
-  { id: 2, label: "MEDIUM", operator: ">=", percentage: 60, condition: "and < Minimum Amount Due", isDefault: true },
-  { id: 3, label: "LOW", operator: "<", percentage: 60, condition: "", isDefault: true },
-  { id: 4, label: "VERY LOW", operator: "<", percentage: 10, condition: "NMPC = 0 OR NMPC < 10% of MAD. Also applies when no payment data exists.", isDefault: true },
-];
-
 // ── Policy Pack — Rule Builder ─────────────────────────────────────────────────
 const RULE_OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "contains", "is empty", "is not empty"] as const;
 const NO_VALUE_OPERATORS = new Set(["is empty", "is not empty"]);
@@ -1552,7 +1542,7 @@ function PolicyConfigTab() {
   });
 
   const [vulnerabilityDefinition, setVulnerabilityDefinition] = useState("");
-  const [affordabilityRules, setAffordabilityRules] = useState<AffordabilityRule[]>(DEFAULT_AFFORDABILITY_RULES);
+  const [affordabilityRules, setAffordabilityRules] = useState<AffordabilityRule[]>([]);
   const [treatments, setTreatments] = useState<TreatmentOption[]>(DEFAULT_TREATMENTS);
   const [decisionRules, setDecisionRules] = useState<DecisionRule[]>([]);
   const [escalation, setEscalation] = useState<EscalationRules>(DEFAULT_ESCALATION);
@@ -1801,18 +1791,6 @@ function PolicyConfigTab() {
     }));
   }
 
-  function updateAffordabilityRule(id: number, field: keyof AffordabilityRule, value: string | number | null) {
-    setAffordabilityRules(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
-  }
-
-  function addAffordabilityRule() {
-    const newId = affordabilityRules.length > 0 ? Math.max(...affordabilityRules.map(r => r.id)) + 1 : 1;
-    setAffordabilityRules(prev => [...prev, { id: newId, label: "HIGH", operator: ">", percentage: 100, condition: "", isDefault: false }]);
-  }
-
-  function removeAffordabilityRule(id: number) {
-    setAffordabilityRules(prev => prev.filter(r => r.id !== id));
-  }
 
   const enabledTreatments = treatments.filter(t => t.enabled);
 
@@ -1970,97 +1948,6 @@ function PolicyConfigTab() {
                 })}
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-base">Section B: Affordability Rules</CardTitle>
-                <CardDescription>Define how Next Month Pay Capability (NMPC) is compared to Minimum Amount Due (MAD) to determine affordability.</CardDescription>
-              </div>
-              <Button variant="outline" size="sm" onClick={addAffordabilityRule} data-testid="button-add-affordability-rule">
-                <Plus className="w-3.5 h-3.5 mr-1" />
-                Add Rule
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm" data-testid="table-affordability-rules">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-2 px-2 font-medium text-muted-foreground w-36">Label</th>
-                    <th className="text-left py-2 px-2 font-medium text-muted-foreground w-24">Operator</th>
-                    <th className="text-left py-2 px-2 font-medium text-muted-foreground w-28">% of MAD</th>
-                    <th className="text-left py-2 px-2 font-medium text-muted-foreground">Additional Condition</th>
-                    <th className="w-10"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {affordabilityRules.map((rule) => (
-                    <tr key={rule.id} className="border-b last:border-0" data-testid={`row-affordability-rule-${rule.id}`}>
-                      <td className="py-2 px-2">
-                        <Select value={rule.label} onValueChange={(v) => updateAffordabilityRule(rule.id, "label", v)}>
-                          <SelectTrigger className="h-9 text-xs" data-testid={`select-aff-label-${rule.id}`}>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {AFFORDABILITY_LABELS.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </td>
-                      <td className="py-2 px-2">
-                        <Select value={rule.operator} onValueChange={(v) => updateAffordabilityRule(rule.id, "operator", v)}>
-                          <SelectTrigger className="h-9 text-xs font-mono" data-testid={`select-aff-op-${rule.id}`}>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {AFFORDABILITY_OPERATORS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </td>
-                      <td className="py-2 px-2">
-                        <div className="flex items-center gap-1">
-                          <Input
-                            type="number"
-                            value={rule.percentage ?? ""}
-                            onChange={(e) => updateAffordabilityRule(rule.id, "percentage", e.target.value ? parseInt(e.target.value) : null)}
-                            className="h-9 text-xs w-16"
-                            placeholder="0"
-                            data-testid={`input-aff-pct-${rule.id}`}
-                          />
-                          <span className="text-xs text-muted-foreground">%</span>
-                        </div>
-                      </td>
-                      <td className="py-2 px-2">
-                        <Input
-                          value={rule.condition}
-                          onChange={(e) => updateAffordabilityRule(rule.id, "condition", e.target.value)}
-                          placeholder="Additional condition (optional)"
-                          className="h-9 text-xs"
-                          data-testid={`input-aff-condition-${rule.id}`}
-                        />
-                      </td>
-                      <td className="py-2 px-2">
-                        {!rule.isDefault && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeAffordabilityRule(rule.id)} data-testid={`button-remove-aff-rule-${rule.id}`}>
-                            <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                          </Button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-4 p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                <p className="text-xs text-amber-800 dark:text-amber-300">If Minimum Amount Due is missing or no payment data exists, affordability defaults to <strong>VERY LOW</strong>. The system will still provide the best estimate possible based on available data.</p>
-              </div>
-            </div>
           </CardContent>
         </Card>
 
