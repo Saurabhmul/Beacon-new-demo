@@ -1,0 +1,87 @@
+Remove Section B: Affordability Rules from Policy Config
+Objective
+
+Remove Section B: Affordability Rules from the Policy Config UI because affordability logic is no longer needed as a separate configuration area. The treatment rule engine in Section D is now flexible enough to handle this logic directly.
+
+The goal is to simplify Policy Config, reduce duplication, and make Treatments the main place where recommendation logic is configured.
+
+Why
+
+Affordability logic is currently duplicated conceptually:
+
+once in Section B: Affordability Rules
+again in Section D: Treatments / Rule Engine
+
+Since the treatment rule engine is now flexible enough to express these conditions directly, Section B is no longer required and should be removed from the Policy Config experience.
+
+This will:
+
+reduce UI clutter
+simplify the configuration flow
+avoid multiple sources of truth for policy logic
+make the demo/sales story cleaner
+Required behavior
+1. Remove Section B from the Policy Config UI
+
+Remove the entire Section B: Affordability Rules card/section from the rendered Policy Config page.
+
+This includes:
+
+section title
+section description
+rule rows
+Add Rule button
+warning/info banner
+all associated inputs and controls
+2. Do not replace it with new UI in this task
+
+Do not add:
+
+new messaging
+migration helper text
+replacement section
+redirects to treatments
+
+This task is simply removal of Section B from the UI.
+
+3. Keep the rest of Policy Config unchanged
+
+All other sections should remain as they are, except for previously agreed Section D UX changes if those are already in progress.
+
+Important implementation requirement
+
+Before removing the UI, verify whether Section B affordability config is currently referenced anywhere else in the app.
+
+Please check whether it is used by:
+
+save/load logic for client config
+compile-policy or prompt generation logic
+any derived calculations
+any summaries or downstream processing
+any default labels/fields used in treatment logic
+If Section B is not used elsewhere
+remove the UI cleanly
+If Section B is still referenced elsewhere
+remove it from the UI only for now
+do not break existing save/load behavior
+preserve backward compatibility for any existing stored affordability data
+do not delete backend schema/data in this task unless clearly unused and safe
+Out of scope
+
+Do not include in this task:
+
+migrating affordability rules into treatment rules automatically
+deleting backend tables/columns/data unless clearly safe and necessary
+redesigning Policy Config structure beyond removing Section B
+changing Section D rule engine behavior
+changing compile-policy logic unless strictly required to avoid breakage
+Acceptance criteria
+
+This task is complete when all of the following are true:
+
+Section B: Affordability Rules no longer appears in Policy Config UI
+No empty gap or broken layout is left behind
+The rest of the Policy Config page continues to render correctly
+Existing save/load behavior for other sections is not broken
+If old affordability data exists, it does not cause UI or runtime errors
+Any dependency on Section B has been checked and handled safely
