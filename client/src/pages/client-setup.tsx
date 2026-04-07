@@ -1242,8 +1242,8 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
         else clean.push(ex);
       }
 
-      // Append non-conflicting treatments immediately
-      if (clean.length > 0) setLocalTreatments(prev => [...prev, ...clean]);
+      // Append non-conflicting treatments immediately (force collapsed, then sort)
+      if (clean.length > 0) setLocalTreatments(prev => sortByPriority([...prev, ...clean.map(t => ({ ...t, expanded: false }))]));
 
       // Update pack provenance to reflect SOP extraction
       if (policyPack.sourceType !== "file") {
@@ -1276,14 +1276,14 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
     const conflict = conflicts[conflictIndex];
     if (!conflict) return;
     if (action === "replace") {
-      setLocalTreatments(prev => prev.map(t =>
+      setLocalTreatments(prev => sortByPriority(prev.map(t =>
         t.localId === conflict.existing.localId
-          ? { ...conflict.extracted, localId: t.localId, dbId: t.dbId }
+          ? { ...conflict.extracted, localId: t.localId, dbId: t.dbId, expanded: t.expanded }
           : t
-      ));
+      )));
     } else if (action === "add-draft") {
-      const copy = { ...conflict.extracted, localId: crypto.randomUUID(), name: `${conflict.extracted.name} (copy)` };
-      setLocalTreatments(prev => [...prev, copy]);
+      const copy = { ...conflict.extracted, localId: crypto.randomUUID(), name: `${conflict.extracted.name} (copy)`, expanded: false };
+      setLocalTreatments(prev => sortByPriority([...prev, copy]));
     }
     // "skip" → discard, do nothing
 
@@ -1305,7 +1305,9 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
 
   function handleAddFromDialog() {
     if (!addName.trim()) return;
-    setLocalTreatments(prev => sortByPriority([...prev, makeTemplateLocal(addName.trim(), addDesc, addEnabled, true)]));
+    const newTx = makeTemplateLocal(addName.trim(), addDesc, addEnabled, true);
+    setLibraryExpanded(false);
+    setLocalTreatments(prev => sortByPriority([...prev.map(t => ({ ...t, expanded: false })), newTx]));
     closeAddDialog();
   }
 
