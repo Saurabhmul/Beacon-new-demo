@@ -2014,6 +2014,11 @@ For example:
                 disabled={isReadOnly}
                 data-testid="textarea-vulnerability-definition"
               />
+              <div className="flex items-center gap-3 my-3">
+                <div className="flex-1 border-t border-border" />
+                <span className="text-xs font-semibold text-muted-foreground tracking-widest uppercase px-1">or</span>
+                <div className="flex-1 border-t border-border" />
+              </div>
               <RuleBuilderGroup
                 group={vulnerabilityRulesGroup}
                 policyFields={policyFields}
