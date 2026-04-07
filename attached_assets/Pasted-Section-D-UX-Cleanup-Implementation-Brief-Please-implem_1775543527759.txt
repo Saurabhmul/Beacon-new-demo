@@ -1,0 +1,145 @@
+Section D UX Cleanup — Implementation Brief
+
+Please implement the following UX changes in Policy Configuration → Section D (Treatments).
+
+Goal
+
+Make the Treatments section cleaner and more focused for B2B demo/sales use by:
+
+reducing visual clutter
+keeping the user focused on one treatment at a time
+removing repeated explanatory text that is not needed in live walkthroughs
+Changes to implement
+1. Make Treatment Library collapsible
+
+The Treatment Library section should be collapsible.
+
+Required behavior
+Add expand/collapse behavior to the Treatment Library container
+Default state can remain expanded when the user first enters the section
+User should be able to collapse and reopen it manually
+Collapsed state should still show the section header clearly
+Suggested collapsed header
+
+Show:
+
+Treatment Library
+optional summary text such as counts if easy, for example:
+Treatment Library (X available, Y added)
+
+Counts are optional, not required for this task.
+
+Why
+
+Once users begin editing treatment rules, the library becomes secondary and takes up too much vertical space.
+
+2. Only one treatment card should be expanded at a time
+
+Treatment cards should behave like an accordion.
+
+Required behavior
+When the user expands one treatment card, all other treatment cards collapse automatically
+Only one treatment card should be expanded at any given time
+This applies specifically to the rule-definition/editing expanded state
+Why
+
+When multiple treatments are open, Section D becomes too long and visually heavy. The user should focus on one treatment at a time.
+
+3. Expanding a treatment should also collapse the Treatment Library
+
+When a treatment card is opened/expanded, the Treatment Library should auto-collapse.
+
+Required behavior
+If Treatment Library is open and the user expands a treatment card:
+collapse the Treatment Library automatically
+User can still reopen the Treatment Library manually later if needed
+Why
+
+When the user is actively configuring rules for a treatment, the library is not the primary task and should get out of the way.
+
+4. Remove the repeated explanatory banner
+
+Remove this repeated text from each treatment card:
+
+Beacon recommends this treatment when When to Offer conditions are met AND no Blocked If conditions are true.
+
+Required behavior
+Remove this explanatory line/banner from treatment cards for now
+Do not replace it with new helper text in this task
+Why
+
+It is repetitive, visually noisy, and not needed for the current B2B sales/demo flow since this will be explained live.
+
+UX principles for this change
+
+Please optimize for:
+
+less clutter
+clearer focus
+better vertical space usage
+smoother demo flow
+more polished enterprise feel
+
+This should feel like a focused accordion workflow:
+
+add treatments from the library when needed
+then open one treatment at a time to configure it
+Detailed expected behavior
+Initial state
+Treatment Library visible and expandable/collapsible
+Treatment cards shown in collapsed form by default unless current behavior already intentionally opens one
+No repeated explanatory banner visible
+When user expands a treatment
+that treatment expands
+all other treatments collapse
+Treatment Library collapses automatically
+When user expands another treatment
+previously expanded treatment collapses
+newly selected treatment expands
+Treatment Library remains collapsed
+When user manually reopens Treatment Library
+library expands normally
+treatment cards may remain collapsed or keep current single-open state unless user opens another treatment
+Out of scope
+
+Do not include these in this task:
+
+redesign of treatment card layout
+adding summary counts unless easy
+changes to rule engine logic
+duplicate treatment feature
+changes to Blocked If logic
+changes outside Section D
+new explanatory copy to replace the removed banner
+Implementation guidance
+State management
+
+Please introduce explicit UI state for:
+
+whether Treatment Library is expanded/collapsed
+which treatment card is currently expanded
+
+Suggested pattern:
+
+libraryExpanded: boolean
+expandedTreatmentId: string | number | null
+Behavior
+clicking Treatment Library header toggles libraryExpanded
+opening a treatment sets:
+expandedTreatmentId = selectedTreatmentId
+libraryExpanded = false
+opening another treatment replaces the previous expandedTreatmentId
+Important
+
+Do not allow multiple treatment cards to remain open simultaneously after this change.
+
+Acceptance criteria
+
+This task is complete when all of the following are true:
+
+Treatment Library can be expanded and collapsed
+Only one treatment card can be expanded at a time
+Expanding a treatment automatically collapses Treatment Library
+The repeated “Beacon recommends this treatment…” banner is removed from treatment cards
+No rule logic or treatment-saving behavior is broken by these UX changes
+The resulting Section D feels visibly cleaner and more focused
