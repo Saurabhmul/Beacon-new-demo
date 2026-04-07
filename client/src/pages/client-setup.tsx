@@ -1026,7 +1026,8 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
           value={/^\d+$/.test(local.priority) ? local.priority : ""}
           onChange={e => {
             const v = e.target.value;
-            setLocal(l => ({ ...l, priority: v === "" ? "" : String(Math.max(1, Math.floor(Number(v)))) }));
+            if (v === "") { setLocal(l => ({ ...l, priority: "" })); return; }
+            if (/^\d+$/.test(v)) { setLocal(l => ({ ...l, priority: String(Math.max(1, parseInt(v, 10))) })); }
           }}
           disabled={isReadOnly}
           className="h-8 text-xs w-24 shrink-0"
