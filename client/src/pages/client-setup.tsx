@@ -1170,8 +1170,14 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   // Library selection (inline checklist)
   const [librarySelected, setLibrarySelected] = useState<Set<string>>(new Set());
 
-  // Library expand/collapse (default open)
+  // Library expand/collapse (default open; auto-collapses on first load if treatments exist)
   const [libraryExpanded, setLibraryExpanded] = useState(true);
+  const hasAutoCollapsed = useRef(false);
+  useEffect(() => {
+    if (!serverTreatmentsData || hasAutoCollapsed.current) return;
+    hasAutoCollapsed.current = true;
+    if (serverTreatmentsData.length > 0) setLibraryExpanded(false);
+  }, [serverTreatmentsData]);
 
   // Add Treatment dialog
   const [addDialogOpen, setAddDialogOpen] = useState(false);
