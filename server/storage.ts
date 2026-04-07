@@ -73,6 +73,7 @@ export interface IStorage {
   deleteTreatment(id: number): Promise<void>;
   upsertRuleGroup(data: InsertTreatmentRuleGroup & { id?: number }): Promise<TreatmentRuleGroup>;
   replaceRuleRows(groupId: number, rows: Omit<InsertTreatmentRule, 'ruleGroupId'>[]): Promise<void>;
+  deleteRuleGroupsByTreatmentAndType(treatmentId: number, ruleType: string): Promise<void>;
 
   getPolicyFields(companyId: string): Promise<PolicyFieldRecord[]>;
   createPolicyField(data: InsertPolicyField): Promise<PolicyFieldRecord>;
@@ -369,6 +370,16 @@ export class DatabaseStorage implements IStorage {
     if (rows.length > 0) {
       await db.insert(treatmentRules).values(rows.map((r, i) => ({ ...r, ruleGroupId: groupId, sortOrder: i })));
     }
+  }
+
+  async deleteRuleGroupsByTreatmentAndType(treatmentId: number, ruleType: string): Promise<void> {
+    const groups = await db.select({ id: treatmentRuleGroups.id })
+      .from(treatmentRuleGroups)
+      .where(and(eq(treatmentRuleGroups.treatmentId, treatmentId), eq(treatmentRuleGroups.ruleType, ruleType)));
+    if (groups.length === 0) return;
+    const groupIds = groups.map(g => g.id);
+    await db.delete(treatmentRules).where(inArray(treatmentRules.ruleGroupId, groupIds));
+    await db.delete(treatmentRuleGroups).where(inArray(treatmentRuleGroups.id, groupIds));
   }
 
   async getPolicyFields(companyId: string): Promise<PolicyFieldRecord[]> {

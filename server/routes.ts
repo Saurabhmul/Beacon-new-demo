@@ -678,6 +678,7 @@ export async function registerRoutes(
       const treatmentId = parseInt(req.params.id);
       const { ruleType, logicOperator, plainEnglishInput, rows } = req.body;
       if (!ruleType) return res.status(400).json({ error: "ruleType required" });
+      await storage.deleteRuleGroupsByTreatmentAndType(treatmentId, ruleType);
       const group = await storage.upsertRuleGroup({
         treatmentId,
         ruleType,

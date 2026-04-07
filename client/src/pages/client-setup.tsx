@@ -402,7 +402,10 @@ function makeEmptyGroup(): LocalRuleGroup {
   return { logicOperator: "AND", rows: [] };
 }
 function serverGroupToLocal(ruleType: string, ruleGroups: TreatmentRuleGroupWithRules[]): LocalRuleGroup {
-  const group = ruleGroups.find(g => g.ruleType === ruleType);
+  const matching = ruleGroups.filter(g => g.ruleType === ruleType);
+  const group = matching.length > 0
+    ? matching.reduce((best, g) => g.id > best.id ? g : best, matching[0])
+    : undefined;
   if (!group) return makeEmptyGroup();
   return {
     dbId: group.id,
