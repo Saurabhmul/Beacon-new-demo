@@ -1018,17 +1018,20 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
           <span className="font-medium text-sm flex-1">{local.name}</span>
         )}
         {local.isDraft && <Badge variant="outline" className="text-amber-600 border-amber-400 text-[10px] shrink-0">Draft — unsaved</Badge>}
-        <Select value={local.priority || "_none"} onValueChange={v => setLocal(l => ({ ...l, priority: v === "_none" ? "" : v }))} disabled={isReadOnly}>
-          <SelectTrigger className="h-8 text-xs w-28 shrink-0" data-testid={`select-priority-${local.localId}`}>
-            <SelectValue placeholder="Priority" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="_none">No priority</SelectItem>
-            <SelectItem value="High">High</SelectItem>
-            <SelectItem value="Medium">Medium</SelectItem>
-            <SelectItem value="Low">Low</SelectItem>
-          </SelectContent>
-        </Select>
+        <Input
+          type="number"
+          min={1}
+          step={1}
+          placeholder="Priority #"
+          value={/^\d+$/.test(local.priority) ? local.priority : ""}
+          onChange={e => {
+            const v = e.target.value;
+            setLocal(l => ({ ...l, priority: v === "" ? "" : String(Math.max(1, Math.floor(Number(v)))) }));
+          }}
+          disabled={isReadOnly}
+          className="h-8 text-xs w-24 shrink-0"
+          data-testid={`input-priority-${local.localId}`}
+        />
         <Select value={local.tone || "_none"} onValueChange={v => setLocal(l => ({ ...l, tone: v === "_none" ? "" : v }))} disabled={isReadOnly}>
           <SelectTrigger className="h-8 text-xs w-32 shrink-0" data-testid={`select-tone-pack-${local.localId}`}>
             <SelectValue placeholder="Tone" />
@@ -1113,6 +1116,7 @@ const PRELOADED_TREATMENTS = [
   { name: "Deferment", shortDescription: "Specifically for education/student loans, pausing payments entirely because the borrower meets a qualifying condition (still in school, military service, economic hardship). Different from forbearance because it's often interest-free or subsidised." },
   { name: "Clear Arrears Plan", shortDescription: "Customer is encouraged to pay above the Minimum Amount Due to clear outstanding arrears within a target period. No loan modification or system intervention needed — the arrears clear naturally through consistent overpayment." },
   { name: "Write-Off / Debt Settlement", shortDescription: "Offering a reduced lump-sum settlement to close the account. Used in late-stage collections when full recovery is unlikely. Typically requires management approval." },
+  { name: "None — encourage payment", shortDescription: "Customer is encouraged to pay at least the minimum amount due. No loan modification or system intervention — focus is on positive reinforcement: explaining the credit score benefits of on-time payment, the long-term risk of further arrears, and motivating the customer to bring their account back on track." },
 ];
 
 function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; policyPack: PolicyPack }) {
