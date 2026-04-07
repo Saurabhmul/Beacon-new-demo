@@ -1,4 +1,4 @@
-import type { TreatmentOption, DecisionRule, EscalationRules, AffordabilityRule } from "@shared/schema";
+import type { TreatmentOption, DecisionRule, EscalationRules, AffordabilityRule, EscalationCustomCondition, VulnerabilityRuleGroup } from "@shared/schema";
 
 interface DpdStageInput {
   name: string;
@@ -30,11 +30,52 @@ export function compileDPDStages(stages: DpdStageInput[]): string {
   return text;
 }
 
-export function compileVulnerability(def: string | null | undefined): string {
-  if (!def || def.trim() === '') {
+function renderRuleCondition(c: EscalationCustomCondition): string {
+  if (c.leftFieldId) {
+    const leftLabel = c.leftFieldId.startsWith("source:") ? c.leftFieldId.slice(7) : `field_${c.leftFieldId}`;
+    if (c.rightMode === "field" && c.rightFieldId) {
+      const rightLabel = c.rightFieldId.startsWith("source:") ? c.rightFieldId.slice(7) : `field_${c.rightFieldId}`;
+      return `${leftLabel} ${c.operator} ${rightLabel}`;
+    }
+    return `${leftLabel} ${c.operator} ${c.rightConstantValue ?? c.value ?? ""}`;
+  }
+  return `${c.field} ${c.operator} ${c.value}`;
+}
+
+function renderVulnRuleGroup(group: VulnerabilityRuleGroup): string {
+  if (!group.rows || group.rows.length === 0) return "";
+  const logic = group.logicOperator || "AND";
+  const lines = group.rows.map(r => {
+    const leftLabel = r.leftFieldId
+      ? (r.leftFieldId.startsWith("source:") ? r.leftFieldId.slice(7) : `field_${r.leftFieldId}`)
+      : "unknown";
+    if (r.rightMode === "field" && r.rightFieldId) {
+      const rightLabel = r.rightFieldId.startsWith("source:") ? r.rightFieldId.slice(7) : `field_${r.rightFieldId}`;
+      return `  - ${leftLabel} ${r.operator} ${rightLabel}`;
+    }
+    return `  - ${leftLabel} ${r.operator} ${r.rightConstantValue ?? ""}`;
+  });
+  const intro = logic === "AND" ? "ALL of the following conditions are true:" : "ANY of the following conditions is true:";
+  return `Structured rules — ${intro}\n${lines.join("\n")}`;
+}
+
+export function compileVulnerability(def: string | null | undefined, rules?: VulnerabilityRuleGroup | null): string {
+  const hasText = def && def.trim() !== '';
+  const hasRules = rules && rules.rows && rules.rows.length > 0;
+
+  if (!hasText && !hasRules) {
     return 'VULNERABILITY POLICY:\nNo vulnerability definition configured. Use general judgment to identify vulnerable customers.\nIf vulnerability = TRUE, Beacon MUST recommend Agent Review.';
   }
-  return `VULNERABILITY POLICY:\nA customer is vulnerable if there is credible evidence of:\n${def}\nIf vulnerability = TRUE, Beacon MUST recommend Agent Review.`;
+
+  let text = 'VULNERABILITY POLICY:\nA customer is vulnerable if:\n';
+  if (hasText) {
+    text += `${def}\n`;
+  }
+  if (hasRules) {
+    text += `${renderVulnRuleGroup(rules!)}\n`;
+  }
+  text += 'If vulnerability = TRUE, Beacon MUST recommend Agent Review.';
+  return text;
 }
 
 export function compileAffordability(rules: AffordabilityRule[] | null | undefined): string {
@@ -213,8 +254,15 @@ export function compileEscalation(esc: EscalationRules | null | undefined): stri
   if (esc.brokenPtps != null) text += `- Broken PTPs in last 90 days >= ${esc.brokenPtps}\n`;
 
   if (esc.otherConditions && esc.otherConditions.length > 0) {
-    for (const c of esc.otherConditions) {
-      text += `- ${c.field} ${c.operator} ${c.value}\n`;
+    const logic = esc.otherConditionsLogicOperator || "AND";
+    const rendered = esc.otherConditions.map(renderRuleCondition);
+    if (rendered.length === 1) {
+      text += `- ${rendered[0]}\n`;
+    } else {
+      text += `- Custom conditions (${logic === "AND" ? "ALL must match" : "ANY must match"}):\n`;
+      for (const r of rendered) {
+        text += `  - ${r}\n`;
+      }
     }
   }
 
@@ -239,7 +287,7 @@ export function compilePolicyPrompt(config: CompilePolicyInput): CompiledPolicy 
 
   return {
     dpdStages: compileDPDStages(config.dpdStages),
-    vulnerability: compileVulnerability(config.vulnerabilityDefinition),
+    vulnerability: compileVulnerability(config.vulnerabilityDefinition, config.escalationRules?.vulnerabilityRules),
     affordability: compileAffordability(config.affordabilityRules),
     treatmentCatalog: catalog,
     treatmentBlocklist: blocklist,

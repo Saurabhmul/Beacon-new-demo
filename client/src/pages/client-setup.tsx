@@ -959,13 +959,13 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
         apiRequest("POST", `/api/policy-pack/treatments/${dbId}/rules`, {
           ruleType: "blocked_if", logicOperator: g.logicOperator,
           rows: g.rows.map((r): RuleSaveRow => ({
-            leftFieldId: null,
+            leftFieldId: r.leftFieldId,
             operator: r.operator,
-            rightMode: null,
-            rightConstantValue: null,
-            rightFieldId: null,
-            fieldName: r.fieldName,
-            value: r.value,
+            rightMode: r.rightMode,
+            rightConstantValue: r.rightMode === "constant" ? r.rightConstantValue : null,
+            rightFieldId: r.rightMode === "field" ? r.rightFieldId : null,
+            fieldName: r.leftFieldId || r.fieldName || null,
+            value: r.rightMode === "constant" ? r.rightConstantValue : null,
           })),
         });
       await saveWhenGroup(local.whenToOffer);
@@ -1084,8 +1084,9 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
               onChange={g => setLocal(l => ({ ...l, whenToOffer: g }))} isReadOnly={isReadOnly}
               onFieldCreated={onFieldCreated} />
           ) : (
-            <RuleBuilderGroup group={local.blockedIf} knownFields={knownFields}
-              onChange={g => setLocal(l => ({ ...l, blockedIf: g }))} isReadOnly={isReadOnly} />
+            <RuleBuilderGroup group={local.blockedIf} policyFields={policyFields}
+              onChange={g => setLocal(l => ({ ...l, blockedIf: g }))} isReadOnly={isReadOnly}
+              onFieldCreated={onFieldCreated} />
           )}
         </div>
       )}
@@ -1105,31 +1106,16 @@ const PRELOADED_TREATMENTS = [
   { name: "None — encourage payment", shortDescription: "Customer is encouraged to pay at least the minimum amount due. No loan modification or system intervention — focus is on positive reinforcement: explaining the credit score benefits of on-time payment, the long-term risk of further arrears, and motivating the customer to bring their account back on track." },
 ];
 
-function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; policyPack: PolicyPack }) {
+function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, onFieldCreated }: {
+  isReadOnly: boolean;
+  policyPack: PolicyPack;
+  policyFields: PolicyFieldDto[];
+  knownFields: string[];
+  onFieldCreated: (field: PolicyFieldDto) => void;
+}) {
   const { toast } = useToast();
 
   const { data: serverTreatmentsData, isLoading: txLoading } = useQuery<TreatmentWithRules[]>({ queryKey: ["/api/policy-pack/treatments"] });
-  const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], retry: false });
-  const { data: serverPolicyFields } = useQuery<PolicyFieldDto[]>({ queryKey: ["/api/policy-fields"], retry: false });
-
-  const knownFields = useMemo(() => {
-    if (!dataConfig?.categoryData) return [];
-    const fields: string[] = [];
-    for (const entry of Object.values(dataConfig.categoryData as Record<string, { fieldAnalysis?: Array<{ fieldName: string; ignored: boolean }> }>)) {
-      if (entry.fieldAnalysis) for (const f of entry.fieldAnalysis) if (!f.ignored && f.fieldName) fields.push(f.fieldName);
-    }
-    return [...new Set(fields)];
-  }, [dataConfig]);
-
-  const [policyFields, setPolicyFields] = useState<PolicyFieldDto[]>([]);
-  useEffect(() => { if (serverPolicyFields) setPolicyFields(serverPolicyFields); }, [serverPolicyFields]);
-
-  function handleFieldCreated(field: PolicyFieldDto) {
-    setPolicyFields(prev => {
-      if (prev.find(f => f.id === field.id)) return prev;
-      return [...prev, field];
-    });
-  }
 
   const [localTreatments, setLocalTreatments] = useState<LocalTreatment[]>([]);
 
@@ -1311,7 +1297,7 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
         <CardHeader>
           <div className="flex items-start justify-between gap-4">
             <div>
-              <CardTitle className="text-base">Section D: Treatments</CardTitle>
+              <CardTitle className="text-base">Section B: Treatments</CardTitle>
               <CardDescription>Define the treatments Beacon can recommend. Select from the library, create your own, or extract from a policy file.</CardDescription>
             </div>
             {!isReadOnly && (
@@ -1418,7 +1404,7 @@ function PolicyPackSection({ isReadOnly, policyPack }: { isReadOnly: boolean; po
           ) : (
             localTreatments.map(tx => (
               <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} policyFields={policyFields}
-                onFieldCreated={handleFieldCreated} isReadOnly={isReadOnly}
+                onFieldCreated={onFieldCreated} isReadOnly={isReadOnly}
                 onExpandToggle={() => handleExpandToggle(tx.localId)}
                 onUpdate={updated => setLocalTreatments(prev => sortByPriority(prev.map(t => t.localId === tx.localId ? { ...updated, expanded: t.expanded } : t)))}
                 onDelete={() => setLocalTreatments(prev => sortByPriority(prev.filter(t => t.localId !== tx.localId)))} />
@@ -1541,19 +1527,33 @@ function PolicyConfigTab() {
     onError: () => toast({ title: "Error", description: "Failed to rename policy", variant: "destructive" }),
   });
 
+  const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], retry: false });
+  const { data: serverPolicyFields } = useQuery<PolicyFieldDto[]>({ queryKey: ["/api/policy-fields"], retry: false });
+  const knownFields = useMemo(() => {
+    if (!dataConfig?.categoryData) return [];
+    const fields: string[] = [];
+    for (const entry of Object.values(dataConfig.categoryData as Record<string, { fieldAnalysis?: Array<{ fieldName: string; ignored: boolean }> }>)) {
+      if (entry.fieldAnalysis) for (const f of entry.fieldAnalysis) if (!f.ignored && f.fieldName) fields.push(f.fieldName);
+    }
+    return [...new Set(fields)];
+  }, [dataConfig]);
+  const [policyFields, setPolicyFields] = useState<PolicyFieldDto[]>([]);
+  useEffect(() => { if (serverPolicyFields) setPolicyFields(serverPolicyFields); }, [serverPolicyFields]);
+  function handleFieldCreated(field: PolicyFieldDto) {
+    setPolicyFields(prev => {
+      if (prev.find(f => f.id === field.id)) return prev;
+      return [...prev, field];
+    });
+  }
+
   const [vulnerabilityDefinition, setVulnerabilityDefinition] = useState("");
   const [affordabilityRules, setAffordabilityRules] = useState<AffordabilityRule[]>([]);
   const [treatments, setTreatments] = useState<TreatmentOption[]>(DEFAULT_TREATMENTS);
   const [decisionRules, setDecisionRules] = useState<DecisionRule[]>([]);
   const [escalation, setEscalation] = useState<EscalationRules>(DEFAULT_ESCALATION);
+  const [escalationCustomGroup, setEscalationCustomGroup] = useState<LocalRuleGroup>(makeEmptyGroup());
+  const [vulnerabilityRulesGroup, setVulnerabilityRulesGroup] = useState<LocalRuleGroup>(makeEmptyGroup());
   const [hydrated, setHydrated] = useState(false);
-
-  const [customTreatmentName, setCustomTreatmentName] = useState("");
-  const [customTreatmentDef, setCustomTreatmentDef] = useState("");
-
-  const [customEscField, setCustomEscField] = useState("");
-  const [customEscOp, setCustomEscOp] = useState(">");
-  const [customEscValue, setCustomEscValue] = useState("");
 
   const [stageDialogOpen, setStageDialogOpen] = useState(false);
   const [editingStage, setEditingStage] = useState<DpdStage | null>(null);
@@ -1588,7 +1588,43 @@ function PolicyConfigTab() {
         setDecisionRules(migratedRules);
       }
       if (policyConfig.escalationRules) {
-        setEscalation({ ...DEFAULT_ESCALATION, ...(policyConfig.escalationRules as EscalationRules), vulnerabilityDetected: true });
+        const esc = { ...DEFAULT_ESCALATION, ...(policyConfig.escalationRules as EscalationRules), vulnerabilityDetected: true as const };
+        setEscalation(esc);
+        const conditions = (policyConfig.escalationRules as EscalationRules).otherConditions || [];
+        const logicOp = (policyConfig.escalationRules as EscalationRules).otherConditionsLogicOperator || "AND";
+        setEscalationCustomGroup({
+          logicOperator: logicOp,
+          rows: conditions.map(c => ({
+            localId: crypto.randomUUID(),
+            fieldName: c.field || "",
+            useCustom: false,
+            customFieldName: "",
+            operator: c.operator || "=",
+            value: c.rightConstantValue || c.value || "",
+            leftFieldId: c.leftFieldId || (c.field ? `source:${c.field}` : null),
+            rightMode: (c.rightMode as "constant" | "field") || "constant",
+            rightConstantValue: c.rightConstantValue || c.value || "",
+            rightFieldId: c.rightFieldId || null,
+          })),
+        });
+        const vulnRules = (policyConfig.escalationRules as EscalationRules).vulnerabilityRules;
+        if (vulnRules && vulnRules.rows && vulnRules.rows.length > 0) {
+          setVulnerabilityRulesGroup({
+            logicOperator: vulnRules.logicOperator || "AND",
+            rows: vulnRules.rows.map(r => ({
+              localId: crypto.randomUUID(),
+              fieldName: r.leftFieldId || "",
+              useCustom: false,
+              customFieldName: "",
+              operator: r.operator || "=",
+              value: r.rightConstantValue || "",
+              leftFieldId: r.leftFieldId,
+              rightMode: r.rightMode,
+              rightConstantValue: r.rightConstantValue || "",
+              rightFieldId: r.rightFieldId,
+            })),
+          });
+        }
       }
       setHydrated(true);
     }
@@ -1597,12 +1633,35 @@ function PolicyConfigTab() {
   const savePolicyMutation = useMutation({
     mutationFn: async () => {
       const method = policyConfig ? "PATCH" : "POST";
+      const serializedEscalation: EscalationRules = {
+        ...escalation,
+        otherConditions: escalationCustomGroup.rows.map(r => ({
+          field: r.fieldName || (r.leftFieldId?.startsWith("source:") ? r.leftFieldId.slice(7) : ""),
+          operator: r.operator,
+          value: r.rightMode === "constant" ? r.rightConstantValue : "",
+          leftFieldId: r.leftFieldId,
+          rightMode: r.rightMode,
+          rightConstantValue: r.rightMode === "constant" ? r.rightConstantValue : null,
+          rightFieldId: r.rightMode === "field" ? r.rightFieldId : null,
+        })),
+        otherConditionsLogicOperator: escalationCustomGroup.logicOperator,
+        vulnerabilityRules: vulnerabilityRulesGroup.rows.length > 0 ? {
+          logicOperator: vulnerabilityRulesGroup.logicOperator,
+          rows: vulnerabilityRulesGroup.rows.map(r => ({
+            leftFieldId: r.leftFieldId,
+            operator: r.operator,
+            rightMode: r.rightMode,
+            rightConstantValue: r.rightMode === "constant" ? r.rightConstantValue : "",
+            rightFieldId: r.rightMode === "field" ? r.rightFieldId : null,
+          })),
+        } : undefined,
+      };
       const res = await apiRequest(method, "/api/policy-config", {
         vulnerabilityDefinition,
         affordabilityRules,
         availableTreatments: treatments,
         decisionRules,
-        escalationRules: escalation,
+        escalationRules: serializedEscalation,
       });
       return res.json();
     },
@@ -1711,13 +1770,6 @@ function PolicyConfigTab() {
     setTreatments(prev => prev.map((t, i) => i === index ? { ...t, enabled: !t.enabled } : t));
   }
 
-  function addCustomTreatment() {
-    if (!customTreatmentName.trim()) return;
-    setTreatments(prev => [...prev, { name: customTreatmentName.trim(), enabled: true, definition: customTreatmentDef.trim(), isCustom: true }]);
-    setCustomTreatmentName("");
-    setCustomTreatmentDef("");
-  }
-
   function removeCustomTreatment(index: number) {
     setTreatments(prev => prev.filter((_, i) => i !== index));
   }
@@ -1772,25 +1824,6 @@ function PolicyConfigTab() {
   function removeDecisionRule(id: number) {
     setDecisionRules(prev => prev.filter(r => r.id !== id));
   }
-
-  function addCustomEscalation() {
-    if (!customEscField.trim() || !customEscValue.trim()) return;
-    setEscalation(prev => ({
-      ...prev,
-      otherConditions: [...prev.otherConditions, { field: customEscField.trim(), operator: customEscOp, value: customEscValue.trim() }],
-    }));
-    setCustomEscField("");
-    setCustomEscOp(">");
-    setCustomEscValue("");
-  }
-
-  function removeCustomEscalation(index: number) {
-    setEscalation(prev => ({
-      ...prev,
-      otherConditions: prev.otherConditions.filter((_, i) => i !== index),
-    }));
-  }
-
 
   const enabledTreatments = treatments.filter(t => t.enabled);
 
@@ -1951,427 +1984,175 @@ function PolicyConfigTab() {
           </CardContent>
         </Card>
 
+        <PolicyPackSection isReadOnly={isReadOnly} policyPack={policyPack!}
+          policyFields={policyFields} knownFields={knownFields} onFieldCreated={handleFieldCreated} />
+
+
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Section C: Vulnerability Definition</CardTitle>
-            <CardDescription>Define what counts as vulnerable for your customers. This definition will guide how the AI identifies vulnerability.</CardDescription>
+            <CardTitle className="text-base">Section C: Escalation &amp; Guardrails</CardTitle>
+            <CardDescription>Define how the AI identifies vulnerability and which conditions trigger escalation to a human reviewer.</CardDescription>
           </CardHeader>
-          <CardContent>
-            <Textarea
-              value={vulnerabilityDefinition}
-              onChange={(e) => setVulnerabilityDefinition(e.target.value)}
-              placeholder="Define what counts as vulnerable for your customers...&#10;&#10;For example:&#10;- Health / mental capacity issues (mental health crisis, serious illness, cognitive impairment)&#10;- Bereavement (customer deceased or death of close family member)&#10;- Severe accident / safety risk (major injury, domestic violence disclosure)&#10;- Legal / exceptional service status (active military deployment, incarceration)&#10;- Exploitation / loss of control (fraud/scam victim, coerced payments)"
-              className="min-h-[180px] text-sm"
-              data-testid="textarea-vulnerability-definition"
-            />
-          </CardContent>
-        </Card>
+          <CardContent className="space-y-6">
 
-        <PolicyPackSection isReadOnly={isReadOnly} policyPack={policyPack!} />
+            {/* ── Sub-section: Vulnerability ──────────────────────── */}
+            <div>
+              <p className="text-sm font-semibold text-foreground mb-1">Vulnerability</p>
+              <p className="text-xs text-muted-foreground mb-3">Define what counts as vulnerable for your customers. This guides how the AI identifies vulnerability — and optionally specify data-driven rules that flag a customer as vulnerable.</p>
+              <Textarea
+                value={vulnerabilityDefinition}
+                onChange={(e) => setVulnerabilityDefinition(e.target.value)}
+                placeholder="Define what counts as vulnerable for your customers...
 
-        {false && (<>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Section D: Available Treatments (LEGACY)</CardTitle>
-            </CardHeader>
-          <CardContent className="space-y-4">
-            {treatments.map((treatment, index) => (
-              <div key={treatment.name} className={`rounded-lg border p-4 ${treatment.enabled ? "bg-primary/5 border-primary/20" : "bg-muted/30"}`} data-testid={`card-treatment-${index}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3 flex-1">
-                    <Checkbox
-                      checked={treatment.enabled}
-                      onCheckedChange={() => toggleTreatment(index)}
-                      className="mt-0.5"
-                      data-testid={`checkbox-treatment-${index}`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">{treatment.name}</span>
-                        {treatment.isCustom && <Badge variant="secondary" className="text-[10px]">Custom</Badge>}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{treatment.definition}</p>
-                      {treatment.enabled && dpdStages.length > 0 && (
-                        <div className="mt-2 flex items-center gap-3 flex-wrap">
-                          <span className="text-xs text-muted-foreground">Blocked in:</span>
-                          {dpdStages.map(stage => (
-                            <label key={stage.id} className="flex items-center gap-1.5 cursor-pointer">
-                              <Checkbox
-                                checked={(treatment.blockedStages || []).includes(stage.name)}
-                                onCheckedChange={() => toggleBlockedStage(index, stage.name)}
-                                className="h-3.5 w-3.5"
-                                data-testid={`checkbox-block-${index}-${stage.name}`}
-                              />
-                              <span className="text-xs">{stage.name}</span>
-                            </label>
-                          ))}
-                        </div>
-                      )}
-                      {treatment.enabled && treatment.name === "Clear Arrears Plan" && (
-                        <div className="mt-3 flex items-center gap-2">
-                          <Label className="text-xs whitespace-nowrap">Maximum months to clear arrears:</Label>
-                          <Input
-                            type="number"
-                            min={2}
-                            max={12}
-                            value={treatment.clearanceMonths || 6}
-                            onChange={(e) => updateClearanceMonths(index, Math.min(12, Math.max(2, parseInt(e.target.value) || 6)))}
-                            className="w-20 h-8 text-sm"
-                            data-testid="input-clearance-months"
-                          />
-                          <span className="text-xs text-muted-foreground">months (2-12)</span>
-                        </div>
-                      )}
-                    </div>
+For example:
+- Health / mental capacity issues (mental health crisis, serious illness, cognitive impairment)
+- Bereavement (customer deceased or death of close family member)
+- Severe accident / safety risk (major injury, domestic violence disclosure)
+- Legal / exceptional service status (active military deployment, incarceration)
+- Exploitation / loss of control (fraud/scam victim, coerced payments)"
+                className="min-h-[150px] text-sm mb-3"
+                disabled={isReadOnly}
+                data-testid="textarea-vulnerability-definition"
+              />
+              <RuleBuilderGroup
+                group={vulnerabilityRulesGroup}
+                policyFields={policyFields}
+                onChange={setVulnerabilityRulesGroup}
+                isReadOnly={isReadOnly}
+                onFieldCreated={handleFieldCreated}
+              />
+            </div>
+
+            <div className="border-t" />
+
+            {/* ── Sub-section: Escalation Conditions ─────────────── */}
+            <div>
+              <p className="text-sm font-semibold text-foreground mb-1">Escalation Conditions</p>
+              <p className="text-xs text-muted-foreground mb-3">Predefined conditions that always trigger escalation to a human reviewer.</p>
+
+              <div className="rounded-lg border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800 p-4 mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-amber-600" />
+                    <Checkbox checked={true} disabled className="opacity-70" />
                   </div>
-                  {treatment.isCustom && (
-                    <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => removeCustomTreatment(index)} data-testid={`button-remove-treatment-${index}`}>
-                      <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                    </Button>
-                  )}
+                  <div>
+                    <span className="font-medium text-sm">Vulnerability detected</span>
+                    <span className="text-xs text-amber-600 dark:text-amber-400 ml-2">Always enabled</span>
+                  </div>
                 </div>
+                <p className="text-xs text-muted-foreground mt-1 ml-10">Cases with detected vulnerability are always escalated for human review.</p>
               </div>
-            ))}
 
-            <div className="border-t pt-4 mt-4">
-              <p className="text-sm font-medium mb-3">Add Custom Treatment</p>
               <div className="space-y-3">
-                <Input
-                  value={customTreatmentName}
-                  onChange={(e) => setCustomTreatmentName(e.target.value)}
-                  placeholder="Treatment name"
-                  data-testid="input-custom-treatment-name"
-                />
-                <Textarea
-                  value={customTreatmentDef}
-                  onChange={(e) => setCustomTreatmentDef(e.target.value)}
-                  placeholder="Treatment definition — describe when and how this treatment should be applied..."
-                  className="min-h-[80px] text-sm"
-                  data-testid="textarea-custom-treatment-def"
-                />
-                <Button variant="outline" size="sm" onClick={addCustomTreatment} disabled={!customTreatmentName.trim()} data-testid="button-add-custom-treatment">
-                  <Plus className="w-3.5 h-3.5 mr-1" />
-                  Add Treatment
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                  <Checkbox
+                    checked={escalation.legalAction}
+                    onCheckedChange={(c) => setEscalation(prev => ({ ...prev, legalAction: !!c }))}
+                    disabled={isReadOnly}
+                    data-testid="checkbox-esc-legal"
+                  />
+                  <span className="text-sm">Customer mentions legal action</span>
+                </label>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Section E: Decision Rules</CardTitle>
-            <CardDescription>Define structured rules for when Beacon should recommend each treatment. Rules are evaluated by priority (lower number = higher priority).</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {decisionRules.length === 0 ? (
-              <div className="text-center py-6 text-muted-foreground">
-                <p className="text-sm mb-3">No decision rules configured yet.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm" data-testid="table-decision-rules">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Treatment</th>
-                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Affordability</th>
-                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Willingness</th>
-                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Other Condition</th>
-                      <th className="text-left py-2 px-2 font-medium text-muted-foreground">Tone</th>
-                      <th className="text-left py-2 px-2 font-medium text-muted-foreground w-20">Priority</th>
-                      <th className="w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {decisionRules.map((rule) => {
-                      const isEncourage = rule.treatmentName === "None — Encourage Payment";
-                      return (
-                      <React.Fragment key={rule.id}>
-                      <tr className={isEncourage ? "" : "border-b last:border-0"} data-testid={`row-decision-rule-${rule.id}`}>
-                        <td className="py-2 px-2">
-                          <Select value={rule.treatmentName} onValueChange={(v) => updateDecisionRule(rule.id, "treatmentName", v)}>
-                            <SelectTrigger className="h-9 text-xs" data-testid={`select-treatment-${rule.id}`}>
-                              <SelectValue placeholder="Select treatment" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="None — Encourage Payment">None — Encourage Payment</SelectItem>
-                              {enabledTreatments.map(t => (
-                                <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
-                              ))}
-                              <SelectItem value="Agent Review — Escalate to Human">Agent Review — Escalate to Human</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </td>
-                        <td className="py-2 px-2">
-                          <MultiSelectDropdown
-                            values={Array.isArray(rule.affordability) ? rule.affordability : [rule.affordability || "ANY"]}
-                            options={AFFORDABILITY_OPTIONS}
-                            onChange={(v) => updateDecisionRule(rule.id, "affordability", v)}
-                            testIdPrefix={`select-affordability-${rule.id}`}
-                          />
-                        </td>
-                        <td className="py-2 px-2">
-                          <MultiSelectDropdown
-                            values={Array.isArray(rule.willingness) ? rule.willingness : [rule.willingness || "ANY"]}
-                            options={WILLINGNESS_OPTIONS}
-                            onChange={(v) => updateDecisionRule(rule.id, "willingness", v)}
-                            testIdPrefix={`select-willingness-${rule.id}`}
-                          />
-                        </td>
-                        <td className="py-2 px-2">
-                          <Input
-                            value={rule.otherCondition}
-                            onChange={(e) => updateDecisionRule(rule.id, "otherCondition", e.target.value)}
-                            placeholder="e.g., consecutive payments >= 3"
-                            className="h-9 text-xs"
-                            data-testid={`input-other-condition-${rule.id}`}
-                          />
-                        </td>
-                        <td className="py-2 px-2">
-                          <Select
-                            value={rule.communicationTone || "Supportive"}
-                            onValueChange={(v) => updateDecisionRule(rule.id, "communicationTone", v)}
-                          >
-                            <SelectTrigger className="h-9 text-xs" data-testid={`select-tone-${rule.id}`}>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="Supportive">Supportive</SelectItem>
-                              <SelectItem value="Firm">Firm</SelectItem>
-                              <SelectItem value="Urgent">Urgent</SelectItem>
-                              <SelectItem value="Empathetic">Empathetic</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </td>
-                        <td className="py-2 px-2">
-                          <Input
-                            type="number"
-                            value={rule.priority}
-                            onChange={(e) => updateDecisionRule(rule.id, "priority", parseInt(e.target.value) || 0)}
-                            className="h-9 text-xs w-16"
-                            data-testid={`input-priority-${rule.id}`}
-                          />
-                        </td>
-                        <td className="py-2 px-2">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeDecisionRule(rule.id)} data-testid={`button-remove-rule-${rule.id}`}>
-                            <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                          </Button>
-                        </td>
-                      </tr>
-                      {isEncourage && (
-                        <tr className="border-b last:border-0" data-testid={`row-encourage-fields-${rule.id}`}>
-                          <td colSpan={7} className="py-2 px-2">
-                            <div className="flex items-center gap-4 pl-2 py-1 bg-muted/30 rounded-md px-3">
-                              <div className="flex items-center gap-2">
-                                <Label className="text-xs whitespace-nowrap text-muted-foreground">Payment Target:</Label>
-                                <Select
-                                  value={rule.paymentTarget || "At or above MAD"}
-                                  onValueChange={(v) => updateDecisionRule(rule.id, "paymentTarget", v)}
-                                >
-                                  <SelectTrigger className="h-8 text-xs w-48" data-testid={`select-payment-target-${rule.id}`}>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="At or above MAD">At or above MAD</SelectItem>
-                                    <SelectItem value="Any amount they can afford">Any amount they can afford</SelectItem>
-                                    <SelectItem value="Specific amount">Specific amount</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                                {rule.paymentTarget === "Specific amount" && (
-                                  <Input
-                                    type="number"
-                                    value={rule.paymentTargetAmount || ""}
-                                    onChange={(e) => updateDecisionRule(rule.id, "paymentTargetAmount", parseFloat(e.target.value) || 0)}
-                                    placeholder="Amount"
-                                    className="h-8 text-xs w-24"
-                                    data-testid={`input-payment-amount-${rule.id}`}
-                                  />
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                      </React.Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="pt-3">
-              <Button variant="outline" size="sm" onClick={addDecisionRule} data-testid="button-add-rule">
-                <Plus className="w-3.5 h-3.5 mr-1" />
-                Add Rule
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-        </>)}
+                <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                  <Checkbox
+                    checked={escalation.debtDispute}
+                    onCheckedChange={(c) => setEscalation(prev => ({ ...prev, debtDispute: !!c }))}
+                    disabled={isReadOnly}
+                    data-testid="checkbox-esc-dispute"
+                  />
+                  <span className="text-sm">Customer disputes the debt</span>
+                </label>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Section F: Escalation & Guardrails</CardTitle>
-            <CardDescription>Define conditions that should automatically escalate a case to a human reviewer.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-lg border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800 p-4">
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-amber-600" />
-                  <Checkbox checked={true} disabled className="opacity-70" />
+                <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                  <Checkbox
+                    checked={escalation.balanceAbove !== null}
+                    onCheckedChange={(c) => setEscalation(prev => ({ ...prev, balanceAbove: c ? 0 : null }))}
+                    disabled={isReadOnly}
+                    data-testid="checkbox-esc-balance"
+                  />
+                  <span className="text-sm whitespace-nowrap">Balance above</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-sm text-muted-foreground">$</span>
+                    <Input
+                      type="number"
+                      value={escalation.balanceAbove ?? ""}
+                      onChange={(e) => setEscalation(prev => ({ ...prev, balanceAbove: e.target.value ? parseFloat(e.target.value) : null }))}
+                      disabled={isReadOnly || escalation.balanceAbove === null}
+                      className="h-8 w-28 text-sm"
+                      placeholder="Amount"
+                      data-testid="input-esc-balance"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <span className="font-medium text-sm">Vulnerability detected</span>
-                  <span className="text-xs text-amber-600 dark:text-amber-400 ml-2">Always enabled</span>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1 ml-10">Cases with detected vulnerability are always escalated for human review.</p>
-            </div>
 
-            <div className="space-y-3">
-              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
-                <Checkbox
-                  checked={escalation.legalAction}
-                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, legalAction: !!c }))}
-                  data-testid="checkbox-esc-legal"
-                />
-                <span className="text-sm">Customer mentions legal action</span>
-              </label>
-
-              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
-                <Checkbox
-                  checked={escalation.debtDispute}
-                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, debtDispute: !!c }))}
-                  data-testid="checkbox-esc-dispute"
-                />
-                <span className="text-sm">Customer disputes the debt</span>
-              </label>
-
-              <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
-                <Checkbox
-                  checked={escalation.balanceAbove !== null}
-                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, balanceAbove: c ? 0 : null }))}
-                  data-testid="checkbox-esc-balance"
-                />
-                <span className="text-sm whitespace-nowrap">Balance above</span>
-                <div className="flex items-center gap-1">
-                  <span className="text-sm text-muted-foreground">$</span>
+                <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                  <Checkbox
+                    checked={escalation.dpdAbove !== null}
+                    onCheckedChange={(c) => setEscalation(prev => ({ ...prev, dpdAbove: c ? 0 : null }))}
+                    disabled={isReadOnly}
+                    data-testid="checkbox-esc-dpd"
+                  />
+                  <span className="text-sm whitespace-nowrap">DPD above</span>
                   <Input
                     type="number"
-                    value={escalation.balanceAbove ?? ""}
-                    onChange={(e) => setEscalation(prev => ({ ...prev, balanceAbove: e.target.value ? parseFloat(e.target.value) : null }))}
-                    disabled={escalation.balanceAbove === null}
+                    value={escalation.dpdAbove ?? ""}
+                    onChange={(e) => setEscalation(prev => ({ ...prev, dpdAbove: e.target.value ? parseInt(e.target.value) : null }))}
+                    disabled={isReadOnly || escalation.dpdAbove === null}
                     className="h-8 w-28 text-sm"
-                    placeholder="Amount"
-                    data-testid="input-esc-balance"
+                    placeholder="Days"
+                    data-testid="input-esc-dpd"
+                  />
+                  <span className="text-sm text-muted-foreground">days</span>
+                </div>
+
+                <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                  <Checkbox
+                    checked={escalation.managerRequest}
+                    onCheckedChange={(c) => setEscalation(prev => ({ ...prev, managerRequest: !!c }))}
+                    disabled={isReadOnly}
+                    data-testid="checkbox-esc-manager"
+                  />
+                  <span className="text-sm">Customer requests to speak to a manager</span>
+                </label>
+
+                <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
+                  <Checkbox
+                    checked={escalation.brokenPtps !== null}
+                    onCheckedChange={(c) => setEscalation(prev => ({ ...prev, brokenPtps: c ? 0 : null }))}
+                    disabled={isReadOnly}
+                    data-testid="checkbox-esc-ptps"
+                  />
+                  <span className="text-sm whitespace-nowrap">Broken PTPs in last 90 days &ge;</span>
+                  <Input
+                    type="number"
+                    value={escalation.brokenPtps ?? ""}
+                    onChange={(e) => setEscalation(prev => ({ ...prev, brokenPtps: e.target.value ? parseInt(e.target.value) : null }))}
+                    disabled={isReadOnly || escalation.brokenPtps === null}
+                    className="h-8 w-20 text-sm"
+                    placeholder="Count"
+                    data-testid="input-esc-ptps"
                   />
                 </div>
-              </div>
-
-              <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
-                <Checkbox
-                  checked={escalation.dpdAbove !== null}
-                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, dpdAbove: c ? 0 : null }))}
-                  data-testid="checkbox-esc-dpd"
-                />
-                <span className="text-sm whitespace-nowrap">DPD above</span>
-                <Input
-                  type="number"
-                  value={escalation.dpdAbove ?? ""}
-                  onChange={(e) => setEscalation(prev => ({ ...prev, dpdAbove: e.target.value ? parseInt(e.target.value) : null }))}
-                  disabled={escalation.dpdAbove === null}
-                  className="h-8 w-28 text-sm"
-                  placeholder="Days"
-                  data-testid="input-esc-dpd"
-                />
-                <span className="text-sm text-muted-foreground">days</span>
-              </div>
-
-              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border hover:bg-muted/30 transition-colors">
-                <Checkbox
-                  checked={escalation.managerRequest}
-                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, managerRequest: !!c }))}
-                  data-testid="checkbox-esc-manager"
-                />
-                <span className="text-sm">Customer requests to speak to a manager</span>
-              </label>
-
-              <div className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
-                <Checkbox
-                  checked={escalation.brokenPtps !== null}
-                  onCheckedChange={(c) => setEscalation(prev => ({ ...prev, brokenPtps: c ? 0 : null }))}
-                  data-testid="checkbox-esc-ptps"
-                />
-                <span className="text-sm whitespace-nowrap">Broken PTPs in last 90 days &ge;</span>
-                <Input
-                  type="number"
-                  value={escalation.brokenPtps ?? ""}
-                  onChange={(e) => setEscalation(prev => ({ ...prev, brokenPtps: e.target.value ? parseInt(e.target.value) : null }))}
-                  disabled={escalation.brokenPtps === null}
-                  className="h-8 w-20 text-sm"
-                  placeholder="Count"
-                  data-testid="input-esc-ptps"
-                />
               </div>
             </div>
 
-            {escalation.otherConditions.length > 0 && (
-              <div className="space-y-2 pt-2">
-                <p className="text-xs font-medium text-muted-foreground">Custom Conditions</p>
-                {escalation.otherConditions.map((cond, i) => (
-                  <div key={i} className="flex items-center gap-2 p-2 rounded border bg-muted/20" data-testid={`card-esc-custom-${i}`}>
-                    <Badge variant="outline" className="text-xs">{cond.field}</Badge>
-                    <span className="text-xs font-mono text-muted-foreground">{cond.operator}</span>
-                    <Badge variant="secondary" className="text-xs">{cond.value}</Badge>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 ml-auto" onClick={() => removeCustomEscalation(i)} data-testid={`button-remove-esc-${i}`}>
-                      <Trash2 className="w-3 h-3 text-destructive" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div className="border-t" />
 
-            <div className="border-t pt-4">
-              <p className="text-sm font-medium mb-3">Add Custom Condition</p>
-              <div className="flex items-end gap-2 flex-wrap">
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Data Field</label>
-                  <Input
-                    value={customEscField}
-                    onChange={(e) => setCustomEscField(e.target.value)}
-                    placeholder="e.g., income"
-                    className="h-9 w-40 text-sm"
-                    data-testid="input-custom-esc-field"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Operator</label>
-                  <Select value={customEscOp} onValueChange={setCustomEscOp}>
-                    <SelectTrigger className="h-9 w-24 text-sm" data-testid="select-custom-esc-op">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ESCALATION_OPERATORS.map(op => <SelectItem key={op} value={op}>{op}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Value</label>
-                  <Input
-                    value={customEscValue}
-                    onChange={(e) => setCustomEscValue(e.target.value)}
-                    placeholder="e.g., 5000"
-                    className="h-9 w-32 text-sm"
-                    data-testid="input-custom-esc-value"
-                  />
-                </div>
-                <Button variant="outline" size="sm" onClick={addCustomEscalation} disabled={!customEscField.trim() || !customEscValue.trim()} data-testid="button-add-custom-esc">
-                  <Plus className="w-3.5 h-3.5 mr-1" />
-                  Add
-                </Button>
-              </div>
+            {/* ── Sub-section: Custom Conditions ─────────────────── */}
+            <div>
+              <p className="text-sm font-semibold text-foreground mb-1">Custom Conditions / Additional Guardrails</p>
+              <p className="text-xs text-muted-foreground mb-3">Add data-driven conditions that should trigger escalation, using fields from your customer data or derived policy fields.</p>
+              <RuleBuilderGroup
+                group={escalationCustomGroup}
+                policyFields={policyFields}
+                onChange={setEscalationCustomGroup}
+                isReadOnly={isReadOnly}
+                onFieldCreated={handleFieldCreated}
+              />
             </div>
+
           </CardContent>
         </Card>
 

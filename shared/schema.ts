@@ -113,6 +113,23 @@ export interface EscalationCustomCondition {
   field: string;
   operator: string;
   value: string;
+  leftFieldId?: string | null;
+  rightMode?: "constant" | "field" | null;
+  rightConstantValue?: string | null;
+  rightFieldId?: string | null;
+}
+
+export interface VulnerabilityRuleRow {
+  leftFieldId: string | null;
+  operator: string;
+  rightMode: "constant" | "field";
+  rightConstantValue: string;
+  rightFieldId: string | null;
+}
+
+export interface VulnerabilityRuleGroup {
+  logicOperator: "AND" | "OR";
+  rows: VulnerabilityRuleRow[];
 }
 
 export interface EscalationRules {
@@ -124,6 +141,8 @@ export interface EscalationRules {
   managerRequest: boolean;
   brokenPtps: number | null;
   otherConditions: EscalationCustomCondition[];
+  otherConditionsLogicOperator?: "AND" | "OR";
+  vulnerabilityRules?: VulnerabilityRuleGroup;
 }
 
 export const policyConfigs = pgTable("policy_configs", {
