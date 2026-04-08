@@ -794,6 +794,38 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
               placeholder="Optional — describe how this field is used…"
               className="text-xs min-h-[56px] resize-none" data-testid="textarea-field-desc" />
           </div>
+          {isEditMode && fieldType === "business_field" && editField && (
+            editField.dataType || editField.allowedValues || editField.defaultValue || editField.businessMeaning
+          ) && (
+            <div className="space-y-2 rounded-md border p-3 bg-muted/30">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Field Metadata</div>
+              {editField.dataType && (
+                <div className="flex gap-2 text-xs">
+                  <span className="text-muted-foreground w-28 shrink-0">Data Type</span>
+                  <span className="text-foreground font-mono">{editField.dataType}</span>
+                </div>
+              )}
+              {editField.allowedValues && editField.allowedValues.length > 0 && (
+                <div className="flex gap-2 text-xs">
+                  <span className="text-muted-foreground w-28 shrink-0">Allowed Values</span>
+                  <span className="text-foreground">{editField.allowedValues.join(", ")}</span>
+                </div>
+              )}
+              {editField.defaultValue && (
+                <div className="flex gap-2 text-xs">
+                  <span className="text-muted-foreground w-28 shrink-0">Default Value</span>
+                  <span className="text-foreground font-mono">{editField.defaultValue}</span>
+                </div>
+              )}
+              {editField.businessMeaning && (
+                <div className="flex gap-2 text-xs">
+                  <span className="text-muted-foreground w-28 shrink-0">Business Meaning</span>
+                  <span className="text-foreground leading-snug">{editField.businessMeaning}</span>
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground italic">These metadata fields are read-only and set during field creation.</p>
+            </div>
+          )}
           {fieldType === "derived_field" && isLogicalDerived && (
             <div className="space-y-2 rounded-md border p-3 bg-muted/30">
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Derivation Conditions (read-only)</div>
@@ -1389,6 +1421,29 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onSaveReady, localTreatments]);
 
+  function handleFieldDeletedInSection(fieldId: string) {
+    setLocalTreatments(prev => prev.map(tx => ({
+      ...tx,
+      whenToOffer: {
+        ...tx.whenToOffer,
+        rows: tx.whenToOffer.rows.map(r => ({
+          ...r,
+          ...(r.leftFieldId === fieldId ? { leftFieldId: null } : {}),
+          ...(r.rightFieldId === fieldId ? { rightFieldId: null, rightMode: "constant" as const } : {}),
+        })),
+      },
+      blockedIf: {
+        ...tx.blockedIf,
+        rows: tx.blockedIf.rows.map(r => ({
+          ...r,
+          ...(r.leftFieldId === fieldId ? { leftFieldId: null } : {}),
+          ...(r.rightFieldId === fieldId ? { rightFieldId: null, rightMode: "constant" as const } : {}),
+        })),
+      },
+    })));
+    onFieldDeleted?.(fieldId);
+  }
+
   // Upload panel + AI generation
   const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [sopFiles, setSopFiles] = useState<File[]>([]);
@@ -1936,7 +1991,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
           ) : (
             localTreatments.map(tx => (
               <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} policyFields={policyFields}
-                onFieldCreated={onFieldCreated} onFieldUpdated={onFieldUpdated} onFieldDeleted={onFieldDeleted} isReadOnly={isReadOnly}
+                onFieldCreated={onFieldCreated} onFieldUpdated={onFieldUpdated} onFieldDeleted={handleFieldDeletedInSection} isReadOnly={isReadOnly}
                 onExpandToggle={() => handleExpandToggle(tx.localId)}
                 onUpdate={updated => setLocalTreatments(prev => sortByPriority(prev.map(t => t.localId === tx.localId ? { ...updated, expanded: t.expanded } : t)))}
                 onDelete={() => setLocalTreatments(prev => sortByPriority(prev.filter(t => t.localId !== tx.localId)))}
@@ -2076,8 +2131,20 @@ function PolicyConfigTab() {
     setPolicyFields(prev => prev.map(f => f.id === field.id ? field : f));
     queryClient.invalidateQueries({ queryKey: ["/api/policy-fields"] });
   }
+  function clearFieldFromGroup(group: LocalRuleGroup, fieldId: string): LocalRuleGroup {
+    return {
+      ...group,
+      rows: group.rows.map(r => ({
+        ...r,
+        ...(r.leftFieldId === fieldId ? { leftFieldId: null } : {}),
+        ...(r.rightFieldId === fieldId ? { rightFieldId: null, rightMode: "constant" as const } : {}),
+      })),
+    };
+  }
   function handleFieldDeleted(fieldId: string) {
     setPolicyFields(prev => prev.filter(f => f.id !== fieldId));
+    setVulnerabilityRulesGroup(prev => clearFieldFromGroup(prev, fieldId));
+    setEscalationCustomGroup(prev => clearFieldFromGroup(prev, fieldId));
     queryClient.invalidateQueries({ queryKey: ["/api/policy-fields"] });
   }
 
