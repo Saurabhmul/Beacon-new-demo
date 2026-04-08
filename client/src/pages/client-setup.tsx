@@ -49,7 +49,7 @@ import {
   Copy, RefreshCw, Info, Eye, ChevronDown, ChevronRight, X, Wand2, FileUp,
   CheckCircle2, Circle, FileDown,
 } from "lucide-react";
-import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules, PolicyFieldDto, RuleSaveRow, DerivationConfig, DraftSourceField, DraftDerivedField, DraftBusinessField, SopSourceFile } from "@shared/schema";
+import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules, PolicyFieldDto, RuleSaveRow, DerivationConfig, ArithmeticDerivationConfig, LogicalDerivationConfig, DraftSourceField, DraftDerivedField, DraftBusinessField, SopSourceFile } from "@shared/schema";
 
 
 const MANDATORY_LOAN_FIELDS = [
@@ -607,7 +607,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
 }) {
   const { toast } = useToast();
   const isEditMode = !!editField;
-  const isLogicalDerived = isEditMode && editField?.sourceType === "derived_field" && editField?.derivationConfig && "type" in editField.derivationConfig && (editField.derivationConfig as any).type === "logical";
+  const isLogicalDerived = isEditMode && editField?.sourceType === "derived_field" && editField?.derivationConfig !== null && editField?.derivationConfig !== undefined && "type" in editField.derivationConfig && (editField.derivationConfig as LogicalDerivationConfig).type === "logical";
 
   const [fieldType, setFieldType] = useState<"business_field" | "derived_field">("business_field");
   const [label, setLabel] = useState("");
@@ -635,7 +635,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
       setDeleting(false);
       setConfirmDelete(false);
       if (editField.sourceType === "derived_field" && editField.derivationConfig && !isLogicalDerived) {
-        const c = editField.derivationConfig as any;
+        const c = editField.derivationConfig as ArithmeticDerivationConfig;
         setDerivFieldA(c.fieldA || null);
         setDerivOp1(c.operator1 || "+");
         setDerivBType(c.operandBType || "constant");
@@ -685,7 +685,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
     const fieldAField = derivFieldA ? policyFields.find(f => f.id === derivFieldA) : null;
     const operandBField = derivBType === "field" ? policyFields.find(f => f.id === derivBValue) : null;
     const operandCField = derivHasStep2 && derivCType === "field" ? policyFields.find(f => f.id === derivCValue) : null;
-    const derivationConfig = (fieldType === "derived_field" && !isLogicalDerived) ? {
+    const derivationConfig: ArithmeticDerivationConfig | null = (fieldType === "derived_field" && !isLogicalDerived) ? {
       fieldA: derivFieldA!, fieldALabel: fieldAField?.label || derivFieldA!,
       operator1: derivOp1, operandBType: derivBType, operandBValue: derivBValue,
       ...(operandBField ? { operandBLabel: operandBField.label } : {}),
@@ -697,7 +697,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
 
     try {
       if (isEditMode && editField) {
-        const body: Record<string, any> = { label: trimmed, description: description.trim() || null };
+        const body: { label: string; description: string | null; derivationConfig?: ArithmeticDerivationConfig } = { label: trimmed, description: description.trim() || null };
         if (derivationConfig !== null) body.derivationConfig = derivationConfig;
         const res = await fetch(`/api/policy-fields/${editField.id}`, {
           method: "PATCH", credentials: "include",

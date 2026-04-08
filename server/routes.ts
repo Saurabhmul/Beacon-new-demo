@@ -889,14 +889,19 @@ export async function registerRoutes(
       }
       if (description !== undefined) patch.description = description?.trim() || null;
       if (derivationConfig !== undefined && existing.sourceType === "derived_field") {
-        if (!derivationConfig.fieldA) return res.status(400).json({ error: "derivationConfig.fieldA is required" });
-        if (!derivationConfig.operator1) return res.status(400).json({ error: "derivationConfig.operator1 is required" });
-        if (!derivationConfig.operandBType || !derivationConfig.operandBValue?.toString().trim()) return res.status(400).json({ error: "derivationConfig operandB is required" });
-        if (derivationConfig.operator2 !== undefined && derivationConfig.operator2 !== "") {
-          if (!derivationConfig.operandCType || !derivationConfig.operandCValue?.toString().trim()) return res.status(400).json({ error: "derivationConfig operandC is required when operator2 is set" });
+        const existingConfig = existing.derivationConfig as DerivationConfig | null | undefined;
+        if (existingConfig && "type" in existingConfig && existingConfig.type === "logical") {
+          return res.status(422).json({ error: "AI-generated logical derivation conditions cannot be edited" });
         }
-        patch.derivationConfig = derivationConfig;
-        patch.derivationSummary = generateDerivationSummary(derivationConfig);
+        const arithmeticConfig = derivationConfig as ArithmeticDerivationConfig;
+        if (!arithmeticConfig.fieldA) return res.status(400).json({ error: "derivationConfig.fieldA is required" });
+        if (!arithmeticConfig.operator1) return res.status(400).json({ error: "derivationConfig.operator1 is required" });
+        if (!arithmeticConfig.operandBType || !arithmeticConfig.operandBValue?.toString().trim()) return res.status(400).json({ error: "derivationConfig operandB is required" });
+        if (arithmeticConfig.operator2 !== undefined && arithmeticConfig.operator2 !== "") {
+          if (!arithmeticConfig.operandCType || !arithmeticConfig.operandCValue?.toString().trim()) return res.status(400).json({ error: "derivationConfig operandC is required when operator2 is set" });
+        }
+        patch.derivationConfig = arithmeticConfig;
+        patch.derivationSummary = generateDerivationSummary(arithmeticConfig);
       }
       const updated = await storage.updatePolicyField(fieldId, patch);
       res.json(toFieldDto(updated));
