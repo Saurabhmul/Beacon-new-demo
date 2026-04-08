@@ -466,6 +466,78 @@ export async function extractTextFromImage(base64Data: string, mimeType: string)
   return response.text || "";
 }
 
+// ─── Zod schema for a single field-analysis item ─────────────────────────────
+const FieldAnalysisItemSchema = z.object({
+  fieldName: z.string().min(1),
+  beaconsUnderstanding: z.string(),
+  confidence: z.enum(["High", "Medium", "Low"]),
+});
+
+type FieldAnalysisItem = z.infer<typeof FieldAnalysisItemSchema>;
+
+/** Normalise a header/fieldName to lowercase alphanumeric only for fuzzy matching */
+function normaliseKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Capitalise the first letter of a confidence string so "high" → "High" etc. */
+function normaliseConfidence(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  const lower = raw.toLowerCase();
+  if (lower === "high") return "High";
+  if (lower === "medium") return "Medium";
+  if (lower === "low") return "Low";
+  return raw;
+}
+
+const BOILERPLATE_DESCRIPTIONS = new Set([
+  "unknown", "field", "n/a", "na", "none", "null", "undefined", "tbd", "todo",
+]);
+
+/** Return true if the description is empty, too short, boilerplate, or near-identical to the header */
+function isWeakDescription(desc: string, headerNorm: string): boolean {
+  const trimmed = desc.trim();
+  if (trimmed.length < 15) return true;
+  if (BOILERPLATE_DESCRIPTIONS.has(trimmed.toLowerCase())) return true;
+  if (normaliseKey(trimmed) === headerNorm) return true;
+  return false;
+}
+
+/** Heuristic description for a header that the AI did not cover adequately */
+function heuristicDescription(header: string): { beaconsUnderstanding: string; confidence: 'Low' } {
+  const lower = header.toLowerCase();
+  const patterns: Array<[string, string]> = [
+    ["_gbp",        "Currency amount in GBP"],
+    ["_balance",    "Outstanding balance amount"],
+    ["_date",       "Date field"],
+    ["_active",     "Boolean flag (true/false) indicating active status"],
+    ["_completed",  "Boolean flag indicating whether an action has been completed"],
+    ["_months",     "Duration expressed in months"],
+    ["_rag",        "Red / Amber / Green status indicator"],
+    ["_type",       "Categorisation or type field"],
+    ["_ref",        "Reference identifier"],
+    ["_id",         "Unique identifier"],
+    ["_sent",       "Count or flag for outbound communications sent"],
+    ["_received",   "Count or flag for inbound communications received"],
+    ["_level",      "Graded or tiered level indicator"],
+    ["_score",      "Numerical score or rating"],
+    ["_count",      "Count of occurrences"],
+    ["_flag",       "Boolean flag"],
+    ["_status",     "Status indicator"],
+    ["_duration",   "Duration or time-span field"],
+  ];
+  for (const [suffix, desc] of patterns) {
+    if (lower.endsWith(suffix) || lower.includes(suffix + "_")) {
+      return { beaconsUnderstanding: desc, confidence: "Low" as const };
+    }
+  }
+  const humanReadable = header.replace(/[_-]/g, " ");
+  return {
+    beaconsUnderstanding: `Field named "${humanReadable}" — please describe what this field represents.`,
+    confidence: "Low" as const,
+  };
+}
+
 export async function analyzeCategoryFields(
   categoryId: string,
   headers: string[],
@@ -482,34 +554,118 @@ Analyze these column headers and describe what each field likely means in a loan
 
 Column headers: ${headers.join(', ')}${sampleStr}
 
-For each column, provide:
-- fieldName: the exact column name as given
-- beaconsUnderstanding: a clear, plain-English description (1-2 sentences) of what this field likely represents in a collections context
-- confidence: "High" if the field name is self-explanatory, "Medium" if you can reasonably infer the meaning, "Low" if the name is ambiguous
+Return a JSON array — one object per column — with exactly these keys:
+  fieldName        — the exact column name as provided above (do not rename or reformat it)
+  beaconsUnderstanding — a clear, plain-English description of 1–2 sentences explaining what the field represents in a collections context
+  confidence       — exactly one of: "High", "Medium", or "Low"
+                     "High" = field name is self-explanatory
+                     "Medium" = meaning can be reasonably inferred
+                     "Low" = field name is ambiguous
 
-Respond ONLY with a valid JSON array. Example:
-[{"fieldName": "dpd_bucket", "beaconsUnderstanding": "Number of days the account is past due, grouped into buckets (e.g. 1-30, 31-60).", "confidence": "High"}]`;
+Rules:
+- Return ONLY the raw JSON array. No markdown, no code fences, no explanation, no commentary.
+- Every column header listed above must appear exactly once in your output.
+- Do not invent new field names. Copy each header character-for-character.
+- Do not return empty, vague, or boilerplate descriptions such as "Unknown" or "Field".`;
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-pro",
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { maxOutputTokens: 4096 },
+    config: {
+      maxOutputTokens: 4096,
+      responseMimeType: "application/json",
+    },
   });
 
-  const text = response.text || "";
-  const jsonMatch = text.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
-    try {
-      return JSON.parse(jsonMatch[0]);
-    } catch {
-      // fall through to fallback
+  const rawText = response.text || "";
+
+  // ── Stage 1: strip markdown fences (safety net) ───────────────────────────
+  let jsonText = rawText.trim();
+  if (jsonText.startsWith("```")) {
+    jsonText = jsonText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+  }
+
+  // ── Stage 2: JSON.parse ───────────────────────────────────────────────────
+  let parsed: unknown[];
+  try {
+    const p = JSON.parse(jsonText);
+    parsed = Array.isArray(p) ? p : [];
+    if (!Array.isArray(p)) {
+      console.warn(`[analyzeCategoryFields] json_parse produced non-array — category=${categoryId} headers=${headers.length} raw=${rawText.slice(0, 500)}`);
+    }
+  } catch (err) {
+    console.warn(`[analyzeCategoryFields] json_parse failed — category=${categoryId} headers=${headers.length} raw=${rawText.slice(0, 500)}`);
+    parsed = [];
+  }
+
+  // ── Stage 3: per-item Zod validation with confidence normalisation ────────
+  const validItems: FieldAnalysisItem[] = [];
+  for (const item of parsed) {
+    if (item && typeof item === "object") {
+      const patched = { ...(item as Record<string, unknown>) };
+      patched.confidence = normaliseConfidence(patched.confidence);
+      const result = FieldAnalysisItemSchema.safeParse(patched);
+      if (result.success) {
+        validItems.push(result.data);
+      } else {
+        console.warn(`[analyzeCategoryFields] zod_validation failed — category=${categoryId} headers=${headers.length} item=${JSON.stringify(item).slice(0, 200)}`);
+      }
     }
   }
-  return headers.map(h => ({
-    fieldName: h,
-    beaconsUnderstanding: `Field named "${h.replace(/_/g, ' ')}" — please describe what this field represents.`,
-    confidence: 'Low' as const,
-  }));
+
+  // ── Stage 4: weak-description rejection ──────────────────────────────────
+  const strongItems: FieldAnalysisItem[] = [];
+  for (const item of validItems) {
+    const headerNorm = normaliseKey(item.fieldName);
+    if (isWeakDescription(item.beaconsUnderstanding, headerNorm)) {
+      console.warn(`[analyzeCategoryFields] weak_description — category=${categoryId} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
+    } else {
+      strongItems.push(item);
+    }
+  }
+
+  // ── Stage 5: three-tier header matching with duplicate resolution ─────────
+  // Build lookup maps from original headers
+  const headerExact = new Map<string, string>();           // exact → original
+  const headerLower = new Map<string, string>();           // lowercase → original
+  const headerNorm  = new Map<string, string>();           // alphanumeric-only → original
+  for (const h of headers) {
+    headerExact.set(h, h);
+    if (!headerLower.has(h.toLowerCase())) headerLower.set(h.toLowerCase(), h);
+    if (!headerNorm.has(normaliseKey(h)))   headerNorm.set(normaliseKey(h), h);
+  }
+
+  const resolvedMap = new Map<string, FieldAnalysisItem>(); // originalHeader → item
+
+  for (const item of strongItems) {
+    let originalHeader: string | undefined;
+
+    if (headerExact.has(item.fieldName)) {
+      originalHeader = headerExact.get(item.fieldName);
+    } else if (headerLower.has(item.fieldName.toLowerCase())) {
+      originalHeader = headerLower.get(item.fieldName.toLowerCase());
+    } else if (headerNorm.has(normaliseKey(item.fieldName))) {
+      originalHeader = headerNorm.get(normaliseKey(item.fieldName));
+    } else {
+      console.warn(`[analyzeCategoryFields] header_matching failed — category=${categoryId} fieldName=${item.fieldName}`);
+      continue;
+    }
+
+    if (resolvedMap.has(originalHeader!)) {
+      console.warn(`[analyzeCategoryFields] duplicate — category=${categoryId} fieldName=${item.fieldName} resolvedTo=${originalHeader} (keeping first)`);
+    } else {
+      resolvedMap.set(originalHeader!, { ...item, fieldName: originalHeader! });
+    }
+  }
+
+  // ── Stage 6: assemble final results with heuristic fallback ──────────────
+  return headers.map(h => {
+    if (resolvedMap.has(h)) {
+      const item = resolvedMap.get(h)!;
+      return { fieldName: h, beaconsUnderstanding: item.beaconsUnderstanding, confidence: item.confidence };
+    }
+    return { fieldName: h, ...heuristicDescription(h) };
+  });
 }
 
 export interface SOPExtractedRule {
