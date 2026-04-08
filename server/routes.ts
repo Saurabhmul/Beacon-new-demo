@@ -991,6 +991,11 @@ export async function registerRoutes(
           } else if (SET_OPS.has(r.operator)) {
             if (!Array.isArray(r.value)) {
               errors.push(`${label} operator "${r.operator}" requires an array value (got ${r.value == null ? "null/undefined" : typeof r.value})`);
+            } else {
+              const badElements = (r.value as unknown[]).filter(el => !["string", "number", "boolean"].includes(typeof el));
+              if (badElements.length > 0) {
+                errors.push(`${label} operator "${r.operator}" array contains invalid element types — each element must be string, number, or boolean`);
+              }
             }
           } else if (NUMERIC_OPS.has(r.operator)) {
             if (typeof r.value !== "number") {

@@ -1148,8 +1148,8 @@ DERIVATION CONFIG FORMAT (for derived fields only)
    {
      "field": "source_field_name",
      "fieldType": "source|derived|business",
-     "operator": "=|!=|>|>=|<|<=|in|not_in|contains|is_true|is_false",
-     "value": "string or number or array (omit for is_true/is_false)"
+     "operator": "equals|not_equals|gt|gte|lt|lte|in|not_in|is_true|is_false|exists|not_exists",
+     "value": "string or number or array — omit entirely for is_true/is_false/exists/not_exists"
    }
  ]
 }
