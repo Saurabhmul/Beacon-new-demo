@@ -953,24 +953,26 @@ export async function registerRoutes(
           ...(f.sourceType === "derived_field" ? { derivationSummary: f.derivationSummary?.slice(0, 200) ?? null } : {}),
         }));
 
-        // Build column evidence from the most recent loan upload so the
+        // Build column evidence from all uploaded data categories so the
         // post-processor can detect "Yes"/"No" and "0"/"1" source fields and
         // rewrite any spurious is_true/is_false rules to equality operators.
-        let draftColumnEvidence: ColumnEvidence[] = [];
-        const loanUploadForEvidence = await storage.getUploadByCategory(companyId, "loan");
-        if (loanUploadForEvidence?.uploadedData && Array.isArray(loanUploadForEvidence.uploadedData)) {
-          const loanRows = loanUploadForEvidence.uploadedData as Record<string, unknown>[];
-          if (loanRows.length > 0) {
-            const headers = Object.keys(loanRows[0]);
-            draftColumnEvidence = headers.map(h => {
-              const nonEmpty = loanRows.map(r => String(r[h] ?? "").trim()).filter(v => v !== "");
-              const sampleValues = nonEmpty.slice(0, 5).map(v => v.slice(0, 60));
-              const unique = [...new Set(nonEmpty)];
-              const distinctValues = unique.length <= 8 ? unique.map(v => v.slice(0, 60)) : undefined;
-              return { fieldName: h, sampleValues, inferredType: "categorical" as const, distinctValues };
-            });
+        // Later categories don't overwrite earlier ones (loan fields take priority).
+        const evidenceByField = new Map<string, ColumnEvidence>();
+        for (const category of ["loan", "payment_history", "conversation_history"]) {
+          const upload = await storage.getUploadByCategory(companyId, category);
+          if (!upload?.uploadedData || !Array.isArray(upload.uploadedData)) continue;
+          const rows = upload.uploadedData as Record<string, unknown>[];
+          if (rows.length === 0) continue;
+          for (const h of Object.keys(rows[0])) {
+            if (evidenceByField.has(h.toLowerCase())) continue;
+            const nonEmpty = rows.map(r => String(r[h] ?? "").trim()).filter(v => v !== "");
+            const sampleValues = nonEmpty.slice(0, 5).map(v => v.slice(0, 60));
+            const unique = Array.from(new Set(nonEmpty));
+            const distinctValues = unique.length <= 8 ? unique.map(v => v.slice(0, 60)) : undefined;
+            evidenceByField.set(h.toLowerCase(), { fieldName: h, sampleValues, inferredType: "categorical" as const, distinctValues });
           }
         }
+        const draftColumnEvidence: ColumnEvidence[] = Array.from(evidenceByField.values());
 
         console.log(`[generate-treatment-draft] [${requestId}] company=${companyId} pack=${pack.id} files=${files.length} fields=${fieldCatalog.length} evidence_cols=${draftColumnEvidence.length}`);
 
