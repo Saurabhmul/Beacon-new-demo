@@ -1284,9 +1284,10 @@ function convertBinarySourceRulesToEquality(
   draft: ValidatedDraftResponse,
   columnEvidence: ColumnEvidence[]
 ): ValidatedDraftResponse {
-  // Build evidence map (may be empty when no CSV has been uploaded)
+  if (!columnEvidence || columnEvidence.length === 0) return draft;
+
   const evidenceMap = new Map<string, ColumnEvidence>();
-  for (const col of (columnEvidence ?? [])) {
+  for (const col of columnEvidence) {
     evidenceMap.set(col.fieldName.toLowerCase(), col);
   }
 
@@ -1316,33 +1317,28 @@ function convertBinarySourceRulesToEquality(
     if (r.operator !== "is_true" && r.operator !== "is_false") return r;
     if ((r.field_type ?? "source") !== "source") return r;
 
+    const ev = evidenceMap.get(r.field_name.toLowerCase());
+    if (!ev) return r;
+
+    const pattern = detectBinaryPattern(ev);
+    if (!pattern) return r;
+
     const reason = (r as Record<string, unknown>).reason as string | undefined;
     const base = { field_name: r.field_name, field_type: "source" as const, ...(reason ? { reason } : {}) };
 
-    // Pass 1: evidence-based conversion (Yes/No strings or 0/1 integers)
-    const ev = evidenceMap.get(r.field_name.toLowerCase());
-    if (ev) {
-      const pattern = detectBinaryPattern(ev);
-      if (pattern) {
-        if (pattern.kind === "yesno") {
-          const value = r.operator === "is_true" ? pattern.yes : pattern.no;
-          console.log(`[AI FIX] Converted ${r.operator}→equals "${value}" for source field "${r.field_name}"`);
-          return { ...base, operator: "equals", value } as RuleItem;
-        }
-        if (pattern.kind === "binary") {
-          const value = r.operator === "is_true" ? 1 : 0;
-          console.log(`[AI FIX] Converted ${r.operator}→equals ${value} for source field "${r.field_name}"`);
-          return { ...base, operator: "equals", value } as RuleItem;
-        }
-      }
+    if (pattern.kind === "yesno") {
+      const value = r.operator === "is_true" ? pattern.yes : pattern.no;
+      console.log(`[AI FIX] Converted ${r.operator}→equals "${value}" for source field "${r.field_name}"`);
+      return { ...base, operator: "equals", value } as RuleItem;
     }
 
-    // Pass 2: last-resort fallback — convert to exists/not_exists so the rule
-    // is still semantically useful (field presence check) without asserting a
-    // specific boolean value that may not match the real data format.
-    const fallbackOp = r.operator === "is_true" ? "exists" : "not_exists";
-    console.log(`[AI FIX] Fallback: converted ${r.operator}→${fallbackOp} for source field "${r.field_name}" (no column evidence)`);
-    return { ...base, operator: fallbackOp } as RuleItem;
+    if (pattern.kind === "binary") {
+      const value = r.operator === "is_true" ? 1 : 0;
+      console.log(`[AI FIX] Converted ${r.operator}→equals ${value} for source field "${r.field_name}"`);
+      return { ...base, operator: "equals", value } as RuleItem;
+    }
+
+    return r;
   }
 
   const newTreatments = draft.treatments.map(t => ({
@@ -1431,22 +1427,13 @@ RULE FORMAT
 }
 
 OPERATOR CLASSES (use exactly these operator strings):
-- Unary (presence/boolean — NO value field, omit value entirely):
+- Unary (boolean flags — NO value field, omit value entirely):
     is_true, is_false, exists, not_exists
-    Example: { "operator": "exists" }  — do NOT include "value" at all
-
-    ══ ABSOLUTE RULE FOR SOURCE FIELDS ══
-    is_true and is_false are STRICTLY FORBIDDEN for source fields (field_type = "source").
-    Source fields in real-world data are never stored as JSON booleans — they use
-    "Yes"/"No" strings, 1/0 integers, or other categorical values.
-    For source fields, you MUST choose one of these alternatives:
-      • If you know the SOP implies "Yes" vs "No": { "operator": "equals", "value": "Yes" }
-        (use "No" for the negative case)
-      • If you know the field uses 1/0 integers:   { "operator": "equals", "value": 1 }
-      • If you are unsure of the exact value format: { "operator": "exists" }
-        (use "not_exists" for the negative case)
-    is_true and is_false are allowed ONLY for derived or business fields whose
-    configured derivation_config explicitly outputs a boolean result.
+    Example: { "operator": "is_true" }  — do NOT include "value" at all
+    CRITICAL: Do NOT use is_true / is_false for source fields whose real data values are categorical strings or binary integers. Use the equality operator instead:
+      - Field values "Yes"/"No" (or "yes"/"no") → use equals with the actual string: { "operator": "equals", "value": "Yes" }
+      - Field values 1/0 → use equals with the integer: { "operator": "equals", "value": 1 }
+      Reserve is_true / is_false ONLY for fields that store genuine JSON booleans (true/false).
 - Equality (scalar value required — string, number, or boolean):
     equals, not_equals
     Example: { "operator": "equals", "value": "High" }
