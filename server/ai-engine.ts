@@ -1134,6 +1134,145 @@ export async function extractTextFromPdfWithVision(buffer: Buffer): Promise<stri
   return response.text?.trim() || "";
 }
 
+// ── Post-processing: flatten single-source derived boolean wrapper fields ─────
+//
+// The AI sometimes creates a derived boolean field (e.g. "is_in_arrears" =
+// arrears_balance_gbp > 0) and then uses it with "is_true" in a rule, even
+// though the underlying source field is already in the catalog and the rule
+// could be written directly. This function detects those single-condition
+// wrappers and rewrites them back to direct source field comparisons.
+
+const DERIV_SYMBOL_TO_RULE_WORD: Record<string, string> = {
+  "=": "equals", "!=": "not_equals", ">": "gt", ">=": "gte", "<": "lt", "<=": "lte",
+  "in": "in", "not_in": "not_in", "contains": "contains",
+  "is_true": "is_true", "is_false": "is_false",
+};
+const INVERT_DERIV_SYMBOL: Record<string, string> = {
+  "=": "!=", "!=": "=", ">": "<=", ">=": "<", "<": ">=", "<=": ">",
+  "in": "not_in", "not_in": "in", "is_true": "is_false", "is_false": "is_true",
+};
+
+interface WrapperSpec {
+  sourceField: string;
+  derivationOp: string;
+  derivationValue?: string | number | (string | number)[];
+}
+
+type RuleItem = z.infer<typeof RuleItemSchema>;
+
+function getSingleSourceWrapperSpec(
+  df: AIDerivedField,
+  sourceFieldSet: Set<string>
+): WrapperSpec | null {
+  if (df.data_type !== "boolean") return null;
+  const config = df.derivation_config;
+  if (!config || config.conditions.length !== 1) return null;
+  const cond = config.conditions[0];
+  if (!("field" in cond)) return null;
+  const leaf = cond as { field: string; operator: string; value?: string | number | (string | number)[] };
+  if (!sourceFieldSet.has(leaf.field.toLowerCase())) return null;
+  return { sourceField: leaf.field, derivationOp: leaf.operator, derivationValue: leaf.value };
+}
+
+function makeDirectSourceRule(wrapper: WrapperSpec, ruleIsTrue: boolean, original: RuleItem): RuleItem {
+  const rawOp = ruleIsTrue ? wrapper.derivationOp : (INVERT_DERIV_SYMBOL[wrapper.derivationOp] ?? wrapper.derivationOp);
+  const wordOp = DERIV_SYMBOL_TO_RULE_WORD[rawOp] ?? rawOp;
+  const reason = (original as Record<string, unknown>).reason as string | undefined;
+  const base = { field_name: wrapper.sourceField, field_type: "source" as const, ...(reason ? { reason } : {}) };
+  if (wrapper.derivationValue === undefined || rawOp === "is_true" || rawOp === "is_false") {
+    return { ...base, operator: wordOp } as RuleItem;
+  }
+  if (rawOp === "in" || rawOp === "not_in") {
+    const arr = Array.isArray(wrapper.derivationValue) ? wrapper.derivationValue : [wrapper.derivationValue];
+    return { ...base, operator: wordOp, value: arr } as RuleItem;
+  }
+  if (rawOp === ">" || rawOp === ">=" || rawOp === "<" || rawOp === "<=") {
+    return { ...base, operator: wordOp, value: Number(wrapper.derivationValue) } as RuleItem;
+  }
+  return { ...base, operator: wordOp, value: wrapper.derivationValue as string | number | boolean } as RuleItem;
+}
+
+function flattenSingleSourceDerivedRules(
+  draft: ValidatedDraftResponse,
+  fieldCatalog: { label: string; sourceType: string }[]
+): ValidatedDraftResponse {
+  const sourceFieldSet = new Set(
+    fieldCatalog.filter(f => f.sourceType === "source_field").map(f => f.label.toLowerCase())
+  );
+
+  const wrapperMap = new Map<string, WrapperSpec>();
+  for (const df of draft.global_derived_fields) {
+    const spec = getSingleSourceWrapperSpec(df, sourceFieldSet);
+    if (spec) wrapperMap.set(df.field_name.toLowerCase(), spec);
+  }
+  for (const t of draft.treatments) {
+    for (const df of t.derived_fields) {
+      const spec = getSingleSourceWrapperSpec(df, sourceFieldSet);
+      if (spec) wrapperMap.set(df.field_name.toLowerCase(), spec);
+    }
+  }
+  if (wrapperMap.size === 0) return draft;
+
+  const globalReplaced = new Set<string>();
+
+  const newTreatments = draft.treatments.map(t => {
+    const localReplaced = new Set<string>();
+
+    function processRules(rules: RuleItem[]): RuleItem[] {
+      return rules.map(r => {
+        const key = r.field_name.toLowerCase();
+        const wrapper = wrapperMap.get(key);
+        if (!wrapper) return r;
+        if (r.operator !== "is_true" && r.operator !== "is_false") return r;
+        localReplaced.add(key);
+        globalReplaced.add(key);
+        return makeDirectSourceRule(wrapper, r.operator === "is_true", r);
+      });
+    }
+
+    const newWhen = processRules(t.when_to_offer);
+    const newBlocked = processRules(t.blocked_if);
+
+    const existingSourceLabels = new Set(t.source_fields.map(sf => sf.field_name.toLowerCase()));
+    const addedSources: typeof t.source_fields = [];
+    for (const key of Array.from(localReplaced)) {
+      const wrapper = wrapperMap.get(key)!;
+      if (!existingSourceLabels.has(wrapper.sourceField.toLowerCase())) {
+        addedSources.push({
+          field_name: wrapper.sourceField,
+          description: `Source field referenced in rule after flattening derived wrapper`,
+          matched_existing_field: sourceFieldSet.has(wrapper.sourceField.toLowerCase()),
+        });
+        existingSourceLabels.add(wrapper.sourceField.toLowerCase());
+      }
+    }
+
+    return {
+      ...t,
+      when_to_offer: newWhen,
+      blocked_if: newBlocked,
+      source_fields: [...t.source_fields, ...addedSources],
+      derived_fields: t.derived_fields.filter(df => !localReplaced.has(df.field_name.toLowerCase())),
+    };
+  });
+
+  const hasRemainingUsage = new Set<string>();
+  for (const t of newTreatments) {
+    for (const r of [...t.when_to_offer, ...t.blocked_if]) {
+      if (wrapperMap.has(r.field_name.toLowerCase())) hasRemainingUsage.add(r.field_name.toLowerCase());
+    }
+  }
+  const safeToRemoveGlobal = new Set(Array.from(globalReplaced).filter(k => !hasRemainingUsage.has(k)));
+
+  return {
+    ...draft,
+    treatments: newTreatments,
+    global_derived_fields: draft.global_derived_fields.filter(
+      df => !safeToRemoveGlobal.has(df.field_name.toLowerCase())
+    ),
+  };
+}
+
 export async function generateTreatmentDraft(
   sopBundle: string,
   fieldCatalog: { label: string; sourceType: string; description: string | null; derivationSummary: string | null }[]
@@ -1182,14 +1321,18 @@ IMPORTANT RULES
   Default: when_to_offer = "ALL", blocked_if = "ANY". Override only when SOP wording clearly implies otherwise.
 11. For derived fields, you MUST provide a structured derivation_config — not a formula hint. If you cannot determine the exact logic, set derivation_config to null and add the field to open_questions.
 12. Derived field depends_on must only reference fields from the Beacon field catalog or other derived/business fields defined in the same output.
-13. NEVER create a derived boolean field solely to wrap a single source field comparison that can already be expressed directly as a rule condition. If a condition can be written using an existing source field with a numeric, equality, or set operator, write it that way in when_to_offer / blocked_if — do NOT create a derived field for it.
-    Only create a derived field if the derivation:
-      (a) combines TWO OR MORE source fields into a single computed value, OR
-      (b) the same computed value is referenced in rules across 3 or more different treatments.
-    ✗ BAD  → derived field "is_in_arrears" (arrears_balance_gbp > 0), rule: { "field_name": "is_in_arrears", "operator": "is_true" }
-    ✓ GOOD → rule directly: { "field_name": "arrears_balance_gbp", "operator": "gt", "value": 0 }
-    ✗ BAD  → derived field "customer_has_engaged" (inbound_comms_received > 0), rule: { "field_name": "customer_has_engaged", "operator": "is_true" }
-    ✓ GOOD → rule directly: { "field_name": "inbound_comms_received", "operator": "gt", "value": 0 }
+13. RULE WRITING DECISION — apply this checklist for EVERY when_to_offer and blocked_if condition before deciding whether to create a derived field:
+    STEP 1: Is there a source field in the Beacon field catalog that directly represents the underlying numeric or categorical value?
+      → If YES: write the rule using that source field + a numeric/equality/set operator. STOP. Do NOT create a derived field.
+    STEP 2: Does the condition require combining the values of TWO OR MORE separate source fields into a single boolean result?
+      → Only if YES may you create a derived field.
+    STEP 3: If you create a derived field, is its computed value referenced in the rules of 3 or more different treatments?
+      → If YES: place it in global_derived_fields. Otherwise: place it in the treatment's derived_fields.
+    CRITICAL — single-field numeric threshold concepts are FORBIDDEN as derived fields:
+      "is in arrears"       = arrears_balance_gbp > 0    → write rule: { "field_name": "arrears_balance_gbp", "operator": "gt", "value": 0 }
+      "has engaged"         = inbound_comms_received > 0 → write rule: { "field_name": "inbound_comms_received", "operator": "gt", "value": 0 }
+      "months in arrears"   = arrears_months >= 3        → write rule: { "field_name": "arrears_months", "operator": "gte", "value": 3 }
+    If you find yourself writing a derived boolean field that wraps a single source field comparison, you MUST instead write the comparison directly in the rule. There are no exceptions.
 
 FIELD TYPE DEFINITIONS
 - Source Field: already in the Beacon field catalog, directly usable in rules
@@ -1366,7 +1509,7 @@ Return JSON only. Do not include any markdown formatting or code blocks.`;
       { isValidationError: true, zodErrors: result.error.issues }
     );
   }
-  return result.data;
+  return flattenSingleSourceDerivedRules(result.data, fieldCatalog);
 }
 
 export async function extractSOPTreatments(fileText: string): Promise<SOPExtractedTreatment[]> {
