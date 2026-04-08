@@ -224,7 +224,8 @@ export const decisions = pgTable("decisions", {
 
 export const policyPacks = pgTable("policy_packs", {
   id: serial("id").primaryKey(),
-  clientConfigId: integer("client_config_id").notNull(),
+  clientConfigId: integer("client_config_id"),
+  companyId: varchar("company_id").notNull().unique(),
   policyName: text("policy_name").notNull(),
   sourceType: text("source_type").notNull().default("ui"),
   sourceFileName: text("source_file_name"),

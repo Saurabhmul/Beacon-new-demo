@@ -65,8 +65,8 @@ export interface IStorage {
   createPolicyConfig(data: InsertPolicyConfig): Promise<PolicyConfig>;
   updatePolicyConfig(companyId: string, data: Partial<InsertPolicyConfig>): Promise<PolicyConfig>;
 
-  getPolicyPack(clientConfigId: number): Promise<PolicyPack | undefined>;
-  upsertPolicyPack(data: InsertPolicyPack & { id?: number }): Promise<PolicyPack>;
+  getPolicyPack(companyId: string): Promise<PolicyPack | undefined>;
+  upsertPolicyPack(data: InsertPolicyPack & { id?: number; companyId: string }): Promise<PolicyPack>;
   getTreatmentsWithRules(policyPackId: number): Promise<TreatmentWithRules[]>;
   createTreatment(data: InsertTreatment): Promise<Treatment>;
   updateTreatment(id: number, data: Partial<InsertTreatment>): Promise<Treatment>;
@@ -309,18 +309,24 @@ export class DatabaseStorage implements IStorage {
     return config;
   }
 
-  async getPolicyPack(clientConfigId: number): Promise<PolicyPack | undefined> {
-    const [pack] = await db.select().from(policyPacks).where(eq(policyPacks.clientConfigId, clientConfigId)).orderBy(desc(policyPacks.createdAt)).limit(1);
+  async getPolicyPack(companyId: string): Promise<PolicyPack | undefined> {
+    const [pack] = await db.select().from(policyPacks).where(eq(policyPacks.companyId, companyId)).orderBy(desc(policyPacks.createdAt)).limit(1);
     return pack || undefined;
   }
 
-  async upsertPolicyPack(data: InsertPolicyPack & { id?: number }): Promise<PolicyPack> {
+  async upsertPolicyPack(data: InsertPolicyPack & { id?: number; companyId: string }): Promise<PolicyPack> {
     if (data.id) {
       const { id, ...rest } = data;
       const [pack] = await db.update(policyPacks).set({ ...rest, updatedAt: new Date() }).where(eq(policyPacks.id, id)).returning();
       return pack;
     }
-    const [pack] = await db.insert(policyPacks).values(data).returning();
+    const [pack] = await db.insert(policyPacks)
+      .values(data)
+      .onConflictDoUpdate({
+        target: policyPacks.companyId,
+        set: { updatedAt: new Date() },
+      })
+      .returning();
     return pack;
   }
 

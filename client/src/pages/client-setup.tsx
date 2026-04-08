@@ -1823,25 +1823,33 @@ function PolicyConfigTab() {
   const createPackMutation = useMutation({
     mutationFn: async (name: string) => {
       const res = await apiRequest("POST", "/api/policy-pack", { policyName: name, sourceType: "ui" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to create policy");
+      }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policy-pack"] });
       setPolicyNameInput("");
     },
-    onError: () => toast({ title: "Error", description: "Failed to create policy", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Error", description: err.message || "Failed to create policy", variant: "destructive" }),
   });
 
   const renamePackMutation = useMutation({
     mutationFn: async (name: string) => {
       const res = await apiRequest("POST", "/api/policy-pack", { id: policyPack!.id, policyName: name, sourceType: policyPack!.sourceType });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to rename policy");
+      }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policy-pack"] });
       setIsEditingName(false);
     },
-    onError: () => toast({ title: "Error", description: "Failed to rename policy", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Error", description: err.message || "Failed to rename policy", variant: "destructive" }),
   });
 
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], retry: false });

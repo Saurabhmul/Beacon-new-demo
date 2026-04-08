@@ -602,9 +602,7 @@ export async function registerRoutes(
   app.get("/api/policy-pack", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
-      const clientConfig = await storage.getClientConfig(companyId);
-      if (!clientConfig) return res.status(404).json({ error: "No client config found" });
-      const pack = await storage.getPolicyPack(clientConfig.id);
+      const pack = await storage.getPolicyPack(companyId);
       if (!pack) return res.status(404).json({ error: "No policy pack found" });
       res.json(pack);
     } catch (error) {
@@ -615,13 +613,11 @@ export async function registerRoutes(
   app.post("/api/policy-pack", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
-      const clientConfig = await storage.getClientConfig(companyId);
-      if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
       const { policyName, sourceType, sourceFileName, status, id } = req.body;
       if (!policyName?.trim()) return res.status(400).json({ error: "policyName is required" });
       const pack = await storage.upsertPolicyPack({
         id: id || undefined,
-        clientConfigId: clientConfig.id,
+        companyId,
         policyName: policyName.trim(),
         sourceType: sourceType || "ui",
         sourceFileName: sourceFileName || null,
@@ -637,9 +633,7 @@ export async function registerRoutes(
   app.get("/api/policy-pack/treatments", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
-      const clientConfig = await storage.getClientConfig(companyId);
-      if (!clientConfig) return res.status(404).json({ error: "No client config" });
-      const pack = await storage.getPolicyPack(clientConfig.id);
+      const pack = await storage.getPolicyPack(companyId);
       if (!pack) return res.json([]);
       const txs = await storage.getTreatmentsWithRules(pack.id);
       res.json(txs);
@@ -651,9 +645,7 @@ export async function registerRoutes(
   app.post("/api/policy-pack/treatments", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
-      const clientConfig = await storage.getClientConfig(companyId);
-      if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
-      const pack = await storage.getPolicyPack(clientConfig.id);
+      const pack = await storage.getPolicyPack(companyId);
       if (!pack) return res.status(400).json({ error: "Create a policy pack first" });
       const { name, shortDescription, enabled, priority, tone, displayOrder, draftSourceFields, draftDerivedFields, draftBusinessFields, aiConfidence } = req.body;
       if (!name?.trim()) return res.status(400).json({ error: "Treatment name is required" });
@@ -733,7 +725,8 @@ export async function registerRoutes(
         rightConstantValue: r.rightConstantValue,
         rightFieldId: r.rightFieldId,
       })));
-      const updated = await storage.getTreatmentsWithRules((await storage.getPolicyPack((await storage.getClientConfig(getCompanyId(req)))!.id))!.id);
+      const pack = await storage.getPolicyPack(getCompanyId(req));
+      const updated = pack ? await storage.getTreatmentsWithRules(pack.id) : [];
       const tx = updated.find(t => t.id === treatmentId);
       res.json(tx || { id: treatmentId });
     } catch (error) {
@@ -859,9 +852,7 @@ export async function registerRoutes(
           }
         }
 
-        const clientConfig = await storage.getClientConfig(companyId);
-        if (!clientConfig) return res.status(400).json({ error: "No client config found" });
-        const pack = await storage.getPolicyPack(clientConfig.id);
+        const pack = await storage.getPolicyPack(companyId);
         if (!pack) return res.status(400).json({ error: "No policy pack found — save your policy configuration first" });
 
         const pdfParseMod = await import("pdf-parse");
@@ -1087,7 +1078,7 @@ export async function registerRoutes(
         });
 
         const updatedTreatments = await storage.getTreatmentsWithRules(pack.id);
-        const updatedPack = await storage.getPolicyPack(clientConfig.id);
+        const updatedPack = await storage.getPolicyPack(companyId);
 
         res.json({
           treatments: updatedTreatments,
