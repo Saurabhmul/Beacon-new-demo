@@ -976,17 +976,8 @@ function normalizeDerivationConfig(config: unknown): unknown {
   return { ...cfg, conditions: cfg.conditions.map(normalizeDerivationCondition) };
 }
 
-function normalizeSourceField(obj: Record<string, unknown>): Record<string, unknown> {
-  const n = { ...obj };
-  if (n.description === null) n.description = "";
-  return n;
-}
-
 function normalizeDerivedField(obj: Record<string, unknown>): Record<string, unknown> {
   const n = { ...obj };
-  if (n.display_name === null) n.display_name = "";
-  if (n.description === null) n.description = "";
-  if (n.derivation_summary === null) n.derivation_summary = "";
   if (n.depends_on === null) n.depends_on = [];
   if (n.derivation_config !== null && n.derivation_config !== undefined) {
     n.derivation_config = normalizeDerivationConfig(n.derivation_config);
@@ -996,24 +987,12 @@ function normalizeDerivedField(obj: Record<string, unknown>): Record<string, unk
 
 function normalizeBusinessField(obj: Record<string, unknown>): Record<string, unknown> {
   const n = { ...obj };
-  if (n.display_name === null) n.display_name = "";
-  if (n.description === null) n.description = "";
-  if (n.default_value === null) n.default_value = "";
-  if (n.business_meaning === null) n.business_meaning = "";
   if (n.allowed_values === null) n.allowed_values = [];
   return n;
 }
 
 function normalizeTreatmentItem(obj: Record<string, unknown>): Record<string, unknown> {
   const n = { ...obj };
-  if (n.description === null) n.description = "";
-  if (Array.isArray(n.source_fields)) {
-    n.source_fields = n.source_fields.map((sf: unknown) =>
-      sf && typeof sf === "object" && !Array.isArray(sf)
-        ? normalizeSourceField(sf as Record<string, unknown>)
-        : sf
-    );
-  }
   if (Array.isArray(n.derived_fields)) {
     n.derived_fields = n.derived_fields.map((df: unknown) =>
       df && typeof df === "object" && !Array.isArray(df)
@@ -1030,6 +1009,11 @@ function normalizeTreatmentItem(obj: Record<string, unknown>): Record<string, un
   }
   return n;
 }
+
+const coerceToString = z.preprocess(
+  (v) => (v === null || v === undefined) ? "" : (typeof v === "boolean" || typeof v === "number") ? String(v) : v,
+  z.string()
+);
 
 const _ruleCommon = {
   field_name: z.string(),
@@ -1069,35 +1053,35 @@ const RuleItemSchema = z.union([
 
 const AIDerivedFieldSchema = z.object({
   field_name: z.string(),
-  display_name: z.string().default(""),
-  description: z.string().default(""),
+  display_name: coerceToString,
+  description: coerceToString,
   data_type: z.enum(["boolean", "number", "string", "enum"]).default("boolean"),
   depends_on: z.array(z.string()).default([]),
   derivation_config: LogicalDerivationConfigSchema.nullable().default(null),
-  derivation_summary: z.string().default(""),
+  derivation_summary: coerceToString,
   confidence: z.enum(["high", "medium", "low"]).default("medium"),
 });
 
 const AIBusinessFieldSchema = z.object({
   field_name: z.string(),
-  display_name: z.string().default(""),
-  description: z.string().default(""),
+  display_name: coerceToString,
+  description: coerceToString,
   data_type: z.enum(["boolean", "number", "string", "enum"]).default("string"),
   allowed_values: z.array(z.string()).default([]),
-  default_value: z.string().default(""),
-  business_meaning: z.string().default(""),
+  default_value: coerceToString,
+  business_meaning: coerceToString,
 });
 
 export const DraftTreatmentItemSchema = z.object({
   name: z.string(),
-  description: z.string().default(""),
+  description: coerceToString,
   when_to_offer_logic: z.enum(["ALL", "ANY"]).catch("ALL"),
   when_to_offer: z.array(RuleItemSchema).default([]),
   blocked_if_logic: z.enum(["ALL", "ANY"]).catch("ANY"),
   blocked_if: z.array(RuleItemSchema).default([]),
   source_fields: z.array(z.object({
     field_name: z.string(),
-    description: z.string().default(""),
+    description: coerceToString,
     matched_existing_field: z.boolean().default(false),
   })).default([]),
   derived_fields: z.array(AIDerivedFieldSchema).default([]),
@@ -1107,7 +1091,7 @@ export const DraftTreatmentItemSchema = z.object({
 
 const GlobalSourceFieldSchema = z.object({
   field_name: z.string(),
-  description: z.string().default(""),
+  description: coerceToString,
 });
 
 const GlobalDerivedFieldSchema = AIDerivedFieldSchema;
@@ -1117,7 +1101,7 @@ export type AIDerivedField = z.infer<typeof AIDerivedFieldSchema>;
 export type AIBusinessField = z.infer<typeof AIBusinessFieldSchema>;
 
 const DraftResponseSchema = z.object({
-  summary: z.string().default(""),
+  summary: coerceToString,
   treatments: z.array(DraftTreatmentItemSchema).default([]),
   global_source_fields: z.array(GlobalSourceFieldSchema).default([]),
   global_derived_fields: z.array(GlobalDerivedFieldSchema).default([]),
@@ -1132,6 +1116,7 @@ export async function extractTextFromPdfWithVision(buffer: Buffer): Promise<stri
   const response = await ai.models.generateContent({
     model: "gemini-2.5-pro",
     contents: [{
+      role: "user",
       parts: [
         {
           inlineData: {
@@ -1315,26 +1300,18 @@ Return JSON only. Do not include any markdown formatting or code blocks.`;
     throw new Error("AI returned invalid JSON — cannot parse treatment draft");
   }
 
-  // Pre-parse normalization: coerce null → default for known optional fields
-  // (only strict null; wrong non-null types still reach Zod and fail)
+  // Pre-parse normalization: coerce null arrays → [] so Zod .default([]) works
+  // (string fields are handled by coerceToString at schema level)
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
     const raw = parsed as Record<string, unknown>;
 
-    // Top-level optional fields
-    if (raw.summary === null) raw.summary = "";
+    // Null arrays at top level
     if (raw.open_questions === null) raw.open_questions = [];
     if (raw.global_source_fields === null) raw.global_source_fields = [];
     if (raw.global_derived_fields === null) raw.global_derived_fields = [];
     if (raw.global_business_fields === null) raw.global_business_fields = [];
 
-    // Global field arrays
-    if (Array.isArray(raw.global_source_fields)) {
-      raw.global_source_fields = raw.global_source_fields.map((sf: unknown) =>
-        sf && typeof sf === "object" && !Array.isArray(sf)
-          ? normalizeSourceField(sf as Record<string, unknown>)
-          : sf
-      );
-    }
+    // Global derived/business field arrays (depends_on, allowed_values, derivation_config)
     if (Array.isArray(raw.global_derived_fields)) {
       raw.global_derived_fields = raw.global_derived_fields.map((df: unknown) =>
         df && typeof df === "object" && !Array.isArray(df)
