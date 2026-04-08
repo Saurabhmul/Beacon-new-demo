@@ -353,8 +353,17 @@ function MultiSelectDropdown({ values, options, onChange, testIdPrefix }: {
 const ESCALATION_OPERATORS = [">", "<", "=", ">=", "<=", "contains"];
 
 // ── Policy Pack — Rule Builder ─────────────────────────────────────────────────
-const RULE_OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "contains", "is empty", "is not empty"] as const;
-const NO_VALUE_OPERATORS = new Set(["is empty", "is not empty"]);
+const RULE_OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "contains", "is empty", "is not empty", "is true", "is false", "in", "not in"] as const;
+const NO_VALUE_OPERATORS = new Set(["is empty", "is not empty", "is true", "is false"]);
+
+const WORD_TO_UI_OP: Record<string, string> = {
+  equals: "=", not_equals: "!=", gt: ">", gte: ">=", lt: "<", lte: "<=",
+  is_true: "is true", is_false: "is false", exists: "is not empty", not_exists: "is empty",
+  in: "in", not_in: "not in",
+};
+function normalizeUiOperator(op: string): string {
+  return WORD_TO_UI_OP[op] ?? op;
+}
 const CUSTOM_FIELD_SENTINEL = "__custom__";
 const ADD_FIELD_SENTINEL = "__add_field__";
 const DERIVATION_OPERATORS = ["+", "-", "*", "/"] as const;
@@ -421,7 +430,7 @@ function serverGroupToLocal(ruleType: string, ruleGroups: TreatmentRuleGroupWith
       fieldName: r.fieldName,
       useCustom: false,
       customFieldName: "",
-      operator: r.operator,
+      operator: normalizeUiOperator(r.operator),
       value: r.value || "",
       leftFieldId: r.leftFieldId || (r.fieldName ? `source:${r.fieldName}` : null),
       rightMode: (r.rightMode as "constant" | "field") || "constant",
@@ -514,6 +523,18 @@ function FieldInfoPopover({ field }: { field: PolicyFieldDto }) {
 }
 
 // ── FieldPicker ─────────────────────────────────────────────────────────────
+function resolveFieldId(value: string | null, policyFields: PolicyFieldDto[]): string {
+  if (!value) return "";
+  if (policyFields.some(f => f.id === value)) return value;
+  const colonIdx = value.indexOf(":");
+  if (colonIdx !== -1) {
+    const label = value.slice(colonIdx + 1).toLowerCase();
+    const match = policyFields.find(f => f.label.toLowerCase() === label);
+    if (match) return match.id;
+  }
+  return value;
+}
+
 function FieldPicker({ value, policyFields, onChange, onAddField, disabled, testId }: {
   value: string | null;
   policyFields: PolicyFieldDto[];
@@ -522,11 +543,12 @@ function FieldPicker({ value, policyFields, onChange, onAddField, disabled, test
   disabled?: boolean;
   testId?: string;
 }) {
+  const resolvedValue = resolveFieldId(value, policyFields);
   const sources = policyFields.filter(f => f.sourceType === "source_field").sort((a, b) => a.label.localeCompare(b.label));
   const business = policyFields.filter(f => f.sourceType === "business_field").sort((a, b) => a.label.localeCompare(b.label));
   const derived = policyFields.filter(f => f.sourceType === "derived_field").sort((a, b) => a.label.localeCompare(b.label));
   return (
-    <Select value={value || ""} onValueChange={v => { if (v === ADD_FIELD_SENTINEL) onAddField?.(); else onChange(v); }} disabled={disabled}>
+    <Select value={resolvedValue} onValueChange={v => { if (v === ADD_FIELD_SENTINEL) onAddField?.(); else onChange(v); }} disabled={disabled}>
       <SelectTrigger className="h-8 text-xs w-44" data-testid={testId}>
         <SelectValue placeholder="Select field…" />
       </SelectTrigger>
@@ -867,7 +889,8 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
     <div className="space-y-2">
       <LogicToggle />
       {group.rows.map((row, idx) => {
-        const leftField = row.leftFieldId ? policyFields.find(f => f.id === row.leftFieldId) : null;
+        const resolvedLeftId = resolveFieldId(row.leftFieldId, policyFields);
+        const leftField = resolvedLeftId ? policyFields.find(f => f.id === resolvedLeftId) : null;
         const rightField = row.rightMode === "field" && row.rightFieldId ? policyFields.find(f => f.id === row.rightFieldId) : null;
         return (
           <div key={row.localId} className="flex items-center gap-2 flex-wrap">

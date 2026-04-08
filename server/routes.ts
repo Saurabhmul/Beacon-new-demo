@@ -22,6 +22,24 @@ import { seedDatabase } from "./seed";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 
+const WORD_TO_UI_OPERATOR: Record<string, string> = {
+  equals: "=",
+  not_equals: "!=",
+  gt: ">",
+  gte: ">=",
+  lt: "<",
+  lte: "<=",
+  is_true: "is true",
+  is_false: "is false",
+  exists: "is not empty",
+  not_exists: "is empty",
+  in: "in",
+  not_in: "not in",
+};
+function wordToUiOperator(op: string): string {
+  return WORD_TO_UI_OPERATOR[op] ?? op;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -1320,12 +1338,13 @@ export async function registerRoutes(
               for (let j = 0; j < resolvedWhen.length; j++) {
                 const r = resolvedWhen[j];
                 const fieldRecord = liveFieldMap.get(normalizeFieldLabel(r.field_name))!;
-                const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`;
+                const leftFieldId = fieldRecord.id;
+                const uiOp = wordToUiOperator(r.operator);
                 const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
                 await tx.insert(treatmentRules).values({
                   ruleGroupId: whenGroup.id,
                   fieldName: fieldRecord.label,
-                  operator: r.operator,
+                  operator: uiOp,
                   value: rawValue,
                   sortOrder: j,
                   leftFieldId,
@@ -1345,12 +1364,13 @@ export async function registerRoutes(
               for (let j = 0; j < resolvedBlocked.length; j++) {
                 const r = resolvedBlocked[j];
                 const fieldRecord = liveFieldMap.get(normalizeFieldLabel(r.field_name))!;
-                const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`;
+                const leftFieldId = fieldRecord.id;
+                const uiOp = wordToUiOperator(r.operator);
                 const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
                 await tx.insert(treatmentRules).values({
                   ruleGroupId: blockedGroup.id,
                   fieldName: fieldRecord.label,
-                  operator: r.operator,
+                  operator: uiOp,
                   value: rawValue,
                   sortOrder: j,
                   leftFieldId,
