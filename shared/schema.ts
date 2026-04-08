@@ -21,7 +21,7 @@ export const clientConfigs = pgTable("client_configs", {
 
 export const rulebooks = pgTable("rulebooks", {
   id: serial("id").primaryKey(),
-  clientConfigId: integer("client_config_id").notNull(),
+  clientConfigId: integer("client_config_id"),
   userId: varchar("user_id").notNull(),
   companyId: varchar("company_id").notNull(),
   title: text("title").notNull(),
@@ -51,7 +51,7 @@ export interface CategoryEntry {
 
 export const dataConfigs = pgTable("data_configs", {
   id: serial("id").primaryKey(),
-  clientConfigId: integer("client_config_id").notNull(),
+  clientConfigId: integer("client_config_id"),
   userId: varchar("user_id").notNull(),
   companyId: varchar("company_id").notNull(),
   mandatoryFields: jsonb("mandatory_fields").$type<string[]>().default([]).notNull(),
@@ -68,7 +68,7 @@ export const dataConfigs = pgTable("data_configs", {
 
 export const dpdStages = pgTable("dpd_stages", {
   id: serial("id").primaryKey(),
-  clientConfigId: integer("client_config_id").notNull(),
+  clientConfigId: integer("client_config_id"),
   userId: varchar("user_id").notNull(),
   companyId: varchar("company_id").notNull(),
   name: text("name").notNull(),
@@ -147,7 +147,7 @@ export interface EscalationRules {
 
 export const policyConfigs = pgTable("policy_configs", {
   id: serial("id").primaryKey(),
-  clientConfigId: integer("client_config_id").notNull(),
+  clientConfigId: integer("client_config_id"),
   userId: varchar("user_id").notNull(),
   companyId: varchar("company_id").notNull(),
   vulnerabilityDefinition: text("vulnerability_definition"),
@@ -163,7 +163,7 @@ export const policyConfigs = pgTable("policy_configs", {
 
 export const dataUploads = pgTable("data_uploads", {
   id: serial("id").primaryKey(),
-  clientConfigId: integer("client_config_id").notNull(),
+  clientConfigId: integer("client_config_id"),
   userId: varchar("user_id").notNull(),
   companyId: varchar("company_id").notNull(),
   fileName: text("file_name").notNull(),
@@ -194,7 +194,7 @@ export const uploadLogs = pgTable("upload_logs", {
 
 export const decisions = pgTable("decisions", {
   id: serial("id").primaryKey(),
-  clientConfigId: integer("client_config_id").notNull(),
+  clientConfigId: integer("client_config_id"),
   dataUploadId: integer("data_upload_id").notNull(),
   userId: varchar("user_id").notNull(),
   companyId: varchar("company_id").notNull(),

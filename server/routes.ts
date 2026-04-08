@@ -313,13 +313,12 @@ export async function registerRoutes(
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
       const config = await storage.getClientConfig(companyId);
-      if (!config) return res.status(400).json({ error: "Configure client first" });
 
       const rb = await storage.createRulebook({
         ...req.body,
         userId,
         companyId,
-        clientConfigId: config.id,
+        clientConfigId: config?.id ?? null,
       });
       res.status(201).json(rb);
     } catch (error) {
@@ -332,7 +331,6 @@ export async function registerRoutes(
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
       const config = await storage.getClientConfig(companyId);
-      if (!config) return res.status(400).json({ error: "Configure client first" });
 
       const file = req.file;
       if (!file) return res.status(400).json({ error: "No file uploaded" });
@@ -365,7 +363,7 @@ export async function registerRoutes(
         title: req.body.title || file.originalname,
         userId,
         companyId,
-        clientConfigId: config.id,
+        clientConfigId: config?.id ?? null,
         sopFileUrl: filePath,
         sopFileName: file.originalname,
         extractedText,
@@ -408,13 +406,12 @@ export async function registerRoutes(
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
       const clientConfig = await storage.getClientConfig(companyId);
-      if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
 
       const config = await storage.createDataConfig({
         ...req.body,
         userId,
         companyId,
-        clientConfigId: clientConfig.id,
+        clientConfigId: clientConfig?.id ?? null,
       });
       res.status(201).json(config);
     } catch (error) {
@@ -546,7 +543,6 @@ export async function registerRoutes(
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
       const clientConfig = await storage.getClientConfig(companyId);
-      if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
 
       const dpdStagesData = await storage.getDpdStages(companyId);
 
@@ -563,7 +559,7 @@ export async function registerRoutes(
         ...req.body,
         userId,
         companyId,
-        clientConfigId: clientConfig.id,
+        clientConfigId: clientConfig?.id ?? null,
         compiledPolicy: compiled as unknown as Record<string, string>,
         compiledAt: new Date(),
       });
@@ -1203,7 +1199,6 @@ export async function registerRoutes(
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
       const config = await storage.getClientConfig(companyId);
-      if (!config) return res.status(400).json({ error: "Configure client first" });
 
       const { name, description, fromDays, toDays, color } = req.body;
       if (fromDays >= toDays) return res.status(400).json({ error: "From days must be less than To days" });
@@ -1224,7 +1219,7 @@ export async function registerRoutes(
         color: color || "blue",
         userId,
         companyId,
-        clientConfigId: config.id,
+        clientConfigId: config?.id ?? null,
       });
       res.status(201).json(stage);
     } catch (error) {
@@ -1551,7 +1546,6 @@ export async function registerRoutes(
       const userId = getUserId(req);
       const companyId = getCompanyId(req);
       const config = await storage.getClientConfig(companyId);
-      if (!config) return res.status(400).json({ error: "Configure client first" });
 
       const file = req.file;
       if (!file) return res.status(400).json({ error: "No file uploaded" });
@@ -1681,7 +1675,7 @@ export async function registerRoutes(
           uploadedData: newRecords,
           userId,
           companyId,
-          clientConfigId: config.id,
+          clientConfigId: config?.id ?? null,
         });
 
         await storage.createUploadLog({
@@ -1819,7 +1813,7 @@ export async function registerRoutes(
               );
 
               await storage.createDecision({
-                clientConfigId: clientConfig?.id || 0,
+                clientConfigId: clientConfig?.id ?? null,
                 dataUploadId: loanUpload.id,
                 userId,
                 companyId,

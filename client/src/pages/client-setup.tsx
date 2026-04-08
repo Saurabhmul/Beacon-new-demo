@@ -2630,12 +2630,6 @@ function DataConfigTab() {
   const isReadOnly = user?.role === "superadmin" || user?.role === "manager";
 
   const { data: dataConfig, isLoading } = useQuery<DataConfig>({ queryKey: ["/api/data-config"] });
-  const { data: clientConfig, isLoading: clientConfigLoading } = useQuery<ClientConfig>({
-    queryKey: ["/api/client-config"],
-    retry: false,
-  });
-  const hasClientConfig = !clientConfigLoading && !!clientConfig;
-
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [categoryData, setCategoryData] = useState<Record<string, CategoryEntry>>({});
   const [analyzingCategories, setAnalyzingCategories] = useState<Set<string>>(new Set());
@@ -2997,12 +2991,6 @@ function DataConfigTab() {
 
       {!isReadOnly && (
         <div className="pt-2 pb-8 space-y-3">
-          {!clientConfigLoading && !hasClientConfig && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-3 py-2.5 text-sm text-amber-800 dark:text-amber-300" data-testid="alert-no-client-config">
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>Client Configuration must be completed before saving. Go to the <strong>Client Configuration</strong> tab to set it up first.</span>
-            </div>
-          )}
           <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-dataconfig">
             {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
             Save Configuration

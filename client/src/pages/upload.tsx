@@ -37,7 +37,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Upload, FileUp, FileText, Loader2, CheckCircle2, Download, Search, ChevronLeft, ChevronRight, MessageSquare, CreditCard, Landmark, ArrowLeft, History, AlertCircle, Trash2, Pencil, Building2 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import type { DataUpload, ClientConfig, DataConfig } from "@shared/schema";
+import type { DataUpload, DataConfig } from "@shared/schema";
 
 type UploadCategory = string;
 
@@ -742,7 +742,6 @@ export default function UploadPage() {
   const isSuperAdmin = user?.role === "superadmin";
   const noCompanySelected = isSuperAdmin && !user?.viewingCompanyId;
 
-  const { data: config } = useQuery<ClientConfig>({ queryKey: ["/api/client-config"], enabled: !noCompanySelected });
   const { data: dataConfig } = useQuery<DataConfig>({ queryKey: ["/api/data-config"], enabled: !noCompanySelected });
 
   const categories = useMemo<string[]>(() => {
@@ -770,19 +769,6 @@ export default function UploadPage() {
     );
   }
 
-  if (!config) {
-    return (
-      <div className="p-6 max-w-6xl mx-auto">
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Upload className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-            <h3 className="font-medium mb-1">Setup Required</h3>
-            <p className="text-sm text-muted-foreground">Please complete client configuration and set up a rulebook first.</p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   const PLACEHOLDER_CATEGORIES = [
     { key: "loan_data", label: "Loan Data", icon: Landmark },
