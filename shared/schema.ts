@@ -222,6 +222,10 @@ export const decisions = pgTable("decisions", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Migration note (Task #22): company_id was added in two SQL phases:
+// Phase 1: ADD COLUMN company_id varchar (nullable) → backfill from client_configs → validate
+// Phase 2: ALTER COLUMN company_id SET NOT NULL + ADD CONSTRAINT UNIQUE (after validated backfill)
+// client_config_id was also made nullable in Phase 1. Existing rows retain their value.
 export const policyPacks = pgTable("policy_packs", {
   id: serial("id").primaryKey(),
   clientConfigId: integer("client_config_id"),
