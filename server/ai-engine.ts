@@ -945,6 +945,58 @@ function normalizeRuleItem(rule: Record<string, unknown>): Record<string, unknow
   return normalized;
 }
 
+function normalizeSourceField(obj: Record<string, unknown>): Record<string, unknown> {
+  const n = { ...obj };
+  if (n.description === null) n.description = "";
+  return n;
+}
+
+function normalizeDerivedField(obj: Record<string, unknown>): Record<string, unknown> {
+  const n = { ...obj };
+  if (n.display_name === null) n.display_name = "";
+  if (n.description === null) n.description = "";
+  if (n.derivation_summary === null) n.derivation_summary = "";
+  if (n.depends_on === null) n.depends_on = [];
+  return n;
+}
+
+function normalizeBusinessField(obj: Record<string, unknown>): Record<string, unknown> {
+  const n = { ...obj };
+  if (n.display_name === null) n.display_name = "";
+  if (n.description === null) n.description = "";
+  if (n.default_value === null) n.default_value = "";
+  if (n.business_meaning === null) n.business_meaning = "";
+  if (n.allowed_values === null) n.allowed_values = [];
+  return n;
+}
+
+function normalizeTreatmentItem(obj: Record<string, unknown>): Record<string, unknown> {
+  const n = { ...obj };
+  if (n.description === null) n.description = "";
+  if (Array.isArray(n.source_fields)) {
+    n.source_fields = n.source_fields.map((sf: unknown) =>
+      sf && typeof sf === "object" && !Array.isArray(sf)
+        ? normalizeSourceField(sf as Record<string, unknown>)
+        : sf
+    );
+  }
+  if (Array.isArray(n.derived_fields)) {
+    n.derived_fields = n.derived_fields.map((df: unknown) =>
+      df && typeof df === "object" && !Array.isArray(df)
+        ? normalizeDerivedField(df as Record<string, unknown>)
+        : df
+    );
+  }
+  if (Array.isArray(n.business_fields)) {
+    n.business_fields = n.business_fields.map((bf: unknown) =>
+      bf && typeof bf === "object" && !Array.isArray(bf)
+        ? normalizeBusinessField(bf as Record<string, unknown>)
+        : bf
+    );
+  }
+  return n;
+}
+
 const _ruleCommon = {
   field_name: z.string(),
   field_type: z.enum(["source", "derived", "business"]).optional(),
@@ -1229,9 +1281,42 @@ Return JSON only. Do not include any markdown formatting or code blocks.`;
     throw new Error("AI returned invalid JSON — cannot parse treatment draft");
   }
 
-  // Normalize rule items in each treatment before Zod validation
+  // Pre-parse normalization: coerce null → default for known optional fields
+  // (only strict null; wrong non-null types still reach Zod and fail)
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
     const raw = parsed as Record<string, unknown>;
+
+    // Top-level optional fields
+    if (raw.summary === null) raw.summary = "";
+    if (raw.open_questions === null) raw.open_questions = [];
+    if (raw.global_source_fields === null) raw.global_source_fields = [];
+    if (raw.global_derived_fields === null) raw.global_derived_fields = [];
+    if (raw.global_business_fields === null) raw.global_business_fields = [];
+
+    // Global field arrays
+    if (Array.isArray(raw.global_source_fields)) {
+      raw.global_source_fields = raw.global_source_fields.map((sf: unknown) =>
+        sf && typeof sf === "object" && !Array.isArray(sf)
+          ? normalizeSourceField(sf as Record<string, unknown>)
+          : sf
+      );
+    }
+    if (Array.isArray(raw.global_derived_fields)) {
+      raw.global_derived_fields = raw.global_derived_fields.map((df: unknown) =>
+        df && typeof df === "object" && !Array.isArray(df)
+          ? normalizeDerivedField(df as Record<string, unknown>)
+          : df
+      );
+    }
+    if (Array.isArray(raw.global_business_fields)) {
+      raw.global_business_fields = raw.global_business_fields.map((bf: unknown) =>
+        bf && typeof bf === "object" && !Array.isArray(bf)
+          ? normalizeBusinessField(bf as Record<string, unknown>)
+          : bf
+      );
+    }
+
+    // Treatments: normalize metadata fields + rule items
     if (Array.isArray(raw.treatments)) {
       raw.treatments = raw.treatments.map((t: unknown) => {
         if (!t || typeof t !== "object" || Array.isArray(t)) return t;
@@ -1245,7 +1330,7 @@ Return JSON only. Do not include any markdown formatting or code blocks.`;
               )
             : rules;
         return {
-          ...treatment,
+          ...normalizeTreatmentItem(treatment),
           when_to_offer: normalizeRules(treatment.when_to_offer),
           blocked_if: normalizeRules(treatment.blocked_if),
         };
