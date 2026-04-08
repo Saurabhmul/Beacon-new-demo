@@ -1823,10 +1823,6 @@ function PolicyConfigTab() {
   const createPackMutation = useMutation({
     mutationFn: async (name: string) => {
       const res = await apiRequest("POST", "/api/policy-pack", { policyName: name, sourceType: "ui" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || "Failed to create policy");
-      }
       return res.json();
     },
     onSuccess: () => {
@@ -1839,10 +1835,6 @@ function PolicyConfigTab() {
   const renamePackMutation = useMutation({
     mutationFn: async (name: string) => {
       const res = await apiRequest("POST", "/api/policy-pack", { id: policyPack!.id, policyName: name, sourceType: policyPack!.sourceType });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || "Failed to rename policy");
-      }
       return res.json();
     },
     onSuccess: () => {
