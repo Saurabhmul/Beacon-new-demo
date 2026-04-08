@@ -287,18 +287,25 @@ export interface DraftSourceField {
 
 export interface DraftDerivedField {
   fieldName: string;
+  displayName?: string;
   description: string;
-  formulaHint: string;
+  dataType?: string;
+  derivationSummary?: string;
   dependsOn: string[];
+  formulaHint?: string;
 }
 
 export interface DraftBusinessField {
   fieldName: string;
+  displayName?: string;
   description: string;
+  dataType?: string;
   allowedValues: string[];
+  defaultValue?: string;
+  businessMeaning?: string;
 }
 
-export interface DerivationConfig {
+export interface ArithmeticDerivationConfig {
   fieldA: string;
   fieldALabel: string;
   operator1: string;
@@ -311,25 +318,58 @@ export interface DerivationConfig {
   operandCLabel?: string;
 }
 
+export interface LogicalCondition {
+  field: string;
+  fieldType?: "source" | "derived" | "business";
+  operator: "=" | "!=" | ">" | ">=" | "<" | "<=" | "in" | "not_in" | "contains" | "is_true" | "is_false";
+  value?: string | number | string[] | number[];
+}
+
+export interface LogicalDerivationConfig {
+  type: "logical";
+  operator: "AND" | "OR";
+  conditions: LogicalCondition[];
+}
+
+export type DerivationConfig = ArithmeticDerivationConfig | LogicalDerivationConfig;
+
+// Migration note (Task #23): new columns added to policy_fields via direct SQL (db:push TUI blocks):
+// display_name, data_type, allowed_values (jsonb), default_value, business_meaning,
+// ai_generated (boolean), created_by, source_document_id
 export const policyFields = pgTable("policy_fields", {
   id: serial("id").primaryKey(),
   companyId: text("company_id").notNull(),
   policyPackId: integer("policy_pack_id"),
   label: text("label").notNull(),
+  displayName: text("display_name"),
   description: text("description"),
   sourceType: text("source_type").notNull(),
+  dataType: text("data_type"),
   derivationConfig: jsonb("derivation_config").$type<DerivationConfig>(),
   derivationSummary: text("derivation_summary"),
+  allowedValues: jsonb("allowed_values").$type<string[]>(),
+  defaultValue: text("default_value"),
+  businessMeaning: text("business_meaning"),
+  aiGenerated: boolean("ai_generated").default(false),
+  createdBy: text("created_by"),
+  sourceDocumentId: text("source_document_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export interface PolicyFieldDto {
   id: string;
   label: string;
+  displayName: string | null;
   description: string | null;
   sourceType: "source_field" | "business_field" | "derived_field";
+  dataType: string | null;
   derivationConfig: DerivationConfig | null;
   derivationSummary: string | null;
+  allowedValues: string[] | null;
+  defaultValue: string | null;
+  businessMeaning: string | null;
+  aiGenerated: boolean;
+  createdBy: string | null;
 }
 
 export interface RuleSaveRow {

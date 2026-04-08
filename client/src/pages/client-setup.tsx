@@ -1179,12 +1179,15 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
                     readOnly={isReadOnly}
                     placeholder="Description"
                   />
+                  {df.dataType && (
+                    <Badge variant="secondary" className="text-[10px] w-fit">{df.dataType}</Badge>
+                  )}
                   <Input
                     className="text-[11px] font-mono h-7"
-                    value={df.formulaHint}
-                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, formulaHint: v } : f) })); }}
+                    value={df.derivationSummary ?? df.formulaHint ?? ""}
+                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, derivationSummary: v } : f) })); }}
                     readOnly={isReadOnly}
-                    placeholder="Formula hint (e.g. field_a / field_b)"
+                    placeholder="Derivation logic"
                   />
                   <Input
                     className="text-[11px] h-7"
@@ -1221,6 +1224,12 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
                     placeholder="Description"
                     rows={2}
                   />
+                  {bf.dataType && (
+                    <Badge variant="secondary" className="text-[10px] w-fit">{bf.dataType}</Badge>
+                  )}
+                  {bf.businessMeaning && (
+                    <p className="text-[11px] text-muted-foreground italic leading-relaxed">{bf.businessMeaning}</p>
+                  )}
                   <Input
                     className="text-xs h-7"
                     value={bf.allowedValues.join(", ")}
@@ -1320,6 +1329,13 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [aiReviewInfo, setAiReviewInfo] = useState<{ summary: string; openQuestions: string[]; generatedAt: string } | null>(null);
   const [openQuestionsExpanded, setOpenQuestionsExpanded] = useState(false);
+  const [sopImportSummary, setSopImportSummary] = useState<{
+    createdTreatments: { name: string; id: number }[];
+    createdFields: { derived: { label: string; id: string }[]; business: { label: string; id: string }[] };
+    unresolvedTreatments: { name: string; reason: string }[];
+    unresolvedFields: { fieldName: string; fieldType: string; reason: string }[];
+  } | null>(null);
+  const [sopSummaryExpanded, setSopSummaryExpanded] = useState(false);
   const stageTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const errorStageRef = useRef<SopStageId>("ai_generating");
 
@@ -1461,16 +1477,30 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
       setGenerationStage("saving");
       await new Promise(r => setTimeout(r, 400));
       setGenerationStage("complete");
-      const { treatments: generatedTxs, summary, openQuestions, generatedAt } = data;
+      const { treatments: generatedTxs, summary, openQuestions, generatedAt,
+              createdTreatments = [], createdFields = { derived: [], business: [] },
+              unresolvedTreatments = [], unresolvedFields = [] } = data;
       queryClient.invalidateQueries({ queryKey: ["/api/policy-pack/treatments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-fields"] });
       const newLocals: LocalTreatment[] = generatedTxs.map((tx: TreatmentWithRules) => serverTxToLocal(tx));
       await new Promise(r => setTimeout(r, 900));
       setLocalTreatments(newLocals);
       setAiReviewInfo({ summary: summary || "", openQuestions: openQuestions || [], generatedAt });
+      setSopImportSummary({ createdTreatments, createdFields, unresolvedTreatments, unresolvedFields });
+      setSopSummaryExpanded(
+        (unresolvedTreatments.length > 0 || unresolvedFields.length > 0 ||
+         createdFields.derived.length > 0 || createdFields.business.length > 0)
+      );
       setShowUploadPanel(false);
       setSopFiles([]);
       setGenerationStage("idle");
-      toast({ title: `${newLocals.length} treatment${newLocals.length !== 1 ? "s" : ""} generated`, description: "Review AI-generated treatments below before saving." });
+      const totalNew = createdFields.derived.length + createdFields.business.length;
+      toast({
+        title: `${newLocals.length} treatment${newLocals.length !== 1 ? "s" : ""} generated`,
+        description: totalNew > 0
+          ? `${totalNew} new field${totalNew !== 1 ? "s" : ""} auto-created. Review treatments below before saving.`
+          : "Review AI-generated treatments below before saving.",
+      });
     } catch (err) {
       clearStageTimers();
       errorStageRef.current = activeStage;
@@ -1551,6 +1581,80 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
           )}
         </div>
       )}
+
+      {/* SOP Import Summary Panel */}
+      {sopImportSummary && (() => {
+        const { createdTreatments, createdFields, unresolvedTreatments, unresolvedFields } = sopImportSummary;
+        const hasIssues = unresolvedTreatments.length > 0 || unresolvedFields.length > 0;
+        const hasCreated = createdFields.derived.length > 0 || createdFields.business.length > 0 || createdTreatments.length > 0;
+        if (!hasIssues && !hasCreated) return null;
+        return (
+          <div className={`rounded-lg border p-4 space-y-3 text-sm ${hasIssues ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800" : "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800"}`}>
+            <div className="flex items-center justify-between gap-2">
+              <button type="button" className="flex items-center gap-2 font-medium text-left flex-1"
+                onClick={() => setSopSummaryExpanded(v => !v)} data-testid="button-toggle-sop-summary">
+                {hasIssues
+                  ? <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  : <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400 shrink-0" />}
+                <span className={hasIssues ? "text-amber-800 dark:text-amber-200" : "text-green-800 dark:text-green-200"}>
+                  SOP Import {hasIssues ? "completed with warnings" : "completed"}
+                  {createdTreatments.length > 0 && ` — ${createdTreatments.length} treatment${createdTreatments.length !== 1 ? "s" : ""} created`}
+                  {(createdFields.derived.length + createdFields.business.length) > 0 &&
+                    `, ${createdFields.derived.length + createdFields.business.length} field${(createdFields.derived.length + createdFields.business.length) !== 1 ? "s" : ""} auto-created`}
+                </span>
+                {sopSummaryExpanded ? <ChevronDown className="w-3.5 h-3.5 ml-auto shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 ml-auto shrink-0" />}
+              </button>
+              <button type="button" onClick={() => setSopImportSummary(null)} data-testid="button-dismiss-sop-summary"
+                className="text-muted-foreground hover:text-foreground shrink-0"><X className="w-4 h-4" /></button>
+            </div>
+            {sopSummaryExpanded && (
+              <div className="space-y-3 pt-1">
+                {(createdFields.derived.length > 0 || createdFields.business.length > 0) && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold text-green-700 dark:text-green-300">Auto-created fields</p>
+                    {createdFields.derived.map(f => (
+                      <div key={f.id} className="flex items-center gap-1.5 text-xs text-green-800 dark:text-green-200">
+                        <CheckCircle2 className="w-3 h-3 shrink-0" />
+                        <span className="font-medium">{f.label}</span>
+                        <Badge variant="outline" className="text-[10px] ml-1">derived</Badge>
+                      </div>
+                    ))}
+                    {createdFields.business.map(f => (
+                      <div key={f.id} className="flex items-center gap-1.5 text-xs text-green-800 dark:text-green-200">
+                        <CheckCircle2 className="w-3 h-3 shrink-0" />
+                        <span className="font-medium">{f.label}</span>
+                        <Badge variant="outline" className="text-[10px] ml-1">business</Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {unresolvedTreatments.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Treatments not created (unresolved dependencies)</p>
+                    {unresolvedTreatments.map((t, i) => (
+                      <div key={i} className="text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
+                        <p className="font-medium">{t.name}</p>
+                        <p className="text-[11px] leading-relaxed opacity-80">{t.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {unresolvedFields.filter(f => f.fieldType !== "rule_reference").length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Fields not auto-created</p>
+                    {unresolvedFields.filter(f => f.fieldType !== "rule_reference").map((f, i) => (
+                      <div key={i} className="text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
+                        <p className="font-medium">{f.fieldName} <span className="opacity-60">({f.fieldType})</span></p>
+                        <p className="text-[11px] leading-relaxed opacity-80">{f.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ── Unified Section B card ──────────────────────────────────── */}
       <Card>

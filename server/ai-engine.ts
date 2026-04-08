@@ -927,6 +927,40 @@ const RuleItemSchema = z.object({
   reason: z.string().optional(),
 });
 
+const AIDerivedFieldConditionSchema = z.object({
+  field: z.string(),
+  fieldType: z.enum(["source", "derived", "business"]).optional(),
+  operator: z.enum(["=", "!=", ">", ">=", "<", "<=", "in", "not_in", "contains", "is_true", "is_false"]),
+  value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional(),
+});
+
+const AIDerivedFieldConfigSchema = z.object({
+  type: z.literal("logical"),
+  operator: z.enum(["AND", "OR"]),
+  conditions: z.array(AIDerivedFieldConditionSchema).min(1),
+}).nullable();
+
+const AIDerivedFieldSchema = z.object({
+  field_name: z.string(),
+  display_name: z.string().default(""),
+  description: z.string().default(""),
+  data_type: z.enum(["boolean", "number", "string", "enum"]).default("boolean"),
+  depends_on: z.array(z.string()).default([]),
+  derivation_config: AIDerivedFieldConfigSchema.default(null),
+  derivation_summary: z.string().default(""),
+  confidence: z.enum(["high", "medium", "low"]).default("medium"),
+});
+
+const AIBusinessFieldSchema = z.object({
+  field_name: z.string(),
+  display_name: z.string().default(""),
+  description: z.string().default(""),
+  data_type: z.enum(["boolean", "number", "string", "enum"]).default("string"),
+  allowed_values: z.array(z.string()).default([]),
+  default_value: z.string().default(""),
+  business_meaning: z.string().default(""),
+});
+
 export const DraftTreatmentItemSchema = z.object({
   name: z.string(),
   description: z.string().default(""),
@@ -939,17 +973,8 @@ export const DraftTreatmentItemSchema = z.object({
     description: z.string().default(""),
     matched_existing_field: z.boolean().default(false),
   })).default([]),
-  derived_fields: z.array(z.object({
-    field_name: z.string(),
-    description: z.string().default(""),
-    formula_hint: z.string().default(""),
-    depends_on: z.array(z.string()).default([]),
-  })).default([]),
-  business_fields: z.array(z.object({
-    field_name: z.string(),
-    description: z.string().default(""),
-    allowed_values: z.array(z.string()).default([]),
-  })).default([]),
+  derived_fields: z.array(AIDerivedFieldSchema).default([]),
+  business_fields: z.array(AIBusinessFieldSchema).default([]),
   confidence: z.enum(["high", "medium", "low"]).default("medium"),
 });
 
@@ -958,18 +983,11 @@ const GlobalSourceFieldSchema = z.object({
   description: z.string().default(""),
 });
 
-const GlobalDerivedFieldSchema = z.object({
-  field_name: z.string(),
-  description: z.string().default(""),
-  formula_hint: z.string().default(""),
-  depends_on: z.array(z.string()).default([]),
-});
+const GlobalDerivedFieldSchema = AIDerivedFieldSchema;
+const GlobalBusinessFieldSchema = AIBusinessFieldSchema;
 
-const GlobalBusinessFieldSchema = z.object({
-  field_name: z.string(),
-  description: z.string().default(""),
-  allowed_values: z.array(z.string()).default([]),
-});
+export type AIDerivedField = z.infer<typeof AIDerivedFieldSchema>;
+export type AIBusinessField = z.infer<typeof AIBusinessFieldSchema>;
 
 const DraftResponseSchema = z.object({
   summary: z.string().default(""),
@@ -1021,48 +1039,87 @@ export async function generateTreatmentDraft(
 
   const prompt = `You are Beacon's SOP-to-treatment configuration engine.
 
-Your task is to read one or more uploaded SOP / policy documents and generate a draft Beacon treatment configuration.
+Your task is to read one or more uploaded SOP / policy documents and generate a complete, executable Beacon treatment configuration.
 
 Beacon already has a configured field catalog for this client.
 You must use that field catalog when mapping policy logic.
 
-Your goal is to generate a ready-to-fill treatment draft with:
-- Treatment
-- When to Offer
-- Blocked If
-- Source Fields
-- Derived Fields
-- Business Fields
+Your goal is to generate a system-consumable treatment draft with:
+- Treatment definitions
+- When to Offer rules (eligibility)
+- Blocked If rules (safety guards)
+- Source fields (already in catalog)
+- Derived fields (with EXECUTABLE derivation_config, not formula hints)
+- Business fields (with allowed values and business meaning)
 
 IMPORTANT RULES
 1. Only create treatments that are clearly supported by the SOP documents.
 2. Use configured Beacon source fields wherever possible.
 3. Do NOT invent a new source field that is not present in the provided Beacon field catalog.
-4. If the SOP refers to a concept that is not present as a configured source field:
-  - classify it as a Derived Field if it can be calculated from existing fields
+4. If the SOP refers to a concept not present as a configured source field:
+  - classify it as a Derived Field if it can be computed from existing fields (must include a derivation_config)
   - classify it as a Business Field if it is user-entered, policy-defined, or judgement-based
-5. Reuse existing business fields or derived fields if they are already present in the Beacon field catalog.
+5. Reuse existing business fields or derived fields already in the Beacon field catalog.
 6. Keep rules structured and implementation-friendly.
-7. If the SOP is ambiguous, add the uncertainty to open_questions instead of guessing.
-8. You MUST always generate a complete draft — never leave treatments empty because of ambiguity. Put ambiguities in open_questions.
+7. If the SOP is ambiguous or you cannot determine the derivation logic with confidence, put the field in open_questions with a clear reason. Do NOT invent logic or guess.
+8. You MUST always generate a complete draft — never leave treatments empty due to ambiguity. Put ambiguities in open_questions.
 9. Return JSON only. No markdown formatting, no code blocks, just raw JSON.
 10. For each treatment, you MUST also set:
-  - "when_to_offer_logic": "ALL" if ALL listed conditions must be true (prerequisites / eligibility); "ANY" if any one condition is sufficient.
-  - "blocked_if_logic": "ANY" if ANY single blocker should block the treatment (most common); "ALL" only if ALL blockers must be true simultaneously.
-  Default interpretation: when_to_offer usually = "ALL" (eligibility checks), blocked_if usually = "ANY" (exclusions). Override only when the SOP wording clearly implies otherwise.
+  - "when_to_offer_logic": "ALL" if ALL listed conditions must be true (eligibility); "ANY" if any one is sufficient.
+  - "blocked_if_logic": "ANY" if ANY single blocker should block the treatment (most common); "ALL" only if ALL must be true simultaneously.
+  Default: when_to_offer = "ALL", blocked_if = "ANY". Override only when SOP wording clearly implies otherwise.
+11. For derived fields, you MUST provide a structured derivation_config — not a formula hint. If you cannot determine the exact logic, set derivation_config to null and add the field to open_questions.
+12. Derived field depends_on must only reference fields from the Beacon field catalog or other derived/business fields defined in the same output.
 
 FIELD TYPE DEFINITIONS
-- Source Field: already configured in Beacon and directly usable in rules
-- Derived Field: calculated from one or more Beacon fields
-- Business Field: manually captured or judgement-based field
+- Source Field: already in the Beacon field catalog, directly usable in rules
+- Derived Field: computed from existing fields using logical conditions
+- Business Field: manually entered or policy-defined, not computed
 
 RULE FORMAT
 {
- "field_name": "string",
+ "field_name": "string — must match a field in the catalog or a derived/business field defined in this output",
  "field_type": "source|derived|business",
  "operator": "=|!=|>|>=|<|<=|contains|in|not_in|is_true|is_false",
  "value": "string or number or array",
  "reason": "short explanation"
+}
+
+DERIVATION CONFIG FORMAT (for derived fields only)
+{
+ "type": "logical",
+ "operator": "AND|OR",
+ "conditions": [
+   {
+     "field": "source_field_name",
+     "fieldType": "source|derived|business",
+     "operator": "=|!=|>|>=|<|<=|in|not_in|contains|is_true|is_false",
+     "value": "string or number or array (omit for is_true/is_false)"
+   }
+ ]
+}
+
+DERIVED FIELD FORMAT
+{
+ "field_name": "snake_case_name",
+ "display_name": "Human Readable Name",
+ "description": "what this field represents",
+ "data_type": "boolean|number|string|enum",
+ "depends_on": ["source_field_a", "source_field_b"],
+ "derivation_config": { DERIVATION CONFIG or null if ambiguous },
+ "derivation_summary": "plain english description of the logic",
+ "confidence": "high|medium|low"
+}
+
+BUSINESS FIELD FORMAT
+{
+ "field_name": "snake_case_name",
+ "display_name": "Human Readable Name",
+ "description": "what this field captures",
+ "data_type": "boolean|number|string|enum",
+ "allowed_values": ["value1", "value2"] or [],
+ "default_value": "default if applicable",
+ "business_meaning": "why this field exists and how it is used"
 }
 
 OUTPUT JSON SCHEMA
@@ -1076,35 +1133,16 @@ OUTPUT JSON SCHEMA
      "when_to_offer": [RULE],
      "blocked_if_logic": "ANY",
      "blocked_if": [RULE],
-     "source_fields": [
-       {
-         "field_name": "string",
-         "description": "string",
-         "matched_existing_field": true
-       }
-     ],
-     "derived_fields": [
-       {
-         "field_name": "string",
-         "description": "string",
-         "formula_hint": "plain english calculation logic",
-         "depends_on": ["field_a", "field_b"]
-       }
-     ],
-     "business_fields": [
-       {
-         "field_name": "string",
-         "description": "string",
-         "allowed_values": ["optional", "list"]
-       }
-     ],
+     "source_fields": [{ "field_name": "string", "description": "string", "matched_existing_field": true }],
+     "derived_fields": [DERIVED FIELD FORMAT],
+     "business_fields": [BUSINESS FIELD FORMAT],
      "confidence": "high|medium|low"
    }
  ],
- "global_source_fields": [],
- "global_derived_fields": [],
- "global_business_fields": [],
- "open_questions": ["string"]
+ "global_source_fields": [{ "field_name": "string", "description": "string" }],
+ "global_derived_fields": [DERIVED FIELD FORMAT],
+ "global_business_fields": [BUSINESS FIELD FORMAT],
+ "open_questions": ["field_name: reason why this could not be resolved"]
 }
 
 BEACON FIELD CATALOG

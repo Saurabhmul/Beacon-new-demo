@@ -7,14 +7,15 @@ import multer from "multer";
 import Papa from "papaparse";
 import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSOPTreatments, extractTextFromPdfWithVision, generateTreatmentDraft, type ColumnEvidence } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
-import { users, uploadLogs, companies, treatments, treatmentRuleGroups, treatmentRules, policyPacks } from "@shared/schema";
-import type { PolicyFieldDto, RuleSaveRow, DerivationConfig } from "@shared/schema";
+import { users, uploadLogs, companies, treatments, treatmentRuleGroups, treatmentRules, policyPacks, policyFields } from "@shared/schema";
+import type { PolicyFieldDto, RuleSaveRow, DerivationConfig, ArithmeticDerivationConfig } from "@shared/schema";
 import { db } from "./db";
 import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import { normalizeFieldLabel, buildFullFieldCatalog } from "./field-catalog";
 import { toLogicOperator } from "./lib/treatment-logic";
+import { LogicalDerivationConfigSchema, topologicalSort, generateLogicalDerivationSummary } from "./lib/derivation-config";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
 import { assemblePrompt, assemblePreview, formatCustomerData, clearTemplateCache } from "./lib/prompt/assemble-prompt";
 import { seedDatabase } from "./seed";
@@ -737,25 +738,50 @@ export async function registerRoutes(
 
   // Policy Fields API
   function generateDerivationSummary(config: DerivationConfig): string {
-    const labelA = config.fieldALabel || config.fieldA || "?";
-    const labelB = config.operandBType === "field"
-      ? (config.operandBLabel || config.operandBValue || "?")
-      : (config.operandBValue || "?");
-    if (!config.operator2) return `${labelA} ${config.operator1} ${labelB}`;
-    const labelC = config.operandCType === "field"
-      ? (config.operandCLabel || config.operandCValue || "?")
-      : (config.operandCValue || "?");
-    return `(${labelA} ${config.operator1} ${labelB}) ${config.operator2} ${labelC}`;
+    if ("type" in config && config.type === "logical") {
+      return generateLogicalDerivationSummary(config);
+    }
+    const c = config as ArithmeticDerivationConfig;
+    const labelA = c.fieldALabel || c.fieldA || "?";
+    const labelB = c.operandBType === "field"
+      ? (c.operandBLabel || c.operandBValue || "?")
+      : (c.operandBValue || "?");
+    if (!c.operator2) return `${labelA} ${c.operator1} ${labelB}`;
+    const labelC = c.operandCType === "field"
+      ? (c.operandCLabel || c.operandCValue || "?")
+      : (c.operandCValue || "?");
+    return `(${labelA} ${c.operator1} ${labelB}) ${c.operator2} ${labelC}`;
   }
 
-  function toFieldDto(f: { id: number; label: string; description: string | null; sourceType: string; derivationConfig: DerivationConfig | null | undefined; derivationSummary: string | null | undefined }): PolicyFieldDto {
+  function toFieldDto(f: {
+    id: number;
+    label: string;
+    displayName?: string | null;
+    description: string | null;
+    sourceType: string;
+    dataType?: string | null;
+    derivationConfig: DerivationConfig | null | undefined;
+    derivationSummary: string | null | undefined;
+    allowedValues?: string[] | null;
+    defaultValue?: string | null;
+    businessMeaning?: string | null;
+    aiGenerated?: boolean | null;
+    createdBy?: string | null;
+  }): PolicyFieldDto {
     return {
       id: String(f.id),
       label: f.label,
+      displayName: f.displayName ?? null,
       description: f.description,
       sourceType: f.sourceType as PolicyFieldDto["sourceType"],
+      dataType: f.dataType ?? null,
       derivationConfig: f.derivationConfig ?? null,
       derivationSummary: f.derivationSummary ?? null,
+      allowedValues: f.allowedValues ?? null,
+      defaultValue: f.defaultValue ?? null,
+      businessMeaning: f.businessMeaning ?? null,
+      aiGenerated: f.aiGenerated ?? false,
+      createdBy: f.createdBy ?? null,
     };
   }
 
@@ -766,10 +792,17 @@ export async function registerRoutes(
       const result: PolicyFieldDto[] = catalog.map(f => ({
         id: f.id ?? `source:${f.label}`,
         label: f.label,
+        displayName: f.displayName ?? null,
         description: f.description ?? null,
         sourceType: f.sourceType,
+        dataType: f.dataType ?? null,
         derivationConfig: f.derivationConfig ?? null,
         derivationSummary: f.derivationSummary ?? null,
+        allowedValues: f.allowedValues ?? null,
+        defaultValue: f.defaultValue ?? null,
+        businessMeaning: f.businessMeaning ?? null,
+        aiGenerated: f.aiGenerated ?? false,
+        createdBy: f.createdBy ?? null,
       }));
       res.json(result);
     } catch (error) {
@@ -808,14 +841,7 @@ export async function registerRoutes(
         derivationConfig: derivationConfig || null,
         derivationSummary,
       });
-      res.status(201).json({
-        id: String(field.id),
-        label: field.label,
-        description: field.description,
-        sourceType: field.sourceType,
-        derivationConfig: field.derivationConfig,
-        derivationSummary: field.derivationSummary,
-      });
+      res.status(201).json(toFieldDto(field));
     } catch (error) {
       console.error("Create policy field error:", error);
       res.status(500).json({ error: "Failed to create policy field" });
@@ -933,46 +959,142 @@ export async function registerRoutes(
             }, []),
           }));
 
-        // Pre-validation: validate operators and resolve all field/source references before DB write
-        const validationErrors: string[] = [];
-        for (const t of normalizedTreatments) {
-          for (const sf of t.source_fields) {
-            if (!sf.matched_existing_field) {
-              console.warn("[treatment-draft] unresolved field", { companyId, treatment: t.name, section: "source_fields", field: sf.field_name });
-              validationErrors.push(`Source field "${sf.field_name}" suggested for treatment "${t.name}" is not found in the company field catalog. Add it in Data Configuration or create it as a business/derived field, then regenerate.`);
-            }
-          }
-          for (const r of t.when_to_offer) {
-            if (!VALID_OPERATORS.has(r.operator)) {
-              validationErrors.push(`Invalid operator "${r.operator}" in "When to Offer" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
-            } else if (!fieldByLabelLower.has(normalizeFieldLabel(r.field_name))) {
-              console.warn("[treatment-draft] unresolved field", { companyId, treatment: t.name, section: "when_to_offer", field: r.field_name });
-              validationErrors.push(`Unresolved field "${r.field_name}" in "When to Offer" rule for treatment "${t.name}". Please add this field to the company field catalog in Data Configuration or as a business/derived field.`);
-            }
-          }
-          for (const r of t.blocked_if) {
-            if (!VALID_OPERATORS.has(r.operator)) {
-              validationErrors.push(`Invalid operator "${r.operator}" in "Blocked If" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
-            } else if (!fieldByLabelLower.has(normalizeFieldLabel(r.field_name))) {
-              console.warn("[treatment-draft] unresolved field", { companyId, treatment: t.name, section: "blocked_if", field: r.field_name });
-              validationErrors.push(`Unresolved field "${r.field_name}" in "Blocked If" rule for treatment "${t.name}". Please add this field to the company field catalog in Data Configuration or as a business/derived field.`);
-            }
-          }
-        }
+        // Phase A: Early exit if no treatments
         if (normalizedTreatments.length === 0) {
           console.log(`[generate-treatment-draft] [${requestId}] validation=failed reason=empty_output`);
           return res.status(422).json({ error: "No treatments could be generated from the uploaded documents. Please check that the SOP files contain identifiable treatment policies and try again." });
         }
-        if (validationErrors.length > 0) {
-          console.log(`[generate-treatment-draft] [${requestId}] validation=failed errors=${validationErrors.length}`);
-          return res.status(422).json({ error: validationErrors[0], details: validationErrors });
+
+        // Phase B: Collect all unique derived + business fields (global + per-treatment)
+        type AIDerived = (typeof normalizedTreatments)[0]["derived_fields"][0];
+        type AIBusiness = (typeof normalizedTreatments)[0]["business_fields"][0];
+        const allDerivedByKey = new Map<string, AIDerived>();
+        const allBusinessByKey = new Map<string, AIBusiness>();
+
+        for (const gdf of (draftResponse.global_derived_fields ?? []) as AIDerived[]) {
+          const k = normalizeFieldLabel(gdf.field_name);
+          if (!allDerivedByKey.has(k)) allDerivedByKey.set(k, gdf);
         }
-        console.log(`[generate-treatment-draft] [${requestId}] validation=ok normalized=${normalizedTreatments.length}`);
+        for (const gbf of (draftResponse.global_business_fields ?? []) as AIBusiness[]) {
+          const k = normalizeFieldLabel(gbf.field_name);
+          if (!allBusinessByKey.has(k)) allBusinessByKey.set(k, gbf);
+        }
+        for (const t of normalizedTreatments) {
+          for (const df of t.derived_fields) {
+            const k = normalizeFieldLabel(df.field_name);
+            if (!allDerivedByKey.has(k)) allDerivedByKey.set(k, df);
+          }
+          for (const bf of t.business_fields) {
+            const k = normalizeFieldLabel(bf.field_name);
+            if (!allBusinessByKey.has(k)) allBusinessByKey.set(k, bf);
+          }
+        }
+
+        // Phase C: Classify fields — skip existing, validate new, track unresolved
+        const unresolvedFields: Array<{ fieldName: string; fieldType: string; reason: string }> = [];
+        const fieldsToCreateDerived: AIDerived[] = [];
+        const fieldsToCreateBusiness: AIBusiness[] = [];
+
+        for (const [key, df] of allDerivedByKey.entries()) {
+          if (fieldByLabelLower.has(key)) continue;
+          if (df.derivation_config) {
+            const parse = LogicalDerivationConfigSchema.safeParse(df.derivation_config);
+            if (!parse.success) {
+              unresolvedFields.push({
+                fieldName: df.field_name,
+                fieldType: "derived_field",
+                reason: `Invalid derivation_config: ${parse.error.issues[0]?.message ?? "schema error"}`,
+              });
+              continue;
+            }
+          }
+          fieldsToCreateDerived.push(df);
+        }
+        for (const [key, bf] of allBusinessByKey.entries()) {
+          if (fieldByLabelLower.has(key)) continue;
+          fieldsToCreateBusiness.push(bf);
+        }
+
+        // Phase D: Topological sort of derived fields (deps first)
+        const topoResult = topologicalSort(
+          fieldsToCreateDerived.map(df => ({ fieldName: df.field_name, dependsOn: df.depends_on ?? [] }))
+        );
+        for (const cyclic of topoResult.cyclic) {
+          unresolvedFields.push({
+            fieldName: cyclic.fieldName,
+            fieldType: "derived_field",
+            reason: `Circular dependency detected in derived field "${cyclic.fieldName}". Cannot auto-create.`,
+          });
+        }
+        const sortedDerivedFields = topoResult.sorted
+          .map(node => fieldsToCreateDerived.find(df => df.field_name.toLowerCase() === node.fieldName.toLowerCase())!)
+          .filter(Boolean);
+
+        // Phase E: Build candidate catalog (existing + to-be-created) for treatment classification
+        type CatalogEntry = { id: string; label: string; sourceType: string; description: string | null; derivationConfig: DerivationConfig | null; derivationSummary: string | null };
+        const candidateCatalog = new Map<string, CatalogEntry>(
+          Array.from(fieldByLabelLower.entries()).map(([k, v]) => [k, { ...v, id: v.id ?? `source:${v.label}` } as CatalogEntry])
+        );
+        for (const df of sortedDerivedFields) {
+          candidateCatalog.set(normalizeFieldLabel(df.field_name), {
+            id: `pending:${df.field_name}`, label: df.field_name, sourceType: "derived_field",
+            description: df.description ?? null, derivationConfig: df.derivation_config as DerivationConfig ?? null, derivationSummary: df.derivation_summary ?? null,
+          });
+        }
+        for (const bf of fieldsToCreateBusiness) {
+          candidateCatalog.set(normalizeFieldLabel(bf.field_name), {
+            id: `pending:${bf.field_name}`, label: bf.field_name, sourceType: "business_field",
+            description: bf.description ?? null, derivationConfig: null, derivationSummary: null,
+          });
+        }
+
+        // Phase F: Classify treatments — safe vs critical-dependency
+        const unresolvedTreatments: Array<{ name: string; reason: string }> = [];
+        const safeTreatments: Array<(typeof normalizedTreatments)[0]> = [];
+
+        for (const t of normalizedTreatments) {
+          const criticalReasons: string[] = [];
+          const resolvedWhen = t.when_to_offer.filter(r =>
+            VALID_OPERATORS.has(r.operator) && candidateCatalog.has(normalizeFieldLabel(r.field_name))
+          );
+          const unresolvedWhen = t.when_to_offer.filter(r =>
+            !VALID_OPERATORS.has(r.operator) || !candidateCatalog.has(normalizeFieldLabel(r.field_name))
+          );
+          if (t.when_to_offer_logic === "ALL" && unresolvedWhen.length > 0) {
+            criticalReasons.push(`when_to_offer (ALL logic): unresolved [${unresolvedWhen.map(r => r.field_name).join(", ")}] — all eligibility conditions must be resolvable`);
+          } else if (t.when_to_offer_logic === "ANY" && resolvedWhen.length === 0 && t.when_to_offer.length > 0) {
+            criticalReasons.push(`when_to_offer (ANY logic): all fields unresolved [${unresolvedWhen.map(r => r.field_name).join(", ")}] — at least one must be resolvable`);
+          }
+          const unresolvedBlocked = t.blocked_if.filter(r =>
+            !VALID_OPERATORS.has(r.operator) || !candidateCatalog.has(normalizeFieldLabel(r.field_name))
+          );
+          if (unresolvedBlocked.length > 0) {
+            criticalReasons.push(`blocked_if: unresolved safety guards [${unresolvedBlocked.map(r => r.field_name).join(", ")}]`);
+          }
+          if (criticalReasons.length > 0) {
+            unresolvedTreatments.push({ name: t.name, reason: criticalReasons.join("; ") });
+          } else {
+            safeTreatments.push(t);
+          }
+        }
+
+        console.log(`[generate-treatment-draft] [${requestId}] pipeline: derived=${sortedDerivedFields.length} business=${fieldsToCreateBusiness.length} safe=${safeTreatments.length} unresolvedTx=${unresolvedTreatments.length} unresolvedFields=${unresolvedFields.length}`);
+
+        // Phase G: DB Transaction
+        const createdFields: { derived: Array<{ label: string; id: string }>; business: Array<{ label: string; id: string }> } = {
+          derived: [], business: [],
+        };
+        const createdTreatments: Array<{ name: string; id: number }> = [];
+        const liveFieldMap = new Map<string, CatalogEntry>(candidateCatalog);
+        // Reset to only existing fields; will populate as fields are inserted
+        for (const k of Array.from(liveFieldMap.keys())) {
+          if (liveFieldMap.get(k)!.id.startsWith("pending:")) liveFieldMap.delete(k);
+        }
 
         await db.transaction(async (tx) => {
+          // 1. Delete existing treatments + rules for this pack
           const existingTxs = await tx.select({ id: treatments.id }).from(treatments)
             .where(eq(treatments.policyPackId, pack.id));
-
           if (existingTxs.length > 0) {
             const txIds = existingTxs.map(e => e.id);
             const groups = await tx.select({ id: treatmentRuleGroups.id }).from(treatmentRuleGroups)
@@ -984,8 +1106,76 @@ export async function registerRoutes(
             await tx.delete(treatments).where(inArray(treatments.id, txIds));
           }
 
-          for (let i = 0; i < normalizedTreatments.length; i++) {
-            const t = normalizedTreatments[i];
+          // 2. Insert business fields
+          for (const bf of fieldsToCreateBusiness) {
+            const [inserted] = await tx.insert(policyFields).values({
+              companyId: companyId!,
+              policyPackId: null,
+              label: bf.field_name.trim(),
+              displayName: bf.display_name?.trim() || null,
+              description: bf.description?.trim() || null,
+              sourceType: "business_field",
+              dataType: bf.data_type || null,
+              allowedValues: bf.allowed_values?.length ? bf.allowed_values : null,
+              defaultValue: bf.default_value?.trim() || null,
+              businessMeaning: bf.business_meaning?.trim() || null,
+              aiGenerated: true,
+              createdBy: "system_sop_import",
+              sourceDocumentId: requestId,
+            }).returning();
+            liveFieldMap.set(normalizeFieldLabel(inserted.label), {
+              id: String(inserted.id), label: inserted.label, sourceType: "business_field",
+              description: inserted.description ?? null, derivationConfig: null, derivationSummary: null,
+            });
+            createdFields.business.push({ label: inserted.label, id: String(inserted.id) });
+          }
+
+          // 3. Insert derived fields in topological order (dependencies first)
+          for (const df of sortedDerivedFields) {
+            const derivationConfig = df.derivation_config ?? null;
+            const derivationSummary = df.derivation_summary?.trim() ||
+              (derivationConfig ? generateLogicalDerivationSummary(derivationConfig as any) : null);
+            const [inserted] = await tx.insert(policyFields).values({
+              companyId: companyId!,
+              policyPackId: null,
+              label: df.field_name.trim(),
+              displayName: df.display_name?.trim() || null,
+              description: df.description?.trim() || null,
+              sourceType: "derived_field",
+              dataType: df.data_type || null,
+              derivationConfig: derivationConfig as any,
+              derivationSummary: derivationSummary || null,
+              aiGenerated: true,
+              createdBy: "system_sop_import",
+              sourceDocumentId: requestId,
+            }).returning();
+            liveFieldMap.set(normalizeFieldLabel(inserted.label), {
+              id: String(inserted.id), label: inserted.label, sourceType: "derived_field",
+              description: inserted.description ?? null,
+              derivationConfig: inserted.derivationConfig ?? null,
+              derivationSummary: inserted.derivationSummary ?? null,
+            });
+            createdFields.derived.push({ label: inserted.label, id: String(inserted.id) });
+          }
+
+          // 4. Insert safe treatments with rules
+          for (let i = 0; i < safeTreatments.length; i++) {
+            const t = safeTreatments[i];
+            const resolvedWhen = t.when_to_offer.filter(r =>
+              VALID_OPERATORS.has(r.operator) && liveFieldMap.has(normalizeFieldLabel(r.field_name))
+            );
+            const resolvedBlocked = t.blocked_if.filter(r =>
+              VALID_OPERATORS.has(r.operator) && liveFieldMap.has(normalizeFieldLabel(r.field_name))
+            );
+            // Track skipped when_to_offer rules (ANY logic, some unresolved — non-critical)
+            for (const r of t.when_to_offer.filter(r => !liveFieldMap.has(normalizeFieldLabel(r.field_name)))) {
+              if (!unresolvedFields.some(u => u.fieldName === r.field_name)) {
+                unresolvedFields.push({
+                  fieldName: r.field_name, fieldType: "rule_reference",
+                  reason: `Skipped: unresolved field in when_to_offer (ANY) for treatment "${t.name}"`,
+                });
+              }
+            }
             const [newTx] = await tx.insert(treatments).values({
               policyPackId: pack.id,
               name: t.name.trim(),
@@ -1001,34 +1191,39 @@ export async function registerRoutes(
               })),
               draftDerivedFields: t.derived_fields.map(df => ({
                 fieldName: df.field_name,
+                displayName: df.display_name || "",
                 description: df.description,
-                formulaHint: df.formula_hint,
+                dataType: df.data_type,
+                derivationSummary: df.derivation_summary || "",
                 dependsOn: df.depends_on,
               })),
               draftBusinessFields: t.business_fields.map(bf => ({
                 fieldName: bf.field_name,
+                displayName: bf.display_name || "",
                 description: bf.description,
+                dataType: bf.data_type,
                 allowedValues: bf.allowed_values,
+                defaultValue: bf.default_value,
+                businessMeaning: bf.business_meaning,
               })),
               aiConfidence: t.confidence,
             }).returning();
 
-            if (t.when_to_offer.length > 0) {
+            if (resolvedWhen.length > 0) {
               const [whenGroup] = await tx.insert(treatmentRuleGroups).values({
                 treatmentId: newTx.id,
                 ruleType: "when_to_offer",
                 logicOperator: toLogicOperator(t.when_to_offer_logic, "AND"),
                 groupOrder: 0,
               }).returning();
-              for (let j = 0; j < t.when_to_offer.length; j++) {
-                const r = t.when_to_offer[j];
-                const fieldRecord = fieldByLabelLower.get(normalizeFieldLabel(r.field_name))!;
-                const canonicalLabel = fieldRecord.label;
-                const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${canonicalLabel}`;
+              for (let j = 0; j < resolvedWhen.length; j++) {
+                const r = resolvedWhen[j];
+                const fieldRecord = liveFieldMap.get(normalizeFieldLabel(r.field_name))!;
+                const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`;
                 const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
                 await tx.insert(treatmentRules).values({
                   ruleGroupId: whenGroup.id,
-                  fieldName: canonicalLabel,
+                  fieldName: fieldRecord.label,
                   operator: r.operator,
                   value: rawValue,
                   sortOrder: j,
@@ -1039,23 +1234,21 @@ export async function registerRoutes(
                 });
               }
             }
-
-            if (t.blocked_if.length > 0) {
+            if (resolvedBlocked.length > 0) {
               const [blockedGroup] = await tx.insert(treatmentRuleGroups).values({
                 treatmentId: newTx.id,
                 ruleType: "blocked_if",
                 logicOperator: toLogicOperator(t.blocked_if_logic, "OR"),
                 groupOrder: 0,
               }).returning();
-              for (let j = 0; j < t.blocked_if.length; j++) {
-                const r = t.blocked_if[j];
-                const fieldRecord = fieldByLabelLower.get(normalizeFieldLabel(r.field_name))!;
-                const canonicalLabel = fieldRecord.label;
-                const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${canonicalLabel}`;
+              for (let j = 0; j < resolvedBlocked.length; j++) {
+                const r = resolvedBlocked[j];
+                const fieldRecord = liveFieldMap.get(normalizeFieldLabel(r.field_name))!;
+                const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`;
                 const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
                 await tx.insert(treatmentRules).values({
                   ruleGroupId: blockedGroup.id,
-                  fieldName: canonicalLabel,
+                  fieldName: fieldRecord.label,
                   operator: r.operator,
                   value: rawValue,
                   sortOrder: j,
@@ -1066,8 +1259,10 @@ export async function registerRoutes(
                 });
               }
             }
+            createdTreatments.push({ name: newTx.name, id: newTx.id });
           }
 
+          // 5. Update pack metadata
           await tx.update(policyPacks).set({
             lastAiGenerationRawOutput: draftResponse as unknown as Record<string, unknown>,
             lastAiGenerationAt: new Date(),
@@ -1085,6 +1280,10 @@ export async function registerRoutes(
           summary: draftResponse.summary,
           openQuestions: draftResponse.open_questions,
           generatedAt: updatedPack?.lastAiGenerationAt || new Date(),
+          createdTreatments,
+          createdFields,
+          unresolvedTreatments,
+          unresolvedFields,
         });
       } catch (error) {
         console.error(`[generate-treatment-draft] [${requestId}] error company=${companyId}:`, error instanceof Error ? error.message : error);

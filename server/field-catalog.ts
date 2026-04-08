@@ -3,10 +3,17 @@ import type { DataConfig, PolicyFieldRecord, DerivationConfig } from "@shared/sc
 export interface CatalogEntry {
   id?: string;
   label: string;
+  displayName?: string | null;
   sourceType: "source_field" | "business_field" | "derived_field";
   description?: string | null;
+  dataType?: string | null;
   derivationSummary?: string | null;
   derivationConfig?: DerivationConfig | null;
+  allowedValues?: string[] | null;
+  defaultValue?: string | null;
+  businessMeaning?: string | null;
+  aiGenerated?: boolean | null;
+  createdBy?: string | null;
 }
 
 export function normalizeFieldLabel(label: string): string {
@@ -63,10 +70,17 @@ export async function buildFullFieldCatalog(
       dedup.set(key, {
         id: String(f.id),
         label: f.label,
+        displayName: f.displayName ?? null,
         sourceType: f.sourceType === "derived_field" ? "derived_field" : "business_field",
         description: f.description ?? null,
+        dataType: f.dataType ?? null,
         derivationSummary: f.derivationSummary ?? null,
         derivationConfig: f.derivationConfig ?? null,
+        allowedValues: f.allowedValues ?? null,
+        defaultValue: f.defaultValue ?? null,
+        businessMeaning: f.businessMeaning ?? null,
+        aiGenerated: f.aiGenerated ?? false,
+        createdBy: f.createdBy ?? null,
       });
     }
   }
