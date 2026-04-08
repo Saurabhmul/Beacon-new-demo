@@ -1143,7 +1143,7 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
   );
 }
 
-function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, onFieldUpdated, onFieldDeleted, isReadOnly, onUpdate, onDelete, onExpandToggle, onRegisterSave, onUnregisterSave }: {
+function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, onFieldUpdated, onFieldDeleted, isReadOnly, onUpdate, onDelete, onExpandToggle, onRegisterSave, onUnregisterSave, lastDeletedFieldId }: {
   treatment: LocalTreatment;
   knownFields: string[];
   policyFields: PolicyFieldDto[];
@@ -1156,10 +1156,33 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, o
   onExpandToggle: () => void;
   onRegisterSave?: (localId: string, saveFn: () => Promise<void>) => void;
   onUnregisterSave?: (localId: string) => void;
+  lastDeletedFieldId?: string | null;
 }) {
   const { toast } = useToast();
   const [local, setLocal] = useState<LocalTreatment>(treatment);
   useEffect(() => { setLocal(t => ({ ...treatment, activeSection: t.activeSection })); }, [treatment.dbId, treatment.isDraft]);
+  useEffect(() => {
+    if (!lastDeletedFieldId) return;
+    setLocal(t => ({
+      ...t,
+      whenToOffer: {
+        ...t.whenToOffer,
+        rows: t.whenToOffer.rows.map(r => ({
+          ...r,
+          ...(r.leftFieldId === lastDeletedFieldId ? { leftFieldId: null } : {}),
+          ...(r.rightFieldId === lastDeletedFieldId ? { rightFieldId: null, rightMode: "constant" as const } : {}),
+        })),
+      },
+      blockedIf: {
+        ...t.blockedIf,
+        rows: t.blockedIf.rows.map(r => ({
+          ...r,
+          ...(r.leftFieldId === lastDeletedFieldId ? { leftFieldId: null } : {}),
+          ...(r.rightFieldId === lastDeletedFieldId ? { rightFieldId: null, rightMode: "constant" as const } : {}),
+        })),
+      },
+    }));
+  }, [lastDeletedFieldId]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -1421,7 +1444,10 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onSaveReady, localTreatments]);
 
+  const [lastDeletedFieldId, setLastDeletedFieldId] = useState<string | null>(null);
+
   function handleFieldDeletedInSection(fieldId: string) {
+    setLastDeletedFieldId(fieldId);
     setLocalTreatments(prev => prev.map(tx => ({
       ...tx,
       whenToOffer: {
@@ -1991,7 +2017,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
           ) : (
             localTreatments.map(tx => (
               <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} policyFields={policyFields}
-                onFieldCreated={onFieldCreated} onFieldUpdated={onFieldUpdated} onFieldDeleted={handleFieldDeletedInSection} isReadOnly={isReadOnly}
+                onFieldCreated={onFieldCreated} onFieldUpdated={onFieldUpdated} onFieldDeleted={handleFieldDeletedInSection} lastDeletedFieldId={lastDeletedFieldId} isReadOnly={isReadOnly}
                 onExpandToggle={() => handleExpandToggle(tx.localId)}
                 onUpdate={updated => setLocalTreatments(prev => sortByPriority(prev.map(t => t.localId === tx.localId ? { ...updated, expanded: t.expanded } : t)))}
                 onDelete={() => setLocalTreatments(prev => sortByPriority(prev.filter(t => t.localId !== tx.localId)))}
