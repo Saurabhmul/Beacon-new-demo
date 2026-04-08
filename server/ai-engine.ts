@@ -574,10 +574,10 @@ function parseAIResponse(
     const p = JSON.parse(jsonText);
     parsed = Array.isArray(p) ? p : [];
     if (!Array.isArray(p)) {
-      console.warn(`[analyzeCategoryFields] stage=${stage}_json_parse category=${categoryId} headers=${headerCount} reason=non-array raw=${rawText.slice(0, 500)}`);
+      console.warn(`[analyzeCategoryFields] stage=json_parse pass=${stage} category=${categoryId} headers=${headerCount} reason=non-array raw=${rawText.slice(0, 500)}`);
     }
   } catch {
-    console.warn(`[analyzeCategoryFields] stage=${stage}_json_parse category=${categoryId} headers=${headerCount} reason=parse-error raw=${rawText.slice(0, 500)}`);
+    console.warn(`[analyzeCategoryFields] stage=json_parse pass=${stage} category=${categoryId} headers=${headerCount} reason=parse-error raw=${rawText.slice(0, 500)}`);
     return [];
   }
 
@@ -590,7 +590,7 @@ function parseAIResponse(
       if (result.success) {
         valid.push(result.data);
       } else {
-        console.warn(`[analyzeCategoryFields] stage=${stage}_zod_validation category=${categoryId} headers=${headerCount} item=${JSON.stringify(item).slice(0, 200)}`);
+        console.warn(`[analyzeCategoryFields] stage=zod_validation pass=${stage} category=${categoryId} headers=${headerCount} item=${JSON.stringify(item).slice(0, 200)}`);
       }
     }
   }
@@ -626,7 +626,7 @@ Category interpretation guidance:
 - Other categories: infer the most likely operational meaning based on headers, sample values, and Beacon's collections/servicing use case
 
 Domain glossary — expand these in descriptions where appropriate:
-DCA = Debt Collection Agency | CAIS = Credit Account Information Sharing (bureau reporting) | RAG = Red/Amber/Green status indicator | IE = Income and Expenditure assessment | PTP = Promise to Pay | RPC = Right Party Contact | IVA = Individual Voluntary Arrangement | DRO = Debt Relief Order | DMP = Debt Management Plan
+DCA = Debt Collection Agency | CAIS = Credit Account Information Sharing (bureau reporting) | RAG = Red/Amber/Green status indicator | IE = Income and Expenditure assessment | PTP = Promise to Pay | RPC = Right Party Contact | IVA = Individual Voluntary Arrangement | DRO = Debt Relief Order | DMP = Debt Management Plan | Breathing Space = FCA-mandated protection period that restricts collections contact and enforcement activity | Forbearance = flexible repayment support arrangement applied to an account (includes payment plans, deferrals, interest concessions)
 
 Column evidence (fieldName [inferredType] | sample or distinct values):
 ${evidenceStr}
@@ -815,19 +815,19 @@ export async function analyzeCategoryFields(
   const resolvedMap = new Map<string, FieldAnalysisItem>();
 
   // ── Helper: validate, filter weak, match to header, add to resolvedMap ────
-  const mergeItems = (items: FieldAnalysisItem[], stage: string): void => {
+  const mergeItems = (items: FieldAnalysisItem[], pass: string): void => {
     for (const item of items) {
       if (isWeakDescription(item.beaconsUnderstanding, normaliseKey(item.fieldName))) {
-        console.warn(`[analyzeCategoryFields] stage=${stage}_weak category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
+        console.warn(`[analyzeCategoryFields] stage=weak_description pass=${pass} category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
         continue;
       }
       const orig = matchHeader(item.fieldName, headerExact, headerLower, headerNormMap);
       if (!orig) {
-        console.warn(`[analyzeCategoryFields] stage=${stage}_header_matching category=${categoryId} headers=${headers.length} fieldName=${item.fieldName}`);
+        console.warn(`[analyzeCategoryFields] stage=header_matching pass=${pass} category=${categoryId} headers=${headers.length} fieldName=${item.fieldName}`);
         continue;
       }
       if (resolvedMap.has(orig)) {
-        console.warn(`[analyzeCategoryFields] stage=${stage}_duplicate category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} resolvedTo=${orig} (keeping first)`);
+        console.warn(`[analyzeCategoryFields] stage=duplicate pass=${pass} category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} resolvedTo=${orig} (keeping first)`);
       } else {
         resolvedMap.set(orig, { ...item, fieldName: orig });
       }
