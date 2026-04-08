@@ -306,6 +306,7 @@ export interface DraftBusinessField {
 }
 
 export interface ArithmeticDerivationConfig {
+  type?: "arithmetic";
   fieldA: string;
   fieldALabel: string;
   operator1: string;
@@ -318,17 +319,25 @@ export interface ArithmeticDerivationConfig {
   operandCLabel?: string;
 }
 
-export interface LogicalCondition {
+export type LogicalOperatorType = "AND" | "OR";
+export type LogicalComparisonOperator = "=" | "!=" | ">" | ">=" | "<" | "<=" | "in" | "not_in" | "contains" | "is_true" | "is_false";
+
+export interface LogicalConditionLeaf {
   field: string;
   fieldType?: "source" | "derived" | "business";
-  operator: "=" | "!=" | ">" | ">=" | "<" | "<=" | "in" | "not_in" | "contains" | "is_true" | "is_false";
-  value?: string | number | string[] | number[];
+  operator: LogicalComparisonOperator;
+  value?: string | number | (string | number)[];
+}
+
+export interface LogicalConditionGroup {
+  operator: LogicalOperatorType;
+  conditions: (LogicalConditionLeaf | LogicalConditionGroup)[];
 }
 
 export interface LogicalDerivationConfig {
   type: "logical";
-  operator: "AND" | "OR";
-  conditions: LogicalCondition[];
+  operator: LogicalOperatorType;
+  conditions: (LogicalConditionLeaf | LogicalConditionGroup)[];
 }
 
 export type DerivationConfig = ArithmeticDerivationConfig | LogicalDerivationConfig;

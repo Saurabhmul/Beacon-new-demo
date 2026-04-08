@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
+import { LogicalDerivationConfigSchema } from "./lib/derivation-config";
 
 const ai = new GoogleGenAI({
   apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
@@ -927,26 +928,13 @@ const RuleItemSchema = z.object({
   reason: z.string().optional(),
 });
 
-const AIDerivedFieldConditionSchema = z.object({
-  field: z.string(),
-  fieldType: z.enum(["source", "derived", "business"]).optional(),
-  operator: z.enum(["=", "!=", ">", ">=", "<", "<=", "in", "not_in", "contains", "is_true", "is_false"]),
-  value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional(),
-});
-
-const AIDerivedFieldConfigSchema = z.object({
-  type: z.literal("logical"),
-  operator: z.enum(["AND", "OR"]),
-  conditions: z.array(AIDerivedFieldConditionSchema).min(1),
-}).nullable();
-
 const AIDerivedFieldSchema = z.object({
   field_name: z.string(),
   display_name: z.string().default(""),
   description: z.string().default(""),
   data_type: z.enum(["boolean", "number", "string", "enum"]).default("boolean"),
   depends_on: z.array(z.string()).default([]),
-  derivation_config: AIDerivedFieldConfigSchema.default(null),
+  derivation_config: LogicalDerivationConfigSchema.nullable().default(null),
   derivation_summary: z.string().default(""),
   confidence: z.enum(["high", "medium", "low"]).default("medium"),
 });

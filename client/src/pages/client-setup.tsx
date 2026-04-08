@@ -1332,7 +1332,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   const [sopImportSummary, setSopImportSummary] = useState<{
     createdTreatments: { name: string; id: number }[];
     createdFields: { derived: { label: string; id: string }[]; business: { label: string; id: string }[] };
-    unresolvedTreatments: { name: string; reason: string }[];
+    unresolvedTreatments: { name: string; reason: string; unresolvedFields: string[] }[];
     unresolvedFields: { fieldName: string; fieldType: string; reason: string }[];
   } | null>(null);
   const [sopSummaryExpanded, setSopSummaryExpanded] = useState(false);
@@ -1635,6 +1635,9 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                       <div key={i} className="text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
                         <p className="font-medium">{t.name}</p>
                         <p className="text-[11px] leading-relaxed opacity-80">{t.reason}</p>
+                        {t.unresolvedFields.length > 0 && (
+                          <p className="text-[11px] opacity-70">Missing fields: {t.unresolvedFields.join(", ")}</p>
+                        )}
                       </div>
                     ))}
                   </div>

@@ -8,7 +8,7 @@ import Papa from "papaparse";
 import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSOPTreatments, extractTextFromPdfWithVision, generateTreatmentDraft, type ColumnEvidence } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
 import { users, uploadLogs, companies, treatments, treatmentRuleGroups, treatmentRules, policyPacks, policyFields } from "@shared/schema";
-import type { PolicyFieldDto, RuleSaveRow, DerivationConfig, ArithmeticDerivationConfig } from "@shared/schema";
+import type { PolicyFieldDto, RuleSaveRow, DerivationConfig, ArithmeticDerivationConfig, LogicalDerivationConfig } from "@shared/schema";
 import { db } from "./db";
 import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
@@ -995,6 +995,8 @@ export async function registerRoutes(
         const fieldsToCreateDerived: AIDerived[] = [];
         const fieldsToCreateBusiness: AIBusiness[] = [];
 
+        // Step C1: Validate derivation_config schema for new derived fields
+        const validatedDerived: AIDerived[] = [];
         for (const [key, df] of allDerivedByKey.entries()) {
           if (fieldByLabelLower.has(key)) continue;
           if (df.derivation_config) {
@@ -1002,17 +1004,36 @@ export async function registerRoutes(
             if (!parse.success) {
               unresolvedFields.push({
                 fieldName: df.field_name,
-                fieldType: "derived_field",
+                fieldType: "derived",
                 reason: `Invalid derivation_config: ${parse.error.issues[0]?.message ?? "schema error"}`,
               });
               continue;
             }
           }
-          fieldsToCreateDerived.push(df);
+          validatedDerived.push(df);
         }
         for (const [key, bf] of allBusinessByKey.entries()) {
           if (fieldByLabelLower.has(key)) continue;
           fieldsToCreateBusiness.push(bf);
+        }
+
+        // Step C2: Validate depends_on references against available name set
+        const availableFieldNames = new Set<string>([
+          ...Array.from(fieldByLabelLower.keys()),
+          ...validatedDerived.map(df => normalizeFieldLabel(df.field_name)),
+          ...fieldsToCreateBusiness.map(bf => normalizeFieldLabel(bf.field_name)),
+        ]);
+        for (const df of validatedDerived) {
+          const missingDeps = (df.depends_on ?? []).filter(dep => !availableFieldNames.has(normalizeFieldLabel(dep)));
+          if (missingDeps.length > 0) {
+            unresolvedFields.push({
+              fieldName: df.field_name,
+              fieldType: "derived",
+              reason: `Unresolved depends_on: [${missingDeps.join(", ")}] not found in field catalog or fields being created`,
+            });
+          } else {
+            fieldsToCreateDerived.push(df);
+          }
         }
 
         // Phase D: Topological sort of derived fields (deps first)
@@ -1022,7 +1043,7 @@ export async function registerRoutes(
         for (const cyclic of topoResult.cyclic) {
           unresolvedFields.push({
             fieldName: cyclic.fieldName,
-            fieldType: "derived_field",
+            fieldType: "derived",
             reason: `Circular dependency detected in derived field "${cyclic.fieldName}". Cannot auto-create.`,
           });
         }
@@ -1033,12 +1054,21 @@ export async function registerRoutes(
         // Phase E: Build candidate catalog (existing + to-be-created) for treatment classification
         type CatalogEntry = { id: string; label: string; sourceType: string; description: string | null; derivationConfig: DerivationConfig | null; derivationSummary: string | null };
         const candidateCatalog = new Map<string, CatalogEntry>(
-          Array.from(fieldByLabelLower.entries()).map(([k, v]) => [k, { ...v, id: v.id ?? `source:${v.label}` } as CatalogEntry])
+          Array.from(fieldByLabelLower.entries()).map(([k, v]) => [k, {
+            id: v.id ?? `source:${v.label}`,
+            label: v.label,
+            sourceType: v.sourceType,
+            description: v.description ?? null,
+            derivationConfig: v.derivationConfig ?? null,
+            derivationSummary: v.derivationSummary ?? null,
+          }])
         );
         for (const df of sortedDerivedFields) {
           candidateCatalog.set(normalizeFieldLabel(df.field_name), {
             id: `pending:${df.field_name}`, label: df.field_name, sourceType: "derived_field",
-            description: df.description ?? null, derivationConfig: df.derivation_config as DerivationConfig ?? null, derivationSummary: df.derivation_summary ?? null,
+            description: df.description ?? null,
+            derivationConfig: df.derivation_config,
+            derivationSummary: df.derivation_summary ?? null,
           });
         }
         for (const bf of fieldsToCreateBusiness) {
@@ -1049,16 +1079,16 @@ export async function registerRoutes(
         }
 
         // Phase F: Classify treatments — safe vs critical-dependency
-        const unresolvedTreatments: Array<{ name: string; reason: string }> = [];
+        const unresolvedTreatments: Array<{ name: string; reason: string; unresolvedFields: string[] }> = [];
         const safeTreatments: Array<(typeof normalizedTreatments)[0]> = [];
 
         for (const t of normalizedTreatments) {
           const criticalReasons: string[] = [];
-          const resolvedWhen = t.when_to_offer.filter(r =>
-            VALID_OPERATORS.has(r.operator) && candidateCatalog.has(normalizeFieldLabel(r.field_name))
-          );
           const unresolvedWhen = t.when_to_offer.filter(r =>
             !VALID_OPERATORS.has(r.operator) || !candidateCatalog.has(normalizeFieldLabel(r.field_name))
+          );
+          const resolvedWhen = t.when_to_offer.filter(r =>
+            VALID_OPERATORS.has(r.operator) && candidateCatalog.has(normalizeFieldLabel(r.field_name))
           );
           if (t.when_to_offer_logic === "ALL" && unresolvedWhen.length > 0) {
             criticalReasons.push(`when_to_offer (ALL logic): unresolved [${unresolvedWhen.map(r => r.field_name).join(", ")}] — all eligibility conditions must be resolvable`);
@@ -1072,7 +1102,11 @@ export async function registerRoutes(
             criticalReasons.push(`blocked_if: unresolved safety guards [${unresolvedBlocked.map(r => r.field_name).join(", ")}]`);
           }
           if (criticalReasons.length > 0) {
-            unresolvedTreatments.push({ name: t.name, reason: criticalReasons.join("; ") });
+            const unresolvedFieldNames = Array.from(new Set([
+              ...unresolvedWhen.map(r => r.field_name),
+              ...unresolvedBlocked.map(r => r.field_name),
+            ]));
+            unresolvedTreatments.push({ name: t.name, reason: criticalReasons.join("; "), unresolvedFields: unresolvedFieldNames });
           } else {
             safeTreatments.push(t);
           }
@@ -1132,9 +1166,9 @@ export async function registerRoutes(
 
           // 3. Insert derived fields in topological order (dependencies first)
           for (const df of sortedDerivedFields) {
-            const derivationConfig = df.derivation_config ?? null;
+            const derivationConfig: LogicalDerivationConfig | null = df.derivation_config ?? null;
             const derivationSummary = df.derivation_summary?.trim() ||
-              (derivationConfig ? generateLogicalDerivationSummary(derivationConfig as any) : null);
+              (derivationConfig !== null ? generateLogicalDerivationSummary(derivationConfig) : null);
             const [inserted] = await tx.insert(policyFields).values({
               companyId: companyId!,
               policyPackId: null,
@@ -1143,7 +1177,7 @@ export async function registerRoutes(
               description: df.description?.trim() || null,
               sourceType: "derived_field",
               dataType: df.data_type || null,
-              derivationConfig: derivationConfig as any,
+              derivationConfig: derivationConfig,
               derivationSummary: derivationSummary || null,
               aiGenerated: true,
               createdBy: "system_sop_import",
