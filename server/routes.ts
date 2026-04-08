@@ -953,9 +953,28 @@ export async function registerRoutes(
           ...(f.sourceType === "derived_field" ? { derivationSummary: f.derivationSummary?.slice(0, 200) ?? null } : {}),
         }));
 
-        console.log(`[generate-treatment-draft] [${requestId}] company=${companyId} pack=${pack.id} files=${files.length} fields=${fieldCatalog.length}`);
+        // Build column evidence from the most recent loan upload so the
+        // post-processor can detect "Yes"/"No" and "0"/"1" source fields and
+        // rewrite any spurious is_true/is_false rules to equality operators.
+        let draftColumnEvidence: ColumnEvidence[] = [];
+        const loanUploadForEvidence = await storage.getUploadByCategory(companyId, "loan");
+        if (loanUploadForEvidence?.uploadedData && Array.isArray(loanUploadForEvidence.uploadedData)) {
+          const loanRows = loanUploadForEvidence.uploadedData as Record<string, unknown>[];
+          if (loanRows.length > 0) {
+            const headers = Object.keys(loanRows[0]);
+            draftColumnEvidence = headers.map(h => {
+              const nonEmpty = loanRows.map(r => String(r[h] ?? "").trim()).filter(v => v !== "");
+              const sampleValues = nonEmpty.slice(0, 5).map(v => v.slice(0, 60));
+              const unique = [...new Set(nonEmpty)];
+              const distinctValues = unique.length <= 8 ? unique.map(v => v.slice(0, 60)) : undefined;
+              return { fieldName: h, sampleValues, inferredType: "categorical" as const, distinctValues };
+            });
+          }
+        }
 
-        const draftResponse = await generateTreatmentDraft(sopBundle, fieldCatalog);
+        console.log(`[generate-treatment-draft] [${requestId}] company=${companyId} pack=${pack.id} files=${files.length} fields=${fieldCatalog.length} evidence_cols=${draftColumnEvidence.length}`);
+
+        const draftResponse = await generateTreatmentDraft(sopBundle, fieldCatalog, draftColumnEvidence);
 
         console.log(`[generate-treatment-draft] [${requestId}] ai_output treatments=${draftResponse.treatments.length} open_questions=${draftResponse.open_questions.length}`);
 

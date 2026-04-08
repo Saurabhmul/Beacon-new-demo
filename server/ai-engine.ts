@@ -1273,9 +1273,87 @@ function flattenSingleSourceDerivedRules(
   };
 }
 
+// ── Post-processing: convert is_true/is_false to equality for binary fields ───
+//
+// When a source field's real data values are categorical strings like "Yes"/"No"
+// or binary integers like 0/1, the AI should never use is_true/is_false.
+// This function catches any remaining cases after the prompt instruction and
+// rewrites them to { operator: "equals", value: "Yes" } (or 0/1 equivalents).
+
+function convertBinarySourceRulesToEquality(
+  draft: ValidatedDraftResponse,
+  columnEvidence: ColumnEvidence[]
+): ValidatedDraftResponse {
+  if (!columnEvidence || columnEvidence.length === 0) return draft;
+
+  const evidenceMap = new Map<string, ColumnEvidence>();
+  for (const col of columnEvidence) {
+    evidenceMap.set(col.fieldName.toLowerCase(), col);
+  }
+
+  function detectBinaryPattern(ev: ColumnEvidence): null | { kind: "yesno"; yes: string; no: string } | { kind: "binary" } {
+    const candidates = ev.distinctValues ?? ev.sampleValues;
+    if (!candidates || candidates.length === 0) return null;
+    const normalised = candidates.map(v => v.trim().toLowerCase());
+    const unique = Array.from(new Set(normalised));
+    if (unique.length === 0) return null;
+
+    const YES_NO = new Set(["yes", "no"]);
+    if (unique.every(v => YES_NO.has(v))) {
+      const yesRaw = candidates.find(v => v.trim().toLowerCase() === "yes") ?? "Yes";
+      const noRaw  = candidates.find(v => v.trim().toLowerCase() === "no")  ?? "No";
+      return { kind: "yesno", yes: yesRaw, no: noRaw };
+    }
+
+    const BINARY = new Set(["0", "1"]);
+    if (unique.every(v => BINARY.has(v))) {
+      return { kind: "binary" };
+    }
+
+    return null;
+  }
+
+  function convertRule(r: RuleItem): RuleItem {
+    if (r.operator !== "is_true" && r.operator !== "is_false") return r;
+    if ((r.field_type ?? "source") !== "source") return r;
+
+    const ev = evidenceMap.get(r.field_name.toLowerCase());
+    if (!ev) return r;
+
+    const pattern = detectBinaryPattern(ev);
+    if (!pattern) return r;
+
+    const reason = (r as Record<string, unknown>).reason as string | undefined;
+    const base = { field_name: r.field_name, field_type: "source" as const, ...(reason ? { reason } : {}) };
+
+    if (pattern.kind === "yesno") {
+      const value = r.operator === "is_true" ? pattern.yes : pattern.no;
+      console.log(`[AI FIX] Converted ${r.operator}→equals "${value}" for source field "${r.field_name}"`);
+      return { ...base, operator: "equals", value } as RuleItem;
+    }
+
+    if (pattern.kind === "binary") {
+      const value = r.operator === "is_true" ? 1 : 0;
+      console.log(`[AI FIX] Converted ${r.operator}→equals ${value} for source field "${r.field_name}"`);
+      return { ...base, operator: "equals", value } as RuleItem;
+    }
+
+    return r;
+  }
+
+  const newTreatments = draft.treatments.map(t => ({
+    ...t,
+    when_to_offer: t.when_to_offer.map(convertRule),
+    blocked_if: t.blocked_if.map(convertRule),
+  }));
+
+  return { ...draft, treatments: newTreatments };
+}
+
 export async function generateTreatmentDraft(
   sopBundle: string,
-  fieldCatalog: { label: string; sourceType: string; description: string | null; derivationSummary: string | null }[]
+  fieldCatalog: { label: string; sourceType: string; description: string | null; derivationSummary: string | null }[],
+  columnEvidence?: ColumnEvidence[]
 ): Promise<ValidatedDraftResponse> {
   const fieldCatalogText = fieldCatalog.length === 0
     ? "No fields configured yet."
@@ -1352,6 +1430,10 @@ OPERATOR CLASSES (use exactly these operator strings):
 - Unary (boolean flags — NO value field, omit value entirely):
     is_true, is_false, exists, not_exists
     Example: { "operator": "is_true" }  — do NOT include "value" at all
+    CRITICAL: Do NOT use is_true / is_false for source fields whose real data values are categorical strings or binary integers. Use the equality operator instead:
+      - Field values "Yes"/"No" (or "yes"/"no") → use equals with the actual string: { "operator": "equals", "value": "Yes" }
+      - Field values 1/0 → use equals with the integer: { "operator": "equals", "value": 1 }
+      Reserve is_true / is_false ONLY for fields that store genuine JSON booleans (true/false).
 - Equality (scalar value required — string, number, or boolean):
     equals, not_equals
     Example: { "operator": "equals", "value": "High" }
@@ -1509,7 +1591,8 @@ Return JSON only. Do not include any markdown formatting or code blocks.`;
       { isValidationError: true, zodErrors: result.error.issues }
     );
   }
-  return flattenSingleSourceDerivedRules(result.data, fieldCatalog);
+  const flattened = flattenSingleSourceDerivedRules(result.data, fieldCatalog);
+  return convertBinarySourceRulesToEquality(flattened, columnEvidence ?? []);
 }
 
 export async function extractSOPTreatments(fileText: string): Promise<SOPExtractedTreatment[]> {
