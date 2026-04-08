@@ -937,8 +937,10 @@ export async function registerRoutes(
         const uploadsDir = path.join(process.cwd(), "uploads");
         if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
         const sopFilesMeta: { originalName: string; safeName: string; uploadedAt: string }[] = [];
-        for (const file of files) {
-          const safeName = `sop-${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const nonce = `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`;
+          const safeName = `sop-${nonce}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
           fs.writeFileSync(path.join(uploadsDir, safeName), file.buffer);
           sopFilesMeta.push({ originalName: file.originalname, safeName, uploadedAt: new Date().toISOString() });
         }
