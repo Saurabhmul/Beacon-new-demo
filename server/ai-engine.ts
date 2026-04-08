@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { z } from "zod";
 
 const ai = new GoogleGenAI({
   apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
@@ -522,6 +523,202 @@ export interface SOPExtractedTreatment {
   shortDescription: string;
   whenToOffer: SOPExtractedRule[];
   blockedIf: SOPExtractedRule[];
+}
+
+// ─── Zod schemas for AI-driven treatment draft generation ─────────────────────
+
+const RuleItemSchema = z.object({
+  field_name: z.string(),
+  field_type: z.enum(["source", "derived", "business"]).optional(),
+  operator: z.string(),
+  value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional(),
+  reason: z.string().optional(),
+});
+
+const DraftTreatmentItemSchema = z.object({
+  name: z.string(),
+  description: z.string().default(""),
+  when_to_offer: z.array(RuleItemSchema).default([]),
+  blocked_if: z.array(RuleItemSchema).default([]),
+  source_fields: z.array(z.object({
+    field_name: z.string(),
+    description: z.string().default(""),
+    matched_existing_field: z.boolean().default(false),
+  })).default([]),
+  derived_fields: z.array(z.object({
+    field_name: z.string(),
+    description: z.string().default(""),
+    formula_hint: z.string().default(""),
+    depends_on: z.array(z.string()).default([]),
+  })).default([]),
+  business_fields: z.array(z.object({
+    field_name: z.string(),
+    description: z.string().default(""),
+    allowed_values: z.array(z.string()).default([]),
+  })).default([]),
+  confidence: z.enum(["high", "medium", "low"]).default("medium"),
+});
+
+const DraftResponseSchema = z.object({
+  summary: z.string().default(""),
+  treatments: z.array(DraftTreatmentItemSchema).default([]),
+  global_source_fields: z.array(z.any()).default([]),
+  global_derived_fields: z.array(z.any()).default([]),
+  global_business_fields: z.array(z.any()).default([]),
+  open_questions: z.array(z.string()).default([]),
+});
+
+export type ValidatedDraftResponse = z.infer<typeof DraftResponseSchema>;
+
+export async function extractTextFromPdfWithVision(buffer: Buffer): Promise<string> {
+  const base64 = buffer.toString("base64");
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-pro",
+    contents: [{
+      parts: [
+        {
+          inlineData: {
+            mimeType: "application/pdf",
+            data: base64,
+          },
+        },
+        {
+          text: "Extract all text content from this PDF document. Return the raw text only, preserving structure (headings, lists, paragraphs). Do not summarize or interpret — just extract the text as-is.",
+        },
+      ],
+    }],
+    config: { maxOutputTokens: 16384 },
+  });
+  return response.text?.trim() || "";
+}
+
+export async function generateTreatmentDraft(
+  sopBundle: string,
+  fieldCatalog: { label: string; sourceType: string; description: string | null; derivationSummary: string | null }[]
+): Promise<ValidatedDraftResponse> {
+  const fieldCatalogText = fieldCatalog.length === 0
+    ? "No fields configured yet."
+    : fieldCatalog.map(f => {
+        const typeLabel = f.sourceType === "source_field" ? "Source Field"
+          : f.sourceType === "derived_field" ? "Derived Field"
+          : "Business Field";
+        const desc = f.description ? ` — ${f.description}` : "";
+        const derived = f.derivationSummary ? ` [Derived from: ${f.derivationSummary}]` : "";
+        return `- ${f.label} (${typeLabel})${desc}${derived}`;
+      }).join("\n");
+
+  const prompt = `You are Beacon's SOP-to-treatment configuration engine.
+
+Your task is to read one or more uploaded SOP / policy documents and generate a draft Beacon treatment configuration.
+
+Beacon already has a configured field catalog for this client.
+You must use that field catalog when mapping policy logic.
+
+Your goal is to generate a ready-to-fill treatment draft with:
+- Treatment
+- When to Offer
+- Blocked If
+- Source Fields
+- Derived Fields
+- Business Fields
+
+IMPORTANT RULES
+1. Only create treatments that are clearly supported by the SOP documents.
+2. Use configured Beacon source fields wherever possible.
+3. Do NOT invent a new source field that is not present in the provided Beacon field catalog.
+4. If the SOP refers to a concept that is not present as a configured source field:
+  - classify it as a Derived Field if it can be calculated from existing fields
+  - classify it as a Business Field if it is user-entered, policy-defined, or judgement-based
+5. Reuse existing business fields or derived fields if they are already present in the Beacon field catalog.
+6. Keep rules structured and implementation-friendly.
+7. If the SOP is ambiguous, add the uncertainty to open_questions instead of guessing.
+8. You MUST always generate a complete draft — never leave treatments empty because of ambiguity. Put ambiguities in open_questions.
+9. Return JSON only. No markdown formatting, no code blocks, just raw JSON.
+
+FIELD TYPE DEFINITIONS
+- Source Field: already configured in Beacon and directly usable in rules
+- Derived Field: calculated from one or more Beacon fields
+- Business Field: manually captured or judgement-based field
+
+RULE FORMAT
+{
+ "field_name": "string",
+ "field_type": "source|derived|business",
+ "operator": "=|!=|>|>=|<|<=|contains|in|not_in|is_true|is_false",
+ "value": "string or number or array",
+ "reason": "short explanation"
+}
+
+OUTPUT JSON SCHEMA
+{
+ "summary": "short summary of the SOP treatment framework",
+ "treatments": [
+   {
+     "name": "string",
+     "description": "string",
+     "when_to_offer": [RULE],
+     "blocked_if": [RULE],
+     "source_fields": [
+       {
+         "field_name": "string",
+         "description": "string",
+         "matched_existing_field": true
+       }
+     ],
+     "derived_fields": [
+       {
+         "field_name": "string",
+         "description": "string",
+         "formula_hint": "plain english calculation logic",
+         "depends_on": ["field_a", "field_b"]
+       }
+     ],
+     "business_fields": [
+       {
+         "field_name": "string",
+         "description": "string",
+         "allowed_values": ["optional", "list"]
+       }
+     ],
+     "confidence": "high|medium|low"
+   }
+ ],
+ "global_source_fields": [],
+ "global_derived_fields": [],
+ "global_business_fields": [],
+ "open_questions": ["string"]
+}
+
+BEACON FIELD CATALOG
+${fieldCatalogText}
+
+SOP DOCUMENTS
+${sopBundle}
+
+Now generate the Beacon treatment draft.
+Return JSON only. Do not include any markdown formatting or code blocks.`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-pro",
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: { maxOutputTokens: 16384, temperature: 0.3 },
+  });
+
+  const rawText = response.text?.trim() || "{}";
+
+  let jsonText = rawText;
+  if (jsonText.startsWith("```")) {
+    jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    throw new Error("AI returned invalid JSON — cannot parse treatment draft");
+  }
+
+  return DraftResponseSchema.parse(parsed);
 }
 
 export async function extractSOPTreatments(fileText: string): Promise<SOPExtractedTreatment[]> {

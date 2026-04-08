@@ -231,6 +231,10 @@ export const policyPacks = pgTable("policy_packs", {
   status: text("status").notNull().default("draft"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  lastAiGenerationRawOutput: jsonb("last_ai_generation_raw_output"),
+  lastAiGenerationAt: timestamp("last_ai_generation_at"),
+  aiGenerationSummary: text("ai_generation_summary"),
+  aiOpenQuestions: jsonb("ai_open_questions").$type<string[]>(),
 });
 
 export const treatments = pgTable("treatments", {
@@ -242,6 +246,10 @@ export const treatments = pgTable("treatments", {
   priority: text("priority"),
   tone: text("tone"),
   displayOrder: integer("display_order").notNull().default(0),
+  draftSourceFields: jsonb("draft_source_fields").$type<DraftSourceField[]>(),
+  draftDerivedFields: jsonb("draft_derived_fields").$type<DraftDerivedField[]>(),
+  draftBusinessFields: jsonb("draft_business_fields").$type<DraftBusinessField[]>(),
+  aiConfidence: text("ai_confidence"),
 });
 
 export const treatmentRuleGroups = pgTable("treatment_rule_groups", {
@@ -265,6 +273,25 @@ export const treatmentRules = pgTable("treatment_rules", {
   rightConstantValue: text("right_constant_value"),
   rightFieldId: text("right_field_id"),
 });
+
+export interface DraftSourceField {
+  fieldName: string;
+  description: string;
+  matchedExistingField: boolean;
+}
+
+export interface DraftDerivedField {
+  fieldName: string;
+  description: string;
+  formulaHint: string;
+  dependsOn: string[];
+}
+
+export interface DraftBusinessField {
+  fieldName: string;
+  description: string;
+  allowedValues: string[];
+}
 
 export interface DerivationConfig {
   fieldA: string;

@@ -109,7 +109,16 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - Each treatment has per-DPD-stage blocklist (can block in Early/Mid/Late etc.)
 - Decision rules auto-suggest `otherCondition` when Clear Arrears Plan is selected; condition updates when clearanceMonths changes
 
+## SOP → AI Treatment Draft (Task #16)
+- **Multi-PDF Upload Panel**: Policy Pack section in Client Config has "Generate from SOP" button that opens a panel for uploading up to 10 PDF files (Standard Operating Procedures). Files validated client-side (type + size).
+- **Backend route**: `POST /api/policy-pack/generate-treatment-draft` — accepts multipart PDF uploads, extracts text via `pdf-parse` with Gemini Vision fallback for image-heavy PDFs, fetches field catalog (source + business + derived fields), calls Gemini 2.5 Pro with structured JSON output (Zod-validated), stores draft in `treatments` table columns `draftSourceFields`, `draftDerivedFields`, `draftBusinessFields`, and `aiConfidence`.
+- **Policy Pack DB columns**: Added `lastAiGenerationRawOutput`, `lastAiGenerationAt`, `aiGenerationSummary`, `aiOpenQuestions` to `policy_packs` table; `draftSourceFields`, `draftDerivedFields`, `draftBusinessFields`, `aiConfidence` to `treatments` table.
+- **Overwrite confirmation modal**: If treatments already exist, user is shown a modal warning before AI generation overwrites them.
+- **AI Review Banner**: After generation, shows AI summary and open questions (if any) in a dismissible banner above the treatment list.
+- **TreatmentCard enhancements**: Confidence badge (High/Medium/Low, color-coded) shown on cards with AI-generated data. Source/Derived/Business field tab panels appear when counts > 0.
+
 ## Recent Changes
+- 2026-04-08: SOP multi-PDF upload → Gemini AI treatment draft generation (Task #16) — full end-to-end flow with confidence badges, field tab panels, overwrite modal, AI review banner
 - 2026-04-06: Upload Data tab now uses saved Data Configuration as source of truth — tabs shown only for configured tabular categories (loan_account→loan_data, payment_history, conversation_history, income_employment, credit_bureau); document-only categories (compliance_policy, knowledge_base) excluded; sample CSV generated from saved field analysis (active/non-ignored fields only); falls back to hardcoded defaults if no Data Config saved yet
 - 2026-04-06: Redesigned Data Configuration tab — replaced mandatory/optional field chips with 7 category cards (Loan/Account, Payment History, Conversation History, Income/Employment, Credit Bureau, Compliance Policy, Knowledge Base). Checkbox-driven upload flow with AI field analysis (Gemini 2.0 Flash), inline editable field descriptions, confidence badges (High/Medium/Low), ignore toggles, and save to DB. New backend endpoint POST /api/data-config/analyze-category; xlsx support for XLSX parsing; new schema columns selected_categories and category_data on data_configs
 - 2026-03-06: Multi-tenant Users & Roles system implemented — companies table, expanded users with roles/invites, company_id on all tables, role-based auth middleware, role-based sidebar navigation, Users management page (add/edit/deactivate/resend invite), invite registration flow, SuperAdmin company switching, seed data for Prodigy Finance

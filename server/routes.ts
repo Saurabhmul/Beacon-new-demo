@@ -5,12 +5,12 @@ import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
 import { authenticate, authorize, companyFilter } from "./middleware/auth";
 import multer from "multer";
 import Papa from "papaparse";
-import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSOPTreatments } from "./ai-engine";
+import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSOPTreatments, extractTextFromPdfWithVision, generateTreatmentDraft } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
-import { users, uploadLogs, companies } from "@shared/schema";
+import { users, uploadLogs, companies, treatments, treatmentRuleGroups, treatmentRules, policyPacks } from "@shared/schema";
 import type { PolicyFieldDto, RuleSaveRow, DerivationConfig } from "@shared/schema";
 import { db } from "./db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
@@ -838,6 +838,233 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to extract treatments from SOP" });
     }
   });
+
+  const sopUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 },
+  });
+
+  app.post("/api/policy-pack/generate-treatment-draft",
+    authenticate, authorize("admin"),
+    companyFilter,
+    sopUpload.array("sopFiles", 10),
+    async (req: any, res) => {
+      const companyId = getCompanyId(req);
+      const files = req.files as Express.Multer.File[] | undefined;
+
+      try {
+        if (!files || files.length === 0) {
+          return res.status(400).json({ error: "No files uploaded" });
+        }
+        for (const file of files) {
+          const name = file.originalname.toLowerCase();
+          if (!name.endsWith(".pdf")) {
+            return res.status(400).json({ error: `"${file.originalname}" is not a PDF. Only PDF files are supported.` });
+          }
+        }
+
+        const clientConfig = await storage.getClientConfig(companyId);
+        if (!clientConfig) return res.status(400).json({ error: "No client config found" });
+        const pack = await storage.getPolicyPack(clientConfig.id);
+        if (!pack) return res.status(400).json({ error: "No policy pack found — save your policy configuration first" });
+
+        const { default: pdfParse } = await import("pdf-parse");
+        const textParts: string[] = [];
+
+        for (const file of files) {
+          let text = "";
+          try {
+            const parsed = await pdfParse(file.buffer);
+            text = parsed.text?.trim() || "";
+          } catch {
+            text = "";
+          }
+
+          if (text.length < 80) {
+            try {
+              text = await extractTextFromPdfWithVision(file.buffer);
+            } catch (visionErr) {
+              return res.status(422).json({ error: `Could not extract text from "${file.originalname}". Please ensure the file is readable.` });
+            }
+          }
+
+          if (!text.trim()) {
+            return res.status(422).json({ error: `No readable content found in "${file.originalname}".` });
+          }
+
+          textParts.push(`=== ${file.originalname} ===\n${text}`);
+        }
+
+        const sopBundle = textParts.join("\n\n");
+        const fieldRecords = await storage.getPolicyFields(companyId);
+        const fieldCatalog = fieldRecords.map(f => ({
+          label: f.label,
+          sourceType: f.sourceType,
+          description: f.description,
+          derivationSummary: f.derivationSummary,
+        }));
+
+        console.log(`[generate-treatment-draft] company=${companyId} pack=${pack.id} files=${files.length} fields=${fieldCatalog.length}`);
+
+        const draftResponse = await generateTreatmentDraft(sopBundle, fieldCatalog);
+
+        console.log(`[generate-treatment-draft] generated treatments=${draftResponse.treatments.length} open_questions=${draftResponse.open_questions.length}`);
+
+        const sourceFieldLabels = new Set(
+          fieldRecords.filter(f => f.sourceType === "source_field").map(f => f.label.toLowerCase().trim())
+        );
+
+        const VALID_OPERATORS = new Set(["=", "!=", ">", ">=", "<", "<=", "contains", "in", "not_in", "is_true", "is_false"]);
+
+        const normalizedTreatments = draftResponse.treatments
+          .filter(t => t.name?.trim())
+          .reduce((acc: typeof draftResponse.treatments, t) => {
+            const key = t.name.trim().toLowerCase();
+            if (!acc.some(x => x.name.trim().toLowerCase() === key)) acc.push(t);
+            return acc;
+          }, [])
+          .map(t => ({
+            ...t,
+            source_fields: t.source_fields.filter(sf =>
+              sourceFieldLabels.has(sf.field_name.toLowerCase().trim())
+            ),
+            derived_fields: t.derived_fields.reduce((acc: typeof t.derived_fields, df) => {
+              if (!acc.some(x => x.field_name.toLowerCase() === df.field_name.toLowerCase())) acc.push(df);
+              return acc;
+            }, []),
+            business_fields: t.business_fields.reduce((acc: typeof t.business_fields, bf) => {
+              if (!acc.some(x => x.field_name.toLowerCase() === bf.field_name.toLowerCase())) acc.push(bf);
+              return acc;
+            }, []),
+          }));
+
+        await db.transaction(async (tx) => {
+          const existingTxs = await tx.select({ id: treatments.id }).from(treatments)
+            .where(eq(treatments.policyPackId, pack.id));
+
+          if (existingTxs.length > 0) {
+            const txIds = existingTxs.map(e => e.id);
+            const groups = await tx.select({ id: treatmentRuleGroups.id }).from(treatmentRuleGroups)
+              .where(inArray(treatmentRuleGroups.treatmentId, txIds));
+            if (groups.length > 0) {
+              await tx.delete(treatmentRules).where(inArray(treatmentRules.ruleGroupId, groups.map(g => g.id)));
+            }
+            await tx.delete(treatmentRuleGroups).where(inArray(treatmentRuleGroups.treatmentId, txIds));
+            await tx.delete(treatments).where(inArray(treatments.id, txIds));
+          }
+
+          for (let i = 0; i < normalizedTreatments.length; i++) {
+            const t = normalizedTreatments[i];
+            const [newTx] = await tx.insert(treatments).values({
+              policyPackId: pack.id,
+              name: t.name.trim(),
+              shortDescription: t.description || null,
+              enabled: true,
+              priority: null,
+              tone: null,
+              displayOrder: i,
+              draftSourceFields: t.source_fields.map(sf => ({
+                fieldName: sf.field_name,
+                description: sf.description,
+                matchedExistingField: sf.matched_existing_field,
+              })),
+              draftDerivedFields: t.derived_fields.map(df => ({
+                fieldName: df.field_name,
+                description: df.description,
+                formulaHint: df.formula_hint,
+                dependsOn: df.depends_on,
+              })),
+              draftBusinessFields: t.business_fields.map(bf => ({
+                fieldName: bf.field_name,
+                description: bf.description,
+                allowedValues: bf.allowed_values,
+              })),
+              aiConfidence: t.confidence,
+            }).returning();
+
+            if (t.when_to_offer.length > 0) {
+              const [whenGroup] = await tx.insert(treatmentRuleGroups).values({
+                treatmentId: newTx.id,
+                ruleType: "when_to_offer",
+                logicOperator: "AND",
+                groupOrder: 0,
+              }).returning();
+              for (let j = 0; j < t.when_to_offer.length; j++) {
+                const r = t.when_to_offer[j];
+                if (!VALID_OPERATORS.has(r.operator)) continue;
+                const fieldRecord = fieldRecords.find(f => f.label.toLowerCase() === r.field_name.toLowerCase());
+                const leftFieldId = fieldRecord
+                  ? `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`
+                  : null;
+                const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
+                await tx.insert(treatmentRules).values({
+                  ruleGroupId: whenGroup.id,
+                  fieldName: r.field_name,
+                  operator: r.operator,
+                  value: rawValue,
+                  sortOrder: j,
+                  leftFieldId,
+                  rightMode: "constant",
+                  rightConstantValue: rawValue,
+                  rightFieldId: null,
+                });
+              }
+            }
+
+            if (t.blocked_if.length > 0) {
+              const [blockedGroup] = await tx.insert(treatmentRuleGroups).values({
+                treatmentId: newTx.id,
+                ruleType: "blocked_if",
+                logicOperator: "AND",
+                groupOrder: 0,
+              }).returning();
+              for (let j = 0; j < t.blocked_if.length; j++) {
+                const r = t.blocked_if[j];
+                if (!VALID_OPERATORS.has(r.operator)) continue;
+                const fieldRecord = fieldRecords.find(f => f.label.toLowerCase() === r.field_name.toLowerCase());
+                const leftFieldId = fieldRecord
+                  ? `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`
+                  : null;
+                const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
+                await tx.insert(treatmentRules).values({
+                  ruleGroupId: blockedGroup.id,
+                  fieldName: r.field_name,
+                  operator: r.operator,
+                  value: rawValue,
+                  sortOrder: j,
+                  leftFieldId,
+                  rightMode: "constant",
+                  rightConstantValue: rawValue,
+                  rightFieldId: null,
+                });
+              }
+            }
+          }
+
+          await tx.update(policyPacks).set({
+            lastAiGenerationRawOutput: draftResponse as unknown as Record<string, unknown>,
+            lastAiGenerationAt: new Date(),
+            aiGenerationSummary: draftResponse.summary || null,
+            aiOpenQuestions: draftResponse.open_questions,
+            updatedAt: new Date(),
+          }).where(eq(policyPacks.id, pack.id));
+        });
+
+        const updatedTreatments = await storage.getTreatmentsWithRules(pack.id);
+        const updatedPack = await storage.getPolicyPack(clientConfig.id);
+
+        res.json({
+          treatments: updatedTreatments,
+          summary: draftResponse.summary,
+          openQuestions: draftResponse.open_questions,
+          generatedAt: updatedPack?.lastAiGenerationAt || new Date(),
+        });
+      } catch (error) {
+        console.error(`[generate-treatment-draft] error company=${companyId}:`, error instanceof Error ? error.message : error);
+        res.status(500).json({ error: error instanceof Error ? error.message : "Failed to generate treatment draft" });
+      }
+    }
+  );
 
   app.get("/api/prompt-preview", authenticate, authorize("superadmin"), companyFilter, async (req: any, res) => {
     try {

@@ -48,7 +48,7 @@ import {
   Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
   Copy, RefreshCw, Info, Eye, ChevronDown, ChevronRight, X, Wand2, FileUp,
 } from "lucide-react";
-import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules, PolicyFieldDto, RuleSaveRow, DerivationConfig } from "@shared/schema";
+import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules, PolicyFieldDto, RuleSaveRow, DerivationConfig, DraftSourceField, DraftDerivedField, DraftBusinessField } from "@shared/schema";
 
 
 const MANDATORY_LOAN_FIELDS = [
@@ -388,7 +388,11 @@ interface LocalTreatment {
   blockedIf: LocalRuleGroup;
   isDraft: boolean;
   expanded: boolean;
-  activeSection: "when" | "blocked";
+  activeSection: "when" | "blocked" | "source" | "derived" | "business";
+  draftSourceFields: DraftSourceField[];
+  draftDerivedFields: DraftDerivedField[];
+  draftBusinessFields: DraftBusinessField[];
+  aiConfidence: "high" | "medium" | "low" | null;
 }
 
 function makeEmptyRow(): LocalRuleRow {
@@ -438,6 +442,10 @@ function serverTxToLocal(tx: TreatmentWithRules): LocalTreatment {
     isDraft: false,
     expanded: false,
     activeSection: "when",
+    draftSourceFields: (tx as any).draftSourceFields || [],
+    draftDerivedFields: (tx as any).draftDerivedFields || [],
+    draftBusinessFields: (tx as any).draftBusinessFields || [],
+    aiConfidence: (tx as any).aiConfidence || null,
   };
 }
 function extractionToLocal(e: { name: string; shortDescription: string; whenToOffer: { fieldName: string; operator: string; value: string }[]; blockedIf: { fieldName: string; operator: string; value: string }[] }): LocalTreatment {
@@ -459,6 +467,21 @@ function extractionToLocal(e: { name: string; shortDescription: string; whenToOf
     isDraft: true,
     expanded: true,
     activeSection: "when",
+    draftSourceFields: [],
+    draftDerivedFields: [],
+    draftBusinessFields: [],
+    aiConfidence: null,
+  };
+}
+
+function makeTemplateLocalBase(name: string, shortDescription: string, enabled = true, expanded = false): LocalTreatment {
+  return {
+    localId: crypto.randomUUID(), dbId: undefined, name, shortDescription,
+    enabled, priority: "", tone: "",
+    whenToOffer: makeEmptyGroup(), blockedIf: makeEmptyGroup(),
+    isDraft: true, expanded, activeSection: "when",
+    draftSourceFields: [], draftDerivedFields: [], draftBusinessFields: [],
+    aiConfidence: null,
   };
 }
 
@@ -1023,6 +1046,11 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
           <span className="font-medium text-sm flex-1">{local.name}</span>
         )}
         {local.isDraft && <Badge variant="outline" className="text-amber-600 border-amber-400 text-[10px] shrink-0">Draft — unsaved</Badge>}
+        {local.aiConfidence && (
+          <Badge variant="outline" className={`text-[10px] shrink-0 ${local.aiConfidence === "high" ? "text-green-600 border-green-400" : local.aiConfidence === "medium" ? "text-yellow-600 border-yellow-400" : "text-orange-600 border-orange-400"}`}>
+            AI {local.aiConfidence} confidence
+          </Badge>
+        )}
         <Input
           type="number"
           min={1}
@@ -1074,29 +1102,87 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
           ) : null}
 
           {/* Section tabs */}
-          <div className="flex gap-2">
-            {(["when", "blocked"] as const).map(s => {
-              const count = s === "when" ? local.whenToOffer.rows.length : local.blockedIf.rows.length;
-              return (
-                <button key={s} type="button"
-                  className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${local.activeSection === s ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted"}`}
-                  onClick={() => setLocal(l => ({ ...l, activeSection: s }))}>
-                  {s === "when" ? "When to Offer" : "Blocked If"}
-                  {count > 0 && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${local.activeSection === s ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted-foreground/20"}`}>{count}</span>}
-                </button>
-              );
-            })}
+          <div className="flex gap-1.5 flex-wrap">
+            {([
+              { id: "when", label: "When to Offer", count: local.whenToOffer.rows.length },
+              { id: "blocked", label: "Blocked If", count: local.blockedIf.rows.length },
+              { id: "source", label: "Source Fields", count: local.draftSourceFields.length },
+              { id: "derived", label: "Derived Fields", count: local.draftDerivedFields.length },
+              { id: "business", label: "Business Fields", count: local.draftBusinessFields.length },
+            ] as const).filter(s => s.id === "when" || s.id === "blocked" || s.count > 0).map(s => (
+              <button key={s.id} type="button"
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${local.activeSection === s.id ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted"}`}
+                onClick={() => setLocal(l => ({ ...l, activeSection: s.id }))}>
+                {s.label}
+                {s.count > 0 && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${local.activeSection === s.id ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted-foreground/20"}`}>{s.count}</span>}
+              </button>
+            ))}
           </div>
 
-          {/* Rule builder */}
-          {local.activeSection === "when" ? (
+          {/* Rule builder / field panels */}
+          {local.activeSection === "when" && (
             <RuleBuilderGroup group={local.whenToOffer} policyFields={policyFields}
               onChange={g => setLocal(l => ({ ...l, whenToOffer: g }))} isReadOnly={isReadOnly}
               onFieldCreated={onFieldCreated} />
-          ) : (
+          )}
+          {local.activeSection === "blocked" && (
             <RuleBuilderGroup group={local.blockedIf} policyFields={policyFields}
               onChange={g => setLocal(l => ({ ...l, blockedIf: g }))} isReadOnly={isReadOnly}
               onFieldCreated={onFieldCreated} />
+          )}
+          {local.activeSection === "source" && (
+            <div className="space-y-2">
+              {local.draftSourceFields.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">No source fields mapped by AI for this treatment.</p>
+              ) : local.draftSourceFields.map((sf, i) => (
+                <div key={i} className="rounded-md border px-3 py-2 bg-muted/20 space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium">{sf.fieldName}</span>
+                    <Badge variant="secondary" className="text-[10px]">source</Badge>
+                  </div>
+                  {sf.description && <p className="text-xs text-muted-foreground">{sf.description}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+          {local.activeSection === "derived" && (
+            <div className="space-y-2">
+              {local.draftDerivedFields.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">No derived fields suggested by AI for this treatment.</p>
+              ) : local.draftDerivedFields.map((df, i) => (
+                <div key={i} className="rounded-md border px-3 py-2 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium">{df.fieldName}</span>
+                    <Badge variant="outline" className="text-[10px]">derived</Badge>
+                  </div>
+                  {df.description && <p className="text-xs text-muted-foreground">{df.description}</p>}
+                  {df.formulaHint && (
+                    <p className="text-[11px] font-mono bg-muted px-2 py-1 rounded text-muted-foreground">{df.formulaHint}</p>
+                  )}
+                  {df.dependsOn.length > 0 && (
+                    <p className="text-[11px] text-muted-foreground">Depends on: {df.dependsOn.join(", ")}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {local.activeSection === "business" && (
+            <div className="space-y-2">
+              {local.draftBusinessFields.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">No business fields suggested by AI for this treatment.</p>
+              ) : local.draftBusinessFields.map((bf, i) => (
+                <div key={i} className="rounded-md border px-3 py-2 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium">{bf.fieldName}</span>
+                    <Badge variant="outline" className="text-[10px]">business</Badge>
+                  </div>
+                  {bf.description && <p className="text-xs text-muted-foreground">{bf.description}</p>}
+                  {bf.allowedValues.length > 0 && (
+                    <p className="text-[11px] text-muted-foreground">Allowed values: {bf.allowedValues.join(", ")}</p>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -1164,11 +1250,16 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onSaveReady, localTreatments]);
 
-  // Upload panel toggle (replaces old entryMode "build"/"upload")
+  // Upload panel toggle
   const [showUploadPanel, setShowUploadPanel] = useState(false);
-  const [sopFile, setSopFile] = useState<File | null>(null);
-  const [sopExtracting, setSopExtracting] = useState(false);
+  const [sopFiles, setSopFiles] = useState<File[]>([]);
+  const [generationStage, setGenerationStage] = useState<"idle" | "generating" | "error">("idle");
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const sopInputRef = useRef<HTMLInputElement>(null);
+  const [overwriteModalOpen, setOverwriteModalOpen] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [aiReviewInfo, setAiReviewInfo] = useState<{ summary: string; openQuestions: string[]; generatedAt: string } | null>(null);
+  const [openQuestionsExpanded, setOpenQuestionsExpanded] = useState(false);
 
   // Library selection (inline checklist)
   const [librarySelected, setLibrarySelected] = useState<Set<string>>(new Set());
@@ -1187,11 +1278,6 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   const [addName, setAddName] = useState("");
   const [addDesc, setAddDesc] = useState("");
   const [addEnabled, setAddEnabled] = useState(true);
-
-  // Duplicate-resolution state
-  type SopConflict = { extracted: LocalTreatment; existing: LocalTreatment };
-  const [conflicts, setConflicts] = useState<SopConflict[]>([]);
-  const [conflictIndex, setConflictIndex] = useState(0);
 
   function sortByPriority(list: LocalTreatment[]): LocalTreatment[] {
     return [...list].sort((a, b) => {
@@ -1222,12 +1308,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   }
 
   function makeTemplateLocal(name: string, shortDescription: string, enabled = true, expanded = false): LocalTreatment {
-    return {
-      localId: crypto.randomUUID(), dbId: undefined, name, shortDescription,
-      enabled, priority: "", tone: "",
-      whenToOffer: makeEmptyGroup(), blockedIf: makeEmptyGroup(),
-      isDraft: true, expanded, activeSection: "when",
-    };
+    return makeTemplateLocalBase(name, shortDescription, enabled, expanded);
   }
 
   function handleAddFromLibrary() {
@@ -1239,90 +1320,53 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
     setLibrarySelected(new Set());
   }
 
-  async function handleExtractSOP() {
-    if (!sopFile) return;
-    setSopExtracting(true);
-    try {
-      const form = new FormData();
-      form.append("file", sopFile);
-      const res = await fetch("/api/policy-pack/extract-sop", { method: "POST", body: form, credentials: "include" });
-      if (!res.ok) throw new Error();
-      const { treatments: extracted } = await res.json();
-      if (!extracted?.length) { toast({ title: "No treatments found", description: "Beacon couldn't extract treatments from this file.", variant: "destructive" }); return; }
-
-      const extractedLocals: LocalTreatment[] = extracted.map(extractionToLocal);
-
-      // De-duplicate within the extracted batch (keep first occurrence by name)
-      const seenInBatch = new Set<string>();
-      const deduped: LocalTreatment[] = [];
-      for (const ex of extractedLocals) {
-        const key = ex.name.trim().toLowerCase();
-        if (!seenInBatch.has(key)) { seenInBatch.add(key); deduped.push(ex); }
-      }
-
-      // Partition into clean vs conflicting (case-insensitive name match against existing)
-      const clean: LocalTreatment[] = [];
-      const newConflicts: SopConflict[] = [];
-      for (const ex of deduped) {
-        const existing = localTreatments.find(lt => lt.name.trim().toLowerCase() === ex.name.trim().toLowerCase());
-        if (existing) newConflicts.push({ extracted: ex, existing });
-        else clean.push(ex);
-      }
-
-      // Append non-conflicting treatments immediately (force collapsed, then sort)
-      if (clean.length > 0) setLocalTreatments(prev => sortByPriority([...prev, ...clean.map(t => ({ ...t, expanded: false }))]));
-
-      // Update pack provenance to reflect SOP extraction
-      if (policyPack.sourceType !== "file") {
-        await fetch("/api/policy-pack", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ id: policyPack.id, policyName: policyPack.policyName, sourceType: "file", sourceFileName: sopFile.name }),
-        });
-      }
-
-      setShowUploadPanel(false);
-      setSopFile(null);
-
-      if (newConflicts.length > 0) {
-        setConflicts(newConflicts);
-        setConflictIndex(0);
-        if (clean.length > 0) {
-          toast({ title: `${clean.length} treatment${clean.length !== 1 ? "s" : ""} added`, description: `${newConflicts.length} duplicate${newConflicts.length !== 1 ? "s" : ""} need resolution.` });
-        }
-      } else {
-        toast({ title: `${extractedLocals.length} treatment${extractedLocals.length !== 1 ? "s" : ""} extracted`, description: "Review and save each treatment below." });
-      }
-    } catch {
-      toast({ title: "Extraction failed", description: "Could not extract treatments from the file.", variant: "destructive" });
-    } finally { setSopExtracting(false); }
+  function handleFilesSelected(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const selected = Array.from(files);
+    setSopFiles(selected);
   }
 
-  function handleConflictAction(action: "replace" | "skip" | "add-draft") {
-    const conflict = conflicts[conflictIndex];
-    if (!conflict) return;
-    if (action === "replace") {
-      setLocalTreatments(prev => sortByPriority(prev.map(t =>
-        t.localId === conflict.existing.localId
-          ? { ...conflict.extracted, localId: t.localId, dbId: t.dbId, expanded: t.expanded }
-          : t
-      )));
-    } else if (action === "add-draft") {
-      const copy = { ...conflict.extracted, localId: crypto.randomUUID(), name: `${conflict.extracted.name} (copy)`, expanded: false };
-      setLocalTreatments(prev => sortByPriority([...prev, copy]));
+  async function runGeneration(files: File[]) {
+    setGenerationStage("generating");
+    setGenerationError(null);
+    try {
+      const form = new FormData();
+      for (const f of files) form.append("sopFiles", f);
+      const res = await fetch("/api/policy-pack/generate-treatment-draft", {
+        method: "POST", body: form, credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Generation failed");
+      const { treatments: generatedTxs, summary, openQuestions, generatedAt } = data;
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-pack/treatments"] });
+      const newLocals: LocalTreatment[] = generatedTxs.map((tx: TreatmentWithRules) => serverTxToLocal(tx));
+      setLocalTreatments(newLocals);
+      setAiReviewInfo({ summary: summary || "", openQuestions: openQuestions || [], generatedAt });
+      setShowUploadPanel(false);
+      setSopFiles([]);
+      setGenerationStage("idle");
+      toast({ title: `${newLocals.length} treatment${newLocals.length !== 1 ? "s" : ""} generated`, description: "Review AI-generated treatments below before saving." });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to generate treatments";
+      setGenerationError(msg);
+      setGenerationStage("error");
     }
-    // "skip" → discard, do nothing
+  }
 
-    const nextIndex = conflictIndex + 1;
-    if (nextIndex >= conflicts.length) {
-      const resolved = conflicts.length;
-      setConflicts([]);
-      setConflictIndex(0);
-      toast({ title: `${resolved} conflict${resolved !== 1 ? "s" : ""} resolved`, description: "Review and save your treatments below." });
+  function handleStartGeneration() {
+    if (sopFiles.length === 0) return;
+    if (localTreatments.length > 0) {
+      setPendingFiles(sopFiles);
+      setOverwriteModalOpen(true);
     } else {
-      setConflictIndex(nextIndex);
+      runGeneration(sopFiles);
     }
+  }
+
+  function handleOverwriteConfirm() {
+    setOverwriteModalOpen(false);
+    runGeneration(pendingFiles);
+    setPendingFiles([]);
   }
 
   function closeAddDialog() {
@@ -1338,27 +1382,65 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
     closeAddDialog();
   }
 
-  const conflictDialogOpen = conflicts.length > 0 && conflictIndex < conflicts.length;
-  const currentConflict = conflictDialogOpen ? conflicts[conflictIndex] : null;
-
   return (
     <div className="space-y-4">
-      {/* ── Unified Section D card ──────────────────────────────────── */}
+      {/* ── AI Review Banner ────────────────────────────────────────── */}
+      {aiReviewInfo && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-4 space-y-2">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Wand2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+              <p className="text-sm font-medium text-blue-800 dark:text-blue-200">AI Draft Generated</p>
+            </div>
+            <button type="button" onClick={() => setAiReviewInfo(null)}
+              className="text-blue-400 hover:text-blue-600 dark:text-blue-500 dark:hover:text-blue-300 shrink-0" data-testid="button-dismiss-ai-banner">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+            AI generated this draft from your uploaded SOP PDFs using your configured Beacon fields. Please review each treatment carefully before saving.
+          </p>
+          {aiReviewInfo.summary && (
+            <p className="text-xs text-blue-600 dark:text-blue-400 italic leading-relaxed">{aiReviewInfo.summary}</p>
+          )}
+          {aiReviewInfo.openQuestions.length > 0 && (
+            <div>
+              <button type="button" className="flex items-center gap-1.5 text-xs font-medium text-blue-700 dark:text-blue-300 hover:underline"
+                onClick={() => setOpenQuestionsExpanded(v => !v)} data-testid="button-toggle-open-questions">
+                {openQuestionsExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                AI Review Notes ({aiReviewInfo.openQuestions.length})
+              </button>
+              {openQuestionsExpanded && (
+                <ul className="mt-2 space-y-1">
+                  {aiReviewInfo.openQuestions.map((q, i) => (
+                    <li key={i} className="flex items-start gap-1.5 text-xs text-blue-700 dark:text-blue-300">
+                      <span className="shrink-0 mt-0.5">•</span>
+                      <span>{q}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Unified Section B card ──────────────────────────────────── */}
       <Card>
         <CardHeader>
           <div className="flex items-start justify-between gap-4">
             <div>
               <CardTitle className="text-base">Section B: Treatments</CardTitle>
-              <CardDescription>Define the treatments Beacon can recommend. Select from the library, create your own, or extract from a policy file.</CardDescription>
+              <CardDescription>Define the treatments Beacon can recommend. Select from the library, create your own, or upload SOP PDFs to generate using AI.</CardDescription>
             </div>
             {!isReadOnly && (
               <div className="flex gap-2 shrink-0 flex-wrap justify-end">
                 <Button
                   variant={showUploadPanel ? "secondary" : "outline"}
                   size="sm"
-                  onClick={() => { setShowUploadPanel(v => !v); setSopFile(null); }}
+                  onClick={() => { setShowUploadPanel(v => !v); if (showUploadPanel) { setSopFiles([]); setGenerationStage("idle"); setGenerationError(null); } }}
                   data-testid="button-toggle-upload">
-                  <FileUp className="w-3.5 h-3.5 mr-1" />Upload SOP / Policy File
+                  <FileUp className="w-3.5 h-3.5 mr-1" />Upload SOP PDFs
                 </Button>
                 <Button size="sm" onClick={() => setAddDialogOpen(true)} data-testid="button-add-treatment">
                   <Plus className="w-3.5 h-3.5 mr-1" />Add Treatment
@@ -1371,21 +1453,46 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
         {/* ── Inline Upload Panel ─────────────────────────────────── */}
         {showUploadPanel && !isReadOnly && (
           <CardContent className="border-t pt-4 space-y-3">
-            <p className="text-sm font-medium">Extract treatments from a file</p>
-            <input ref={sopInputRef} type="file" accept=".txt,.pdf,.docx,.doc" className="hidden"
-              onChange={e => setSopFile(e.target.files?.[0] ?? null)} />
+            <div>
+              <p className="text-sm font-medium">Upload SOP / Policy PDFs</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Upload one or more PDF policy documents. Beacon will generate treatment rules using your configured fields.</p>
+            </div>
+            <input ref={sopInputRef} type="file" accept=".pdf" multiple className="hidden"
+              onChange={e => handleFilesSelected(e.target.files)} />
             <div className="flex items-center gap-3 flex-wrap">
-              <Button variant="outline" size="sm" onClick={() => sopInputRef.current?.click()} data-testid="button-browse-sop">
+              <Button variant="outline" size="sm" onClick={() => sopInputRef.current?.click()}
+                disabled={generationStage === "generating"} data-testid="button-browse-sop">
                 <Upload className="w-3.5 h-3.5 mr-1" />Browse
               </Button>
-              {sopFile && <span className="text-xs text-muted-foreground"><FileText className="w-3 h-3 inline mr-1" />{sopFile.name}</span>}
+              <span className="text-xs text-muted-foreground">PDF only</span>
             </div>
-            <p className="text-xs text-muted-foreground">Supported: TXT, PDF, DOCX</p>
+            {sopFiles.length > 0 && (
+              <div className="space-y-1">
+                {sopFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <FileText className="w-3 h-3 shrink-0" />
+                    <span className="truncate max-w-xs">{f.name}</span>
+                    <span className="text-muted-foreground/60">({(f.size / 1024).toFixed(0)} KB)</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {generationStage === "error" && generationError && (
+              <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md p-2">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{generationError}</span>
+              </div>
+            )}
             <div className="flex gap-2">
-              <Button size="sm" onClick={handleExtractSOP} disabled={!sopFile || sopExtracting} data-testid="button-extract-sop">
-                {sopExtracting ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Extracting…</> : <><Wand2 className="w-3.5 h-3.5 mr-1" />Extract Treatments</>}
+              <Button size="sm" onClick={handleStartGeneration}
+                disabled={sopFiles.length === 0 || generationStage === "generating"}
+                data-testid="button-generate-draft">
+                {generationStage === "generating"
+                  ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Generating…</>
+                  : <><Wand2 className="w-3.5 h-3.5 mr-1" />Generate Treatments</>}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => { setShowUploadPanel(false); setSopFile(null); }}>Cancel</Button>
+              <Button size="sm" variant="outline" disabled={generationStage === "generating"}
+                onClick={() => { setShowUploadPanel(false); setSopFiles([]); setGenerationStage("idle"); setGenerationError(null); }}>Cancel</Button>
             </div>
           </CardContent>
         )}
@@ -1466,37 +1573,27 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
         </CardContent>
       </Card>
 
-      {/* ── Duplicate-resolution dialog ─────────────────────────────── */}
-      <Dialog open={conflictDialogOpen} onOpenChange={() => {}}>
-        <DialogContent className="max-w-lg" onPointerDownOutside={e => e.preventDefault()}>
+      {/* ── Overwrite Confirmation Modal ────────────────────────────── */}
+      <Dialog open={overwriteModalOpen} onOpenChange={v => { if (!v) { setOverwriteModalOpen(false); setPendingFiles([]); } }}>
+        <DialogContent className="max-w-md" onPointerDownOutside={e => e.preventDefault()}>
           <DialogHeader>
-            <DialogTitle>Duplicate Treatment Found</DialogTitle>
-            <p className="text-sm text-muted-foreground">
-              Conflict {conflictIndex + 1} of {conflicts.length} — a treatment with this name already exists. How would you like to proceed?
+            <DialogTitle>Regenerate Treatments?</DialogTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              This policy already has {localTreatments.length} treatment{localTreatments.length !== 1 ? "s" : ""}. Uploading new SOP PDFs will regenerate all treatments from scratch using your selected files. Your current treatments will be replaced.
             </p>
           </DialogHeader>
-          {currentConflict && (
-            <div className="space-y-3 py-1">
-              <div className="rounded-lg border p-3 bg-muted/40">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Extracted from SOP</p>
-                <p className="text-sm font-medium">{currentConflict.extracted.name}</p>
-                {currentConflict.extracted.shortDescription && (
-                  <p className="text-xs text-muted-foreground mt-0.5">{currentConflict.extracted.shortDescription}</p>
-                )}
-              </div>
-              <div className="rounded-lg border p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Currently in policy</p>
-                <p className="text-sm font-medium">{currentConflict.existing.name}</p>
-                {currentConflict.existing.shortDescription && (
-                  <p className="text-xs text-muted-foreground mt-0.5">{currentConflict.existing.shortDescription}</p>
-                )}
-              </div>
+          <div className="py-2">
+            <div className="rounded-md border bg-muted/30 px-3 py-2 space-y-1">
+              {pendingFiles.map((f, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <FileText className="w-3 h-3 shrink-0" /><span className="truncate">{f.name}</span>
+                </div>
+              ))}
             </div>
-          )}
-          <DialogFooter className="flex-col sm:flex-row gap-2 pt-2">
-            <Button variant="outline" onClick={() => handleConflictAction("skip")} data-testid="button-conflict-skip">Skip</Button>
-            <Button variant="outline" onClick={() => handleConflictAction("add-draft")} data-testid="button-conflict-add-draft">Add as New Draft</Button>
-            <Button onClick={() => handleConflictAction("replace")} data-testid="button-conflict-replace">Replace Existing</Button>
+          </div>
+          <DialogFooter className="gap-2 pt-1">
+            <Button variant="outline" onClick={() => { setOverwriteModalOpen(false); setPendingFiles([]); }} data-testid="button-overwrite-cancel">Cancel</Button>
+            <Button onClick={handleOverwriteConfirm} data-testid="button-overwrite-confirm">Overwrite and Regenerate</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
