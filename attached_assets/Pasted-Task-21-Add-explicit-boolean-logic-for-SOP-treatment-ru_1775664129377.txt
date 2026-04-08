@@ -1,0 +1,319 @@
+Task #21 — Add explicit boolean logic for SOP treatment rule groups
+Objective
+
+Make treatment rule grouping explicit and configurable for both:
+
+when_to_offer
+blocked_if
+
+Today the UI already supports:
+
+when_to_offer: All conditions or Any condition
+blocked_if: effectively only Any
+
+This creates ambiguity in SOP extraction and treatment persistence, because the AI can extract the rules themselves but not always the intended grouping semantics.
+
+We need the system to explicitly store, return, and consume the boolean joiner for each rule group so PDF-extracted treatment logic is configured correctly.
+
+Problem
+
+Right now treatment definitions contain arrays like:
+
+when_to_offer: []
+blocked_if: []
+
+But arrays alone are ambiguous unless the grouping logic is also stored.
+
+Why this matters
+
+The same rules mean very different things depending on grouping:
+
+A AND B AND C
+A OR B OR C
+
+For SOP extraction, AI must not only identify the conditions, but also whether the document implies:
+
+ALL conditions
+ANY condition
+Current product gap
+when_to_offer UI already has All conditions / Any condition
+blocked_if does not expose the same choice
+SOP extraction does not explicitly return the grouping logic
+backend persistence/evaluation may rely on implicit assumptions
+
+That is risky and can lead to incorrect treatment eligibility.
+
+Required outcome
+Treatment model explicitly supports:
+when_to_offer_logic: "ALL" | "ANY"
+blocked_if_logic: "ALL" | "ANY"
+SOP extraction returns both logic fields
+Backend persists both logic fields
+UI reads and writes both logic fields
+blocked_if UI gets the same All conditions / Any condition selector as when_to_offer
+Existing behavior remains backward-compatible with safe defaults:
+when_to_offer_logic = "ALL"
+blocked_if_logic = "ANY"
+Out of scope
+nested rule trees like (A AND B) OR (C AND D)
+full expression builders
+fuzzy inference of logic from user edits
+major schema redesign beyond adding these two fields
+Data model changes
+
+Add two explicit fields to the treatment model:
+
+type RuleGroupLogic = "ALL" | "ANY";
+
+Each treatment should support:
+
+{
+  when_to_offer_logic: "ALL" | "ANY";
+  when_to_offer: Rule[];
+  blocked_if_logic: "ALL" | "ANY";
+  blocked_if: Rule[];
+}
+Defaults
+
+For backward compatibility:
+
+if when_to_offer_logic is missing, treat it as "ALL"
+if blocked_if_logic is missing, treat it as "ANY"
+
+These defaults should be applied:
+
+when loading old treatments
+when rendering UI
+when evaluating rules
+when normalizing AI output
+AI extraction changes
+
+Update the SOP treatment draft generation so the AI returns explicit logic for both rule groups.
+
+New expected AI output shape
+
+Instead of only:
+
+{
+  "name": "Payment Plan",
+  "when_to_offer": [...],
+  "blocked_if": [...]
+}
+
+expect:
+
+{
+  "name": "Payment Plan",
+  "when_to_offer_logic": "ALL",
+  "when_to_offer": [...],
+  "blocked_if_logic": "ANY",
+  "blocked_if": [...]
+}
+AI prompt requirements
+
+Update the prompt in treatment draft generation to instruct the model:
+
+infer whether when_to_offer conditions should be grouped as:
+"ALL" when all listed conditions must be true
+"ANY" when any one of them is sufficient
+infer whether blocked_if conditions should be grouped as:
+"ALL" when all blockers must be true together
+"ANY" when any single blocker should prevent the treatment
+Prompt guidance
+
+Default interpretation should be:
+
+prerequisites / eligibility checks → usually ALL
+exclusions / blockers → usually ANY
+
+But the model should choose ALL or ANY based on the SOP wording, not hardcode one value for all treatments.
+
+Backend normalization and validation
+
+Where treatment drafts are parsed and normalized:
+
+Add normalization
+
+If AI output omits one of the logic fields:
+
+set when_to_offer_logic = "ALL"
+set blocked_if_logic = "ANY"
+Validate allowed values
+
+Reject or normalize unexpected values so only:
+
+"ALL"
+"ANY"
+
+are stored.
+
+Preserve existing rule validation
+
+Field validation for:
+
+when_to_offer
+blocked_if
+
+should continue to work exactly as before, but now the logic fields should also be included in the normalized treatment object.
+
+Persistence changes
+
+Where treatments are saved, ensure both logic fields are persisted.
+
+If current storage already saves treatment JSON blobs, include the new properties there.
+
+If schema/types need updating, add the two fields to the relevant interfaces/types used by:
+
+backend route contracts
+frontend treatment editor state
+AI-generated draft structures
+
+Keep this minimal and backward-compatible.
+
+UI changes
+1) when_to_offer
+
+Keep the current selector, but wire it explicitly to:
+
+when_to_offer_logic
+
+Meaning:
+
+All conditions → "ALL"
+Any condition → "ANY"
+
+Do not rely on local-only UI state if the treatment object already carries this value.
+
+2) blocked_if
+
+Add the same selector UI:
+
+All conditions
+Any condition
+
+Bind it to:
+
+blocked_if_logic
+
+Meaning:
+
+All conditions → "ALL"
+Any condition → "ANY"
+Default UI behavior
+
+If an existing treatment has no blocked_if_logic, show:
+
+Any condition
+
+because that matches current expected behavior.
+
+3) Display/edit behavior
+
+When loading a treatment:
+
+if logic field exists, use it
+if missing, use default
+
+When editing:
+
+changing the selector should update the treatment model immediately
+no rule rows should be lost just because logic mode changes
+Rule evaluation behavior
+
+Wherever the treatment logic is actually evaluated, make grouping semantics explicit:
+
+when_to_offer
+"ALL" = every rule in the group must be true
+"ANY" = at least one rule in the group must be true
+blocked_if
+"ALL" = every rule in the blocker group must be true
+"ANY" = at least one blocker being true blocks the treatment
+Effective decision
+
+Recommended evaluation pattern:
+
+isEligible =
+  evaluateGroup(when_to_offer, when_to_offer_logic) &&
+  !evaluateGroup(blocked_if, blocked_if_logic)
+
+Define empty-group behavior carefully:
+
+empty when_to_offer should likely evaluate to true
+empty blocked_if should likely evaluate to false
+
+Please preserve existing behavior if already defined, but make it explicit.
+
+Backward compatibility
+
+This is important.
+
+Older saved treatments may not have these fields. Do not break them.
+
+Required fallback behavior
+
+If fields are missing:
+
+when_to_offer_logic = "ALL"
+blocked_if_logic = "ANY"
+
+This fallback should be applied everywhere relevant:
+
+AI draft normalization
+treatment loading
+UI rendering
+evaluation
+Tests
+
+Add focused tests only.
+
+Backend tests
+AI normalization default test
+input treatment draft missing logic fields
+normalized result includes:
+when_to_offer_logic: "ALL"
+blocked_if_logic: "ANY"
+Explicit logic preservation test
+AI draft includes:
+when_to_offer_logic: "ANY"
+blocked_if_logic: "ALL"
+normalized treatment preserves both values
+Evaluation semantics test
+confirm ALL vs ANY behavior differs correctly for both groups
+Frontend/UI tests if present
+When to Offer selector binding
+toggling selector updates when_to_offer_logic
+Blocked If selector binding
+toggling selector updates blocked_if_logic
+
+You do not need to add a large new test suite. Just cover the new logic behavior.
+
+Suggested implementation areas
+
+Likely files to update:
+
+server/ai-engine.ts
+server/routes.ts
+treatment-related shared types in shared/schema.ts or equivalent
+frontend treatment editor component(s)
+any evaluator/helper that computes treatment eligibility
+tests for normalization/evaluation/UI bindings
+Acceptance criteria
+AI treatment draft output supports:
+when_to_offer_logic
+blocked_if_logic
+Backend accepts, normalizes, validates, and persists both fields
+Existing treatments without these fields still work via defaults
+when_to_offer UI reads/writes "ALL" / "ANY"
+blocked_if UI now also reads/writes "ALL" / "ANY"
+Treatment evaluation uses explicit group logic instead of implicit assumptions
+Tests pass for defaulting, preservation, and evaluation semantics
+Keep this simple
+
+Do not build nested logic or a full expression engine.
+
+This task is only about making the current flat rule groups explicit and consistent across:
+
+AI extraction
+backend storage
+UI editing
+rule evaluation
