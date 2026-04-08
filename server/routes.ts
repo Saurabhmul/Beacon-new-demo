@@ -852,14 +852,15 @@ export async function registerRoutes(
         const pack = await storage.getPolicyPack(clientConfig.id);
         if (!pack) return res.status(400).json({ error: "No policy pack found — save your policy configuration first" });
 
-        const { default: pdfParse } = await import("pdf-parse");
+        const { PDFParse } = await import("pdf-parse");
         const textParts: string[] = [];
 
         for (const file of files) {
           let text = "";
           try {
-            const parsed = await pdfParse(file.buffer);
-            text = parsed.text?.trim() || "";
+            const parser = new (PDFParse as any)({ data: file.buffer });
+            const result = await parser.getText();
+            text = (result?.text ?? result ?? "").toString().trim();
           } catch {
             text = "";
           }
