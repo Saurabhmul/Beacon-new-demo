@@ -13,6 +13,7 @@ import { db } from "./db";
 import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
+import { normalizeFieldLabel, buildFullFieldCatalog } from "./field-catalog";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
 import { assemblePrompt, assemblePreview, formatCustomerData, clearTemplateCache } from "./lib/prompt/assemble-prompt";
 import { seedDatabase } from "./seed";
@@ -767,33 +768,16 @@ export async function registerRoutes(
   app.get("/api/policy-fields", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
-      const dataConfig = await storage.getDataConfig(companyId!);
-      const categoryData = (dataConfig?.categoryData as Record<string, { fieldAnalysis?: { fieldName: string; ignored: boolean; beaconsUnderstanding?: string }[] }>) || {};
-      const sourceFields: PolicyFieldDto[] = [];
-      for (const [, catEntry] of Object.entries(categoryData)) {
-        if (catEntry?.fieldAnalysis && Array.isArray(catEntry.fieldAnalysis)) {
-          for (const f of catEntry.fieldAnalysis) {
-            if (!f.ignored && f.fieldName) {
-              const id = `source:${f.fieldName}`;
-              if (!sourceFields.find(sf => sf.id === id)) {
-                sourceFields.push({
-                  id,
-                  label: f.fieldName,
-                  description: f.beaconsUnderstanding ?? null,
-                  sourceType: "source_field",
-                  derivationConfig: null,
-                  derivationSummary: null,
-                });
-              }
-            }
-          }
-        }
-      }
-      sourceFields.sort((a, b) => a.label.localeCompare(b.label));
-      const dbFields = await storage.getPolicyFields(companyId!);
-      const businessFields: PolicyFieldDto[] = dbFields.filter(f => f.sourceType === "business_field").map(toFieldDto);
-      const derivedFields: PolicyFieldDto[] = dbFields.filter(f => f.sourceType === "derived_field").map(toFieldDto);
-      res.json([...sourceFields, ...businessFields, ...derivedFields]);
+      const catalog = await buildFullFieldCatalog(companyId, storage);
+      const result: PolicyFieldDto[] = catalog.map(f => ({
+        id: f.id ?? `source:${f.label}`,
+        label: f.label,
+        description: f.description ?? null,
+        sourceType: f.sourceType,
+        derivationConfig: f.derivationConfig ?? null,
+        derivationSummary: f.derivationSummary ?? null,
+      }));
+      res.json(result);
     } catch (error) {
       console.error("Get policy fields error:", error);
       res.status(500).json({ error: "Failed to fetch policy fields" });
@@ -912,12 +896,12 @@ export async function registerRoutes(
         }
 
         const sopBundle = textParts.join("\n\n");
-        const fieldRecords = await storage.getPolicyFields(companyId);
-        const fieldCatalog = fieldRecords.map(f => ({
+        const fullCatalog = await buildFullFieldCatalog(companyId, storage);
+        const fieldCatalog = fullCatalog.map(f => ({
           label: f.label,
           sourceType: f.sourceType,
-          description: f.description,
-          derivationSummary: f.derivationSummary,
+          description: f.description?.slice(0, 200) ?? null,
+          derivationSummary: f.sourceType === "derived_field" ? (f.derivationSummary?.slice(0, 200) ?? null) : null,
         }));
 
         console.log(`[generate-treatment-draft] [${requestId}] company=${companyId} pack=${pack.id} files=${files.length} fields=${fieldCatalog.length}`);
@@ -926,7 +910,7 @@ export async function registerRoutes(
 
         console.log(`[generate-treatment-draft] [${requestId}] ai_output treatments=${draftResponse.treatments.length} open_questions=${draftResponse.open_questions.length}`);
 
-        const fieldByLabelLower = new Map(fieldRecords.map(f => [f.label.toLowerCase().trim(), f]));
+        const fieldByLabelLower = new Map(fullCatalog.map(f => [normalizeFieldLabel(f.label), f]));
 
         const VALID_OPERATORS = new Set(["=", "!=", ">", ">=", "<", "<=", "contains", "in", "not_in", "is_true", "is_false"]);
 
@@ -940,9 +924,9 @@ export async function registerRoutes(
           .map(t => ({
             ...t,
             source_fields: t.source_fields.reduce((acc: typeof t.source_fields, sf) => {
-              const resolved = fieldByLabelLower.get(sf.field_name.toLowerCase().trim());
+              const resolved = fieldByLabelLower.get(normalizeFieldLabel(sf.field_name));
               const canonicalName = resolved ? resolved.label : sf.field_name;
-              if (!acc.some(x => x.field_name.toLowerCase() === canonicalName.toLowerCase())) {
+              if (!acc.some(x => normalizeFieldLabel(x.field_name) === normalizeFieldLabel(canonicalName))) {
                 acc.push({ ...sf, field_name: canonicalName, matched_existing_field: !!resolved });
               }
               return acc;
@@ -962,21 +946,24 @@ export async function registerRoutes(
         for (const t of normalizedTreatments) {
           for (const sf of t.source_fields) {
             if (!sf.matched_existing_field) {
-              validationErrors.push(`Source field "${sf.field_name}" suggested for treatment "${t.name}" is not in your Beacon field catalog. Please add it to your Data Configuration first, then regenerate.`);
+              console.warn("[treatment-draft] unresolved field", { companyId, treatment: t.name, section: "source_fields", field: sf.field_name });
+              validationErrors.push(`Source field "${sf.field_name}" suggested for treatment "${t.name}" is not found in the company field catalog. Add it in Data Configuration or create it as a business/derived field, then regenerate.`);
             }
           }
           for (const r of t.when_to_offer) {
             if (!VALID_OPERATORS.has(r.operator)) {
               validationErrors.push(`Invalid operator "${r.operator}" in "When to Offer" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
-            } else if (!fieldByLabelLower.has(r.field_name.toLowerCase().trim())) {
-              validationErrors.push(`Unresolved field "${r.field_name}" in "When to Offer" rule for treatment "${t.name}". Please configure this field in your Data Configuration first.`);
+            } else if (!fieldByLabelLower.has(normalizeFieldLabel(r.field_name))) {
+              console.warn("[treatment-draft] unresolved field", { companyId, treatment: t.name, section: "when_to_offer", field: r.field_name });
+              validationErrors.push(`Unresolved field "${r.field_name}" in "When to Offer" rule for treatment "${t.name}". Please add this field to the company field catalog in Data Configuration or as a business/derived field.`);
             }
           }
           for (const r of t.blocked_if) {
             if (!VALID_OPERATORS.has(r.operator)) {
               validationErrors.push(`Invalid operator "${r.operator}" in "Blocked If" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
-            } else if (!fieldByLabelLower.has(r.field_name.toLowerCase().trim())) {
-              validationErrors.push(`Unresolved field "${r.field_name}" in "Blocked If" rule for treatment "${t.name}". Please configure this field in your Data Configuration first.`);
+            } else if (!fieldByLabelLower.has(normalizeFieldLabel(r.field_name))) {
+              console.warn("[treatment-draft] unresolved field", { companyId, treatment: t.name, section: "blocked_if", field: r.field_name });
+              validationErrors.push(`Unresolved field "${r.field_name}" in "Blocked If" rule for treatment "${t.name}". Please add this field to the company field catalog in Data Configuration or as a business/derived field.`);
             }
           }
         }
