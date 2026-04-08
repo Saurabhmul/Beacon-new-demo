@@ -962,6 +962,10 @@ export async function registerRoutes(
             }
           }
         }
+        if (normalizedTreatments.length === 0) {
+          console.log(`[generate-treatment-draft] [${requestId}] validation=failed reason=empty_output`);
+          return res.status(422).json({ error: "No treatments could be generated from the uploaded documents. Please check that the SOP files contain identifiable treatment policies and try again." });
+        }
         if (validationErrors.length > 0) {
           console.log(`[generate-treatment-draft] [${requestId}] validation=failed errors=${validationErrors.length}`);
           return res.status(422).json({ error: validationErrors[0], details: validationErrors });

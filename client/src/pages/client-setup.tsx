@@ -1414,7 +1414,10 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
     }
   }
 
+  const isGenerating = generationStage !== "idle" && generationStage !== "error" && generationStage !== "complete";
+
   async function runGeneration(files: File[]) {
+    if (isGenerating) return;
     clearStageTimers();
     setGenerationError(null);
     setSopFiles(files);
@@ -1545,9 +1548,10 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                 <Button
                   variant={showUploadPanel ? "secondary" : "outline"}
                   size="sm"
-                  onClick={() => { setShowUploadPanel(v => !v); if (showUploadPanel) { setSopFiles([]); setGenerationStage("idle"); setGenerationError(null); } }}
+                  disabled={isGenerating}
+                  onClick={() => { if (isGenerating) return; setShowUploadPanel(v => !v); if (showUploadPanel) { setSopFiles([]); setGenerationStage("idle"); setGenerationError(null); } }}
                   data-testid="button-toggle-upload">
-                  <FileUp className="w-3.5 h-3.5 mr-1" />Upload SOP PDFs
+                  <FileUp className="w-3.5 h-3.5 mr-1" />{isGenerating ? "Generating…" : "Upload SOP PDFs"}
                 </Button>
                 <Button size="sm" onClick={() => setAddDialogOpen(true)} data-testid="button-add-treatment">
                   <Plus className="w-3.5 h-3.5 mr-1" />Add Treatment
