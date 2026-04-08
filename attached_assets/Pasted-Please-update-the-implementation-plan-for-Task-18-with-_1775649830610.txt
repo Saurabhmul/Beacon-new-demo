@@ -1,0 +1,82 @@
+Please update the implementation plan for Task #18 with the following improvements before coding:
+
+Add these requirements to the plan
+Introduce a shared category-aware interpretation framework
+Do not implement category awareness as scattered if/else checks.
+Create a reusable structure for category profiles used by the Data Configuration CSV upload pipeline.
+Each profile should define:
+category label aliases
+domain glossary terms
+category weighting keywords
+category-specific fallback hints
+category-specific weak-description expectations
+Define a strict return contract for the field-understanding pipeline
+Refactor analyzeCategoryFields() so it returns a structured object, not just final field descriptions.
+Include:
+results
+weakFields
+repairedFields
+fallbackFields
+telemetry
+This is required for observability and debugging at scale.
+Make merge precedence explicit
+Resolution order must be:
+first-pass AI result if valid and not weak
+repair-pass AI result if valid and not weak
+domain-aware fallback only if unresolved
+Once a field is resolved by a stronger stage, it must never be overwritten by a weaker stage.
+Add prompt-size protection
+Because enriched per-column evidence can make prompts too large, implement prompt-budget controls:
+cap sample values per column
+truncate long text samples
+include distinct values only for low-cardinality columns
+avoid sending redundant evidence
+log prompt character count and evidence reduction decisions
+This is mandatory for scale.
+Add robust internal header normalization
+Use normalized matching internally for validation and merge logic.
+Preserve the exact original uploaded header in the returned fieldName.
+Matching must tolerate differences in case, spacing, punctuation, snake_case, and camelCase.
+Add a minimum business-specificity rule
+A description should only pass quality checks if it contains actual business meaning, not just datatype meaning.
+Passing descriptions must indicate at least one of:
+what the field represents operationally
+how it is used
+why it matters in collections / payments / conversations / servicing
+a treatment or compliance implication
+Add realistic category fixture examples in code comments or sample constants
+Since full automated tests are out of scope, include realistic sample schemas for:
+Loan / Account Data
+Payment Data
+Conversation / Contact Data
+Customer Data
+Arrangement / Forbearance Data
+These should be included near the pipeline code for future maintenance and regression checking.
+Expand observability to include timing
+In addition to current counts, structured logs must include:
+stage duration
+total pipeline duration
+Required log outputs:
+category
+header count
+evidence count
+first-pass valid count
+first-pass weak count
+repair requested count
+repair recovered count
+fallback count
+fallback percent
+duration by stage
+Add confidence calibration safeguards
+Do not rely only on model-reported confidence.
+Confidence should be constrained by evidence quality:
+sparse or ambiguous evidence should prevent High confidence
+clear header + consistent values can allow High
+This is to reduce overconfident hallucinated interpretations.
+Keep architecture clean
+The route should only prepare upload-derived evidence.
+Shared interpretation, validation, repair, fallback, and category logic should live in shared engine/utilities.
+Do not bury category logic inside route handlers.
+Then revise the plan accordingly and implement against the revised plan.
+
+Do not simplify the solution into prompt-only changes. Keep this as a shared platform-level fix for the Data Configuration CSV upload engine across all supported categories.

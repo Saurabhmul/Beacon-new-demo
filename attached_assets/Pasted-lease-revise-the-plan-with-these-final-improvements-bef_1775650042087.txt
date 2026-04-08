@@ -1,0 +1,48 @@
+lease revise the plan with these final improvements before implementation:
+
+Strengthen the return contract
+Do not make weakFields, repairedFields, and fallbackFields just arrays of header names.
+Each should contain structured per-field records including at least:
+fieldName
+stage
+confidence
+reason or qualityFailureReason where applicable
+This is required for observability and debugging.
+Make confidence calibration rules more explicit
+Define ambiguous headers concretely as names dominated by generic tokens such as:
+status, type, flag, code, ref, date, amount, value, indicator
+unless supported by stronger domain terms
+Define sparse evidence concretely, for example:
+fewer than 2 non-empty values
+or null/empty rate above 80%
+Use these explicit rules when capping confidence.
+Define prompt-budget reduction order
+If enriched evidence makes the prompt too large, reduce prompt size in this exact order:
+reduce distinct values
+reduce sample values
+remove low-value evidence such as redundant numeric range
+batch the request only as a last resort
+Log which reduction step was applied.
+Make business-specificity measurable
+Implement hasBusinessSpecificity() using concrete signals, not just subjective judgment.
+A passing description should contain at least one of:
+an operational noun phrase like account, payment, customer, contact, arrangement, arrears, balance, transaction
+a usage phrase like “used to”, “helps”, “tracks”, “indicates”, “determines”, “affects”
+a treatment/compliance implication like “may affect collections activity”, “used in servicing”, or similar
+Descriptions lacking these signals should fail quality even if they are grammatically correct.
+Add unresolved-field telemetry
+In addition to fallback count, log which fields remain Low confidence after all stages.
+Include a count and list in telemetry so recurring weak spots can be tracked by category.
+Centralize quality evaluation
+Create a single shared evaluator function, e.g. evaluateFieldUnderstandingQuality(), that performs:
+weak-description detection
+business-specificity validation
+confidence clamping
+final accept/reject decision
+Use this evaluator consistently in first pass, repair pass, and fallback acceptance.
+Add unknown-category behavior explicitly
+If a category does not match a known profile, map it to the generic profile.
+Still run the full pipeline.
+Log categoryProfile=generic so this is visible in telemetry.
+
+Please update the plan with these additions and then implement against the revised version.

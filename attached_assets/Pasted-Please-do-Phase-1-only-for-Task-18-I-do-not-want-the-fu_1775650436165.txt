@@ -1,0 +1,139 @@
+Please do Phase 1 only for Task #18.
+
+I do not want the full platform rewrite yet. I want the smallest high-impact version that materially improves field-description quality in the Data Configuration CSV upload flow without over-engineering the solution.
+
+Goal of Phase 1
+
+When a customer uploads a CSV in Data Configuration, Beacon should produce much stronger 1–2 line field descriptions with minimal architecture change.
+
+This Phase 1 should solve the current weak-output problem for:
+
+Loan / Account Data
+Payment Data
+Conversation / Contact Data
+Customer Data
+Arrangement / Forbearance Data
+
+But it should do so with a pragmatic implementation, not a heavy framework.
+
+What to do in Phase 1
+1) Replace the current first-pass prompt
+
+Update the existing AI prompt so it is much stronger and explicitly:
+
+uses the uploaded category context
+uses both header names and sample values
+asks for business meaning, not datatype meaning
+forbids weak outputs like “Date field”, “Boolean flag”, “Currency amount in GBP”, “Reference identifier”
+returns exact JSON with original field names
+
+This is the single biggest improvement and must be done.
+
+2) Improve the evidence sent to AI, but keep it lightweight
+
+Do not build a full evidence framework yet.
+
+Just upgrade the current sample extraction so the AI gets, per column:
+
+a few non-empty sample values
+simple inferred type if easy to compute
+distinct values only for obvious low-cardinality fields if this is easy
+
+Keep this lightweight. No heavy prompt-budget architecture yet.
+
+3) Add one repair pass for weak or missing fields
+
+After the first AI pass:
+
+validate the response
+identify weak, invalid, or missing field descriptions
+make one second AI call only for those fields
+merge repaired results back in
+
+This is mandatory for Phase 1.
+
+4) Strengthen weak-description detection
+
+Improve the weak-description filter so it catches obvious bad outputs such as:
+
+“Date field”
+“Boolean flag”
+“Reference identifier”
+“Status indicator”
+“Currency amount in GBP”
+“Field named X”
+descriptions that only restate datatype or header name
+
+Keep this rule-based and practical.
+
+5) Improve fallback text, but keep it simple
+
+If both AI passes fail, fallback should still sound reasonably business-aware.
+
+Do not build a full domain-vocabulary engine yet.
+
+Just improve the current fallback so it generates cautious descriptions like:
+
+“Likely indicates whether this account or treatment status is currently active, which may affect collections handling.”
+“Likely a payment-related monetary amount recorded in GBP, used in repayment or arrears analysis.”
+
+Fallback should remain last resort.
+
+6) Keep merge precedence simple and explicit
+
+Use this resolution order:
+
+first-pass AI result if valid and not weak
+repair-pass AI result if valid and not weak
+fallback only if still unresolved
+
+Do not let a weaker stage overwrite a stronger one.
+
+7) Add basic logging only
+
+Add lightweight logs for:
+
+category
+number of fields
+first-pass weak count
+whether repair was triggered
+how many fields repair recovered
+fallback count
+
+Keep logging useful but minimal. No full telemetry framework yet.
+
+What not to do yet
+
+Do not do these in Phase 1:
+
+do not build a full category profile registry
+do not create a generic/future-category framework
+do not create a large shared telemetry contract
+do not create a complex structured return type with multiple record classes
+do not build prompt-budget reduction infrastructure unless absolutely necessary
+do not implement advanced confidence clamping logic
+do not build a centralized evaluator framework unless it is tiny and clearly useful
+do not add extensive fixture libraries
+do not do a broad architecture rewrite beyond what is needed for the above improvements
+Implementation preference
+
+I want a pragmatic improvement, not a platform redesign.
+
+Use the current code structure as much as possible and make targeted changes in:
+
+server/ai-engine.ts
+server/routes.ts
+
+Only extract helpers if they make the code clearly simpler.
+
+Done for Phase 1 looks like
+
+Phase 1 is complete when:
+
+the uploaded test CSV no longer produces weak descriptions like “Currency amount in GBP” or “Boolean flag”
+payment files get payment-oriented descriptions
+conversation/contact files get communication-oriented descriptions
+one repair AI pass runs automatically for weak fields
+fallback is noticeably better and less embarrassing
+logs show whether first pass, repair, and fallback were used
+the implementation is materially better without becoming a large architecture project
