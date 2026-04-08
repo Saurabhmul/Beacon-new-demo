@@ -843,7 +843,7 @@ export async function analyzeCategoryFields(
   const firstPassResponse = await ai.models.generateContent({
     model: "gemini-2.5-pro",
     contents: [{ role: "user", parts: [{ text: firstPassPrompt }] }],
-    config: { maxOutputTokens: 4096, responseMimeType: "application/json" },
+    config: { maxOutputTokens: 16384, responseMimeType: "application/json" },
   });
 
   const firstPassRaw = firstPassResponse.text || "";
@@ -870,7 +870,7 @@ export async function analyzeCategoryFields(
     const repairResponse = await ai.models.generateContent({
       model: "gemini-2.5-pro",
       contents: [{ role: "user", parts: [{ text: repairPrompt }] }],
-      config: { maxOutputTokens: 4096, responseMimeType: "application/json" },
+      config: { maxOutputTokens: 16384, responseMimeType: "application/json" },
     });
 
     const repairRaw = repairResponse.text || "";
