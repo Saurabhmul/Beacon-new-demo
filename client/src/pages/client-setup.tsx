@@ -1233,12 +1233,12 @@ const SOP_STAGE_ORDER = ["uploading", "extracting", "field_matching", "ai_genera
 type SopStageId = typeof SOP_STAGE_ORDER[number];
 type SopGenerationStage = "idle" | SopStageId | "complete" | "error";
 const SOP_STAGE_LABELS: Record<SopStageId, string> = {
-  uploading: "Uploading files to server",
-  extracting: "Extracting text from PDFs",
-  field_matching: "Matching against policy field catalog",
-  ai_generating: "AI generating treatment draft",
+  uploading: "Uploading PDF files",
+  extracting: "Reading policy documents",
+  field_matching: "Matching policy language to your field catalog",
+  ai_generating: "Generating treatment rules with AI",
   validating: "Validating AI output",
-  saving: "Saving treatments to database",
+  saving: "Saving treatments",
 };
 
 const PRELOADED_TREATMENTS = [
@@ -1571,7 +1571,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
               <>
                 <div>
                   <p className="text-sm font-medium">Upload SOP / Policy PDFs</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Select one or more PDF policy documents. Generation starts automatically once you pick your files.</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Upload one or more PDF policy documents. Beacon will generate treatment rules using your configured fields.</p>
                 </div>
                 {generationError && (
                   <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md p-2">
@@ -1588,38 +1588,13 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                 <Button size="sm" variant="ghost" className="text-muted-foreground"
                   onClick={() => { setShowUploadPanel(false); setSopFiles([]); setGenerationError(null); }}>Cancel</Button>
               </>
-            ) : generationStage === "error" ? (
-              <>
-                <div>
-                  <p className="text-sm font-medium">Generation failed</p>
-                  {sopFiles.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {sopFiles.map((f, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <FileText className="w-3 h-3 shrink-0" />
-                          <span className="truncate max-w-xs">{f.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md p-2">
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <span>{generationError}</span>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={() => runGeneration(sopFiles)} data-testid="button-retry-generation">
-                    <RefreshCw className="w-3.5 h-3.5 mr-1" />Retry
-                  </Button>
-                  <Button size="sm" variant="outline"
-                    onClick={() => { setShowUploadPanel(false); setSopFiles([]); setGenerationStage("idle"); setGenerationError(null); }}>Cancel</Button>
-                </div>
-              </>
             ) : (
               <>
                 <div>
-                  <p className="text-sm font-medium">{generationStage === "complete" ? "Treatments generated!" : "Generating treatments from SOP…"}</p>
-                  {sopFiles.length > 0 && generationStage !== "complete" && (
+                  <p className="text-sm font-medium">
+                    {generationStage === "complete" ? "Treatments generated!" : generationStage === "error" ? "Generation failed" : "Generating treatments from SOP…"}
+                  </p>
+                  {sopFiles.length > 0 && generationStage !== "complete" && generationStage !== "error" && (
                     <div className="mt-1.5 space-y-0.5">
                       {sopFiles.map((f, i) => (
                         <div key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -1639,14 +1614,29 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                         {status === "current" && <Loader2 className="w-4 h-4 text-primary shrink-0 animate-spin" />}
                         {status === "pending" && <Circle className="w-4 h-4 text-muted-foreground/30 shrink-0" />}
                         {status === "error" && <AlertTriangle className="w-4 h-4 text-destructive shrink-0" />}
-                        <span className={`text-xs ${status === "done" ? "text-green-700 dark:text-green-400" : status === "current" ? "text-foreground font-medium" : status === "error" ? "text-destructive" : "text-muted-foreground/50"}`}>
+                        <span className={`text-xs ${status === "done" ? "text-green-700 dark:text-green-400" : status === "current" ? "text-foreground font-medium" : status === "error" ? "text-destructive font-medium" : "text-muted-foreground/50"}`}>
                           {SOP_STAGE_LABELS[stageId]}
                         </span>
                       </div>
                     );
                   })}
                 </div>
-                {generationStage !== "complete" && (
+                {generationStage === "error" && generationError && (
+                  <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md p-2">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{generationError}</span>
+                  </div>
+                )}
+                {generationStage === "error" && (
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => runGeneration(sopFiles)} data-testid="button-retry-generation">
+                      <RefreshCw className="w-3.5 h-3.5 mr-1" />Retry
+                    </Button>
+                    <Button size="sm" variant="outline"
+                      onClick={() => { setShowUploadPanel(false); setSopFiles([]); setGenerationStage("idle"); setGenerationError(null); }}>Cancel</Button>
+                  </div>
+                )}
+                {generationStage !== "complete" && generationStage !== "error" && (
                   <p className="text-[11px] text-muted-foreground italic">Keep this page open — generation may take 20–60 seconds.</p>
                 )}
               </>

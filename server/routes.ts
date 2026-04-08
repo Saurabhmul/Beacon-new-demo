@@ -930,10 +930,14 @@ export async function registerRoutes(
           }, [])
           .map(t => ({
             ...t,
-            source_fields: t.source_fields.map(sf => ({
-              ...sf,
-              matched_existing_field: sourceFieldLabels.has(sf.field_name.toLowerCase().trim()),
-            })),
+            source_fields: t.source_fields.map(sf => {
+              const resolved = fieldByLabelLower.get(sf.field_name.toLowerCase().trim());
+              return {
+                ...sf,
+                field_name: resolved ? resolved.label : sf.field_name,
+                matched_existing_field: !!resolved,
+              };
+            }),
             derived_fields: t.derived_fields.reduce((acc: typeof t.derived_fields, df) => {
               if (!acc.some(x => x.field_name.toLowerCase() === df.field_name.toLowerCase())) acc.push(df);
               return acc;
@@ -944,7 +948,7 @@ export async function registerRoutes(
             }, []),
           }));
 
-        // Pre-validation: validate all operators and resolve all rule field references before DB write
+        // Pre-validation: validate operators and resolve all rule field references before DB write
         const validationErrors: string[] = [];
         for (const t of normalizedTreatments) {
           for (const r of t.when_to_offer) {
