@@ -1,0 +1,128 @@
+Add a proper progress experience for SOP → Treatment generation
+
+The current plan should be enhanced so the user is clearly informed throughout long-running SOP processing. A single spinner with “Generating treatments…” is not enough for this workflow because PDF extraction, AI generation, validation, and overwrite can take noticeable time.
+
+Please implement a step-based progress UI for Section B so users always understand what is happening, that the upload succeeded, and that the system is actively progressing.
+
+Product requirement
+
+After the user selects PDF files, Beacon should immediately show a visible processing panel in Section B. This panel should remain visible until the flow completes or fails.
+
+The progress UI should show these stages in order:
+
+Uploading PDF files
+Reading policy documents
+Matching against your configured fields
+Generating treatment draft with AI
+Validating and preparing treatments
+Updating Section B
+
+Each stage must have one of these statuses:
+
+pending
+in progress
+complete
+failed
+
+Only the current active stage should show a spinner. Completed stages should show a success/check state. Failed stages should show an error state with a clear message.
+
+User-facing behavior
+
+Immediately after file selection:
+
+show the selected PDF file names
+show the progress panel
+mark the first stage as active
+
+While processing:
+
+disable repeat uploads
+disable overwrite actions while the request is active
+do not leave the page looking frozen
+do not show only a generic spinner
+
+After success:
+
+show all stages as complete
+then render the treatment cards
+keep the existing review banner:
+“AI generated this draft from uploaded SOP PDFs using your configured Beacon fields. Please review before saving.”
+
+After failure:
+
+stop the progress flow at the failed step
+show a specific error message, such as:
+one of the uploaded PDFs could not be read
+AI response validation failed
+no treatments could be generated from the uploaded SOPs
+Recommended implementation approach
+For this iteration
+
+Implement a frontend progress state model, even if the backend request remains synchronous.
+
+Suggested frontend generation states:
+
+idle
+uploading
+extracting
+field_matching
+ai_generating
+validating
+saving
+success
+error
+
+Use these states to drive the visible stepper in the UI.
+
+Even if some backend substeps happen inside one request, the frontend should still map the request lifecycle into these stages so the user sees meaningful progress instead of a blank wait.
+
+Better implementation if feasible
+
+Preferred architecture:
+
+create a generation job on upload
+return a jobId
+poll a status endpoint every 1–2 seconds
+backend returns real stage updates such as:
+queued
+extracting
+field_matching
+ai_generating
+validating
+saving
+completed
+failed
+
+This is the better long-term design because progress becomes real backend progress, not simulated frontend state.
+
+UI copy recommendation
+
+Use these messages directly in the progress panel:
+
+Uploading PDF files…
+Reading policy documents…
+Matching policy language to your configured Beacon fields…
+Generating treatment draft with AI…
+Validating treatment rules…
+Updating Section B…
+
+Also add a small helper message:
+
+“This may take a short while for larger PDFs. Please keep this page open while treatments are being generated.”
+
+Do not show a countdown or time estimate.
+
+State handling requirements
+If overwrite confirmation is needed, do not begin processing until the user confirms
+If the user cancels overwrite, clear the file selection and reset the progress state
+After successful regeneration, replace the local treatment list entirely from the server response
+On failure, keep the previous treatments untouched and keep the error visible until dismissed or a new upload begins
+Acceptance criteria for progress UX
+Selecting PDFs immediately shows a visible progress panel.
+The UI shows step-by-step progress, not only a spinner.
+The user can always see which stage is currently running.
+Success shows completed stages and then populated treatments.
+Failure shows the failed stage and a clear error message.
+Repeat upload actions are disabled while processing is active.
+Existing treatments remain unchanged if processing fails.
+The overwrite warning appears before processing begins when treatments already exist.

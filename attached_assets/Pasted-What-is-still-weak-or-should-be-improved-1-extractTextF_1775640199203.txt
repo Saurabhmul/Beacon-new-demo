@@ -1,0 +1,176 @@
+What is still weak or should be improved
+1) extractTextFromImage as fallback for bad PDFs is probably the wrong abstraction
+
+This is the main thing I would tighten.
+
+The plan says:
+
+PDF parse first
+fallback to Gemini vision via extractTextFromImage
+
+Problem:
+
+a PDF is not an image
+if the existing helper is designed for images, the naming and abstraction are misleading
+implementation may become awkward or brittle
+Recommendation
+
+Tell Replit to introduce a more generic fallback function, such as:
+
+extractTextFromPdfWithVision(...)
+or
+extractTextWithGeminiVision(...)
+
+Even if internally it renders PDF pages as images, the abstraction should be PDF-aware.
+
+That will make the code cleaner and easier to maintain.
+
+2) The “under 100 characters or obviously garbled” rule is too vague
+
+This is directionally right, but “obviously garbled” is not implementation-safe.
+
+Recommendation
+
+Define a clearer fallback threshold, for example:
+Fallback to Gemini vision when any of the following are true:
+
+extracted text is empty
+extracted text is under 100 non-whitespace characters
+extracted text has a very low ratio of alphanumeric characters
+extracted text contains repeated malformed encoding patterns
+extracted text extraction throws an error
+
+That gives Replit something concrete.
+
+3) aiRawOutput debug field on the DB record is slightly underspecified
+
+This part needs one more sentence.
+
+Questions still open:
+
+Which record?
+treatments?
+policy pack?
+separate generation log table?
+one field shared across many runs?
+Recommendation
+
+For v1, simplest clean option:
+
+add lastAiGenerationRawOutput and lastAiGenerationAt on the policy pack
+or
+create a small policy_pack_generation_logs table
+
+If schema changes should stay minimal, storing it on the policy pack is the easiest answer.
+
+Right now the plan says “if needed,” but Replit may interpret that inconsistently.
+
+4) Fully editable treatment cards may still be too broad
+
+You wrote:
+
+treatment cards remain fully editable
+Source Fields read-only
+Derived/Business editable
+
+That is mostly good, but “fully editable” can still be misread.
+
+Recommendation
+
+Say this more precisely:
+
+treatment name and description editable
+when_to_offer / blocked_if editable through existing rule builder
+source fields read-only
+derived/business fields editable as lightweight text lists
+
+That avoids over-expansion.
+
+5) The plan should mention response schema enforcement more explicitly
+
+It says “validate JSON shape,” which is good, but I would make it stronger.
+
+Recommendation
+
+Tell Replit to use a strict schema validator such as:
+
+Zod
+or equivalent runtime validation
+
+Why:
+
+AI outputs often look valid but contain subtle typing issues
+a proper parser will reduce bugs significantly
+
+This is not a criticism, just a worthwhile strengthening.
+
+6) It should say how field matching is handled
+
+Right now it says source fields must exist in field catalog, which is correct.
+But it does not clearly say whether matching should be by:
+
+exact field name
+normalized name
+alias
+display label
+Recommendation
+
+Add:
+
+source field references should resolve against canonical Beacon field names
+optionally allow normalized case-insensitive matching during validation
+but save only the canonical field name
+
+This will prevent weird field mismatches.
+
+7) It may need one more acceptance rule around idempotence
+
+Small but useful.
+
+Recommendation
+
+If the same PDFs are uploaded twice, the system should regenerate consistently and replace the treatment set cleanly, without duplicates or orphaned rule groups.
+
+That is implied, but worth stating.
+
+What I would improve in the wording
+
+Here are the exact upgrades I would suggest adding to the plan:
+
+Add under Tasks / extraction pipeline
+
+Replace:
+
+“fall back to Gemini vision (extractTextFromImage) only if extracted text is empty, under 100 characters, or obviously garbled”
+
+With:
+
+“fall back to a PDF-aware Gemini vision extraction path only if direct extraction fails, returns empty text, returns fewer than 100 non-whitespace characters, or fails basic text-quality checks”
+Add under AI validation
+
+Add:
+
+“Use strict runtime schema validation for the Gemini response before normalization and persistence.”
+Add under field validation
+
+Add:
+
+“Resolve source field references against canonical Beacon field names, allowing normalized case-insensitive matching during validation, but persist only canonical field names.”
+Add under DB/debugging
+
+Replace:
+
+“store it in a scoped aiRawOutput debug field on the DB record if needed”
+
+With:
+
+“store raw AI output in a company-scoped, policy-pack-scoped debug field or generation log record for troubleshooting; do not rely on console logs for raw output”
+Add under editability
+
+Replace:
+
+“Treatment cards are populated and remain fully editable”
+
+With:
+
+“Treatment cards are populated and remain editable within v1 boundaries: treatment metadata editable, existing rule builders editable, source fields read-only, and derived/business field suggestions editable as lightweight text fields”

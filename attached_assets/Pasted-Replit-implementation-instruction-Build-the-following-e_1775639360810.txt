@@ -1,0 +1,299 @@
+Replit implementation instruction
+
+Build the following enhancement in the Beacon codebase for Section B: Treatments.
+
+Goal
+
+Allow a client to upload one or more SOP / policy documents in Section B, in multiple formats, and automatically generate the treatment draft using AI.
+
+The AI must use:
+
+the uploaded SOP files
+the client’s existing configured Beacon field catalog
+
+The AI must return a ready-to-fill treatment structure with:
+
+Treatment
+When to Offer
+Blocked If
+Source Fields
+Derived Fields
+Business Fields
+
+The generated treatments must then appear in Section B and remain editable by the client.
+
+Functional requirements
+1. Upload behavior
+
+In Section B, replace the current single-file SOP upload behavior with:
+
+support for multiple SOP uploads
+accepted file formats:
+.pdf
+.docx
+.doc
+.png
+.jpg
+.jpeg
+.webp
+.txt
+
+Upload must automatically trigger treatment generation.
+Do not add a separate “Generate Treatments from SOP” button.
+
+2. Existing treatment overwrite protection
+
+If the policy pack already has treatments populated and the user uploads SOP files:
+
+show a confirmation modal before processing
+modal message should clearly say that uploading will overwrite the existing treatments and regenerate them from scratch
+actions:
+Cancel
+Overwrite and Regenerate
+
+If cancelled:
+
+do nothing
+
+If confirmed:
+
+remove or archive existing generated treatment draft for that policy pack
+process the newly uploaded SOP files
+generate treatments again from scratch
+replace the treatment list in Section B
+
+Do not attempt partial merging with existing treatments.
+
+3. AI grounding
+
+Do not ask the user to upload sample data in Section B.
+
+The system must use the client’s already-configured Beacon fields as grounding input.
+
+AI must receive:
+
+uploaded SOP content
+current Beacon field catalog for that client/company
+
+The field catalog should include, where available:
+
+configured source fields
+existing derived fields
+existing business fields
+
+If only source fields exist, that is still acceptable.
+
+4. AI behavior rules
+
+The AI must:
+
+create only treatments clearly supported by the SOP
+reuse existing Beacon source fields wherever possible
+never invent a new source field not present in the client field catalog
+if a required concept is not present in source fields:
+classify it as a derived field if calculable from known fields
+classify it as a business field if it is manually captured, policy-defined, or judgement-based
+return structured JSON only
+include open questions instead of hallucinating where SOP is ambiguous
+
+Use Gemini 2.5 Pro for this feature.
+
+Technical requirements
+Frontend
+
+Update the Section B UI in the client setup page.
+
+Expected changes:
+
+keep the existing “Upload SOP / Policy File” area
+allow multi-file selection
+show uploaded file names
+auto-start generation after upload
+show loading state while extraction is running
+if treatments already exist, show overwrite confirmation modal before upload is processed
+after generation, populate treatments in Section B
+treatments must still be editable manually after AI generation
+
+Suggested UX text:
+
+“Upload SOP / Policy Files”
+helper text: “Beacon will read your SOP and generate treatment rules using your configured fields.”
+Backend API
+
+Create or refactor an endpoint for this workflow, for example:
+
+POST /api/policy-pack/generate-treatment-draft
+
+This endpoint must:
+
+accept multiple uploaded SOP files
+validate allowed file types
+extract text/content from each file
+fetch the client/company Beacon field catalog
+call Gemini 2.5 Pro with a structured prompt
+parse JSON response
+convert response into Beacon treatment draft objects
+replace existing treatments if overwrite was confirmed
+return the generated treatment payload to the frontend
+File parsing
+
+Implement robust parsing for uploaded SOP files.
+
+PDF
+extract text directly where possible
+if PDF is scanned / text extraction is poor, fall back to vision-based extraction
+DOCX / DOC
+use a real document parser
+do not read binary docx as plain UTF-8 text
+Images
+use vision input through the AI pipeline or OCR fallback
+TXT
+plain text read is fine
+
+All extracted content should be normalized into a single internal SOP document bundle before sending to the model.
+
+Field catalog retrieval
+
+Before the AI call, fetch the client/company field catalog from Beacon configuration.
+
+Provide AI with a structured field list like:
+
+configured source fields
+existing derived fields
+existing business fields
+
+This field catalog must be company-scoped. Never mix fields across clients.
+
+Persistence / overwrite behavior
+
+Support overwrite safely.
+
+If overwrite is confirmed:
+
+replace current treatment draft for that policy pack
+ideally archive prior generated version for audit/debugging
+preserve company isolation and policy-pack isolation
+
+If archiving is easy, prefer archive/versioning over hard delete.
+
+AI model requirement
+
+Use Gemini 2.5 Pro for the SOP-to-treatment generation call.
+
+Make sure the implementation explicitly selects Gemini 2.5 Pro in the AI client configuration for this feature.
+
+Prompt to use with Gemini 2.5 Pro
+You are Beacon’s SOP-to-treatment configuration engine.
+
+Your task is to read one or more uploaded SOP / policy documents and generate a draft Beacon treatment configuration.
+
+Beacon already has a configured field catalog for this client.
+You must use that field catalog when mapping policy logic.
+
+Your goal is to generate a ready-to-fill treatment draft with:
+- Treatment
+- When to Offer
+- Blocked If
+- Source Fields
+- Derived Fields
+- Business Fields
+
+IMPORTANT RULES
+1. Only create treatments that are clearly supported by the SOP documents.
+2. Use configured Beacon source fields wherever possible.
+3. Do NOT invent a new source field that is not present in the provided Beacon field catalog.
+4. If the SOP refers to a concept that is not present as a configured source field:
+   - classify it as a Derived Field if it can be calculated from existing fields
+   - classify it as a Business Field if it is user-entered, policy-defined, or judgement-based
+5. Reuse existing business fields or derived fields if they are already present in the Beacon field catalog.
+6. Keep rules structured and implementation-friendly.
+7. If the SOP is ambiguous, add the uncertainty to open_questions instead of guessing.
+8. Return JSON only.
+
+FIELD TYPE DEFINITIONS
+- Source Field: already configured in Beacon and directly usable in rules
+- Derived Field: calculated from one or more Beacon fields
+- Business Field: manually captured or judgement-based field
+
+RULE FORMAT
+{
+  "field_name": "string",
+  "field_type": "source|derived|business",
+  "operator": "=|!=|>|>=|<|<=|contains|in|not_in|is_true|is_false",
+  "value": "string or number or array",
+  "reason": "short explanation"
+}
+
+OUTPUT JSON SCHEMA
+{
+  "summary": "short summary of the SOP treatment framework",
+  "treatments": [
+    {
+      "name": "string",
+      "description": "string",
+      "when_to_offer": [RULE],
+      "blocked_if": [RULE],
+      "source_fields": [
+        {
+          "field_name": "string",
+          "description": "string",
+          "matched_existing_field": true
+        }
+      ],
+      "derived_fields": [
+        {
+          "field_name": "string",
+          "description": "string",
+          "formula_hint": "plain english calculation logic",
+          "depends_on": ["field_a", "field_b"]
+        }
+      ],
+      "business_fields": [
+        {
+          "field_name": "string",
+          "description": "string",
+          "allowed_values": ["optional", "list"]
+        }
+      ],
+      "confidence": "high|medium|low"
+    }
+  ],
+  "global_source_fields": [],
+  "global_derived_fields": [],
+  "global_business_fields": [],
+  "open_questions": ["string"]
+}
+
+BEACON FIELD CATALOG
+{{BEACON_FIELD_CATALOG}}
+
+SOP DOCUMENTS
+{{SOP_DOCUMENT_BUNDLE}}
+
+Now generate the Beacon treatment draft.
+Return JSON only.
+Implementation notes
+make this feature company-safe and scalable for multiple clients
+isolate every upload/generation to the current company and current policy pack
+log raw AI response for debugging
+validate returned JSON before saving
+fail gracefully with user-friendly errors
+do not save malformed treatment configs
+keep generated treatments editable after creation
+Acceptance criteria
+User can upload multiple SOP files in Section B.
+Upload automatically starts treatment generation.
+Supported formats include pdf, docx, doc, png, jpg, jpeg, webp, txt.
+If treatments already exist, user sees overwrite warning.
+Confirming overwrite regenerates treatments from scratch.
+AI uses current Beacon field catalog; no sample data upload required.
+AI uses Gemini 2.5 Pro.
+Section B is populated with editable treatment rows including:
+Treatment
+When to Offer
+Blocked If
+Source Fields
+Derived Fields
+Business Fields
+No cross-client data leakage is possible.
+Errors are surfaced clearly in UI.

@@ -1,0 +1,201 @@
+Recommendation to revise Plan #16
+
+The current plan is directionally strong, but it should be simplified for this iteration so implementation is reliable and fast. For v1, please support multiple PDF uploads only in Section B.
+
+This keeps the workflow aligned with Beacon’s product goal while avoiding unnecessary parsing complexity.
+
+Keep the core direction
+
+Please keep these parts of the plan:
+
+SOP-only upload in Section B
+multiple PDF upload
+upload auto-triggers generation
+overwrite warning if treatments already exist
+AI grounded on the client’s existing Beacon field catalog
+Gemini 2.5 Pro for generation
+generated treatments remain editable
+strict company-scoped and policy-pack-scoped behavior
+
+These are correct.
+
+Required revisions
+1) Restrict file support to PDF only
+
+For this iteration, support only:
+
+.pdf
+
+Please remove support for:
+
+.docx
+.doc
+.png
+.jpg
+.jpeg
+.webp
+.txt
+
+Reason:
+
+simpler implementation
+lower parsing risk
+less testing overhead
+cleaner UX
+faster path to production/demo readiness
+
+The UI should clearly say:
+
+Upload SOP / Policy PDFs
+helper text: Upload one or more PDF policy documents. Beacon will generate treatment rules using your configured fields.
+2) Remove contradictions on editability
+
+The current plan says conflicting things about whether Source Fields / Derived Fields / Business Fields are editable.
+
+Please make this consistent.
+
+Recommended v1 behavior
+Source Fields: read-only in treatment cards, because they should map to already-configured Beacon fields
+Derived Fields: editable as text only (name, description, formula_hint, depends_on)
+Business Fields: editable as text only (name, description, allowed_values)
+creation of canonical new fields in the shared field catalog remains out of scope for this iteration
+
+This gives users enough control without turning Section B into a second field-management module.
+
+3) Use PDF text extraction first, vision fallback only if needed
+
+Since this is now PDF-only, please implement extraction like this:
+
+try direct PDF text extraction first
+only use Gemini vision / OCR fallback if the extracted text is empty, extremely short, or obviously poor quality
+
+Do not default all PDFs to vision.
+
+Reason:
+
+lower cost
+lower latency
+better scalability
+better results for digital PDFs
+4) Add normalization and validation before DB save
+
+Do not save raw AI output directly into treatments.
+
+Please add a normalization layer that:
+
+validates JSON shape
+validates allowed rule operators
+confirms all source fields exist in the company field catalog
+rejects invented source fields
+deduplicates repeated treatments
+deduplicates repeated field suggestions
+handles null / empty arrays safely
+converts the AI output into Beacon-safe treatment payloads
+
+This is required because model output may look correct but still fail structurally.
+
+5) Make overwrite transaction-safe
+
+Do not delete existing treatments before the new draft is fully ready.
+
+Please implement overwrite in this order:
+
+upload + parse PDFs
+fetch company field catalog
+call Gemini 2.5 Pro
+validate + normalize AI response
+open DB transaction
+delete old treatment graph
+insert new treatment graph
+commit
+
+If anything fails before commit, the current treatments must remain untouched.
+
+This avoids accidental data loss.
+
+6) JSONB columns are acceptable for v1, but treat them as draft associations
+
+Adding sourceFields, derivedFields, and businessFields JSONB columns is acceptable for this iteration, but they should be treated as treatment-level draft associations, not the canonical field catalog.
+
+If possible, name/document them accordingly. If renaming is too disruptive, keep the existing names but clarify internally that:
+
+sourceFields are references to existing configured Beacon fields
+derivedFields and businessFields are treatment draft suggestions, not shared master definitions
+7) Use explicit multipart naming
+
+Please use an explicit upload contract, for example:
+
+multer.array("sopFiles", 10)
+
+Do not use a generic unnamed array upload pattern.
+
+Even though this flow is only PDF uploads, the API should still be explicit.
+
+8) Handle AI/debug logging carefully
+
+Do not rely only on printing raw AI JSON to console.
+
+Recommended approach:
+
+console log request ID, company ID, policy pack ID, status, validation result
+if needed, store raw AI response in a scoped debug record or safe DB field
+avoid uncontrolled production logging of full generated treatment output
+
+This is safer for client policy content and easier to debug cleanly.
+
+9) Add confidence and ambiguity handling to the UI
+
+Please include:
+
+treatment-level confidence
+generation-level openQuestions
+
+And surface them in UI, for example:
+
+banner: AI generated this draft from uploaded SOP PDFs using your configured Beacon fields. Please review before saving.
+optional collapsible Open Questions section
+
+This improves trust and makes the workflow more enterprise-ready.
+
+Revised implementation standard
+Backend must do this
+accept multiple PDF uploads
+extract text from PDFs
+fall back to vision only when PDF text is poor
+fetch company-scoped field catalog
+call Gemini 2.5 Pro
+validate and normalize response
+overwrite in a DB transaction
+return editable treatment payloads
+Frontend must do this
+multi-file PDF upload
+upload auto-starts generation
+file names shown
+loading state shown
+overwrite confirmation modal shown if treatments exist
+generated treatments replace current list after confirmation
+treatment cards show:
+When to Offer
+Blocked If
+Source Fields
+Derived Fields
+Business Fields
+show AI-generated draft review banner
+Final scope for this iteration
+In scope
+multi-PDF SOP upload
+auto-generation on upload
+overwrite modal
+Gemini 2.5 Pro
+field-catalog grounding
+editable treatment rows
+read-only source field mappings
+editable derived/business field text
+validation + normalization
+transaction-safe overwrite
+Out of scope
+DOCX/image/TXT support
+merging generated treatments into existing ones
+full version-history / archiving system
+inline creation of canonical field catalog entries
+advanced formula builder for derived fields in Section B
