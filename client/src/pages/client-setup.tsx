@@ -1653,6 +1653,17 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                     ))}
                   </div>
                 )}
+                {unresolvedFields.filter(f => f.fieldType === "rule_reference").length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Unresolved field references skipped</p>
+                    {unresolvedFields.filter(f => f.fieldType === "rule_reference").map((f, i) => (
+                      <div key={i} className="text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
+                        <p className="font-medium">{f.fieldName}</p>
+                        <p className="text-[11px] leading-relaxed opacity-80">{f.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

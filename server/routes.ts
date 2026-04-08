@@ -999,16 +999,22 @@ export async function registerRoutes(
         const validatedDerived: AIDerived[] = [];
         for (const [key, df] of allDerivedByKey.entries()) {
           if (fieldByLabelLower.has(key)) continue;
-          if (df.derivation_config) {
-            const parse = LogicalDerivationConfigSchema.safeParse(df.derivation_config);
-            if (!parse.success) {
-              unresolvedFields.push({
-                fieldName: df.field_name,
-                fieldType: "derived",
-                reason: `Invalid derivation_config: ${parse.error.issues[0]?.message ?? "schema error"}`,
-              });
-              continue;
-            }
+          if (!df.derivation_config) {
+            unresolvedFields.push({
+              fieldName: df.field_name,
+              fieldType: "derived",
+              reason: "Missing derivation_config: derived fields must have a structured logical derivation config to be system-consumable",
+            });
+            continue;
+          }
+          const parse = LogicalDerivationConfigSchema.safeParse(df.derivation_config);
+          if (!parse.success) {
+            unresolvedFields.push({
+              fieldName: df.field_name,
+              fieldType: "derived",
+              reason: `Invalid derivation_config: ${parse.error.issues[0]?.message ?? "schema error"}`,
+            });
+            continue;
           }
           validatedDerived.push(df);
         }
@@ -1084,27 +1090,59 @@ export async function registerRoutes(
 
         for (const t of normalizedTreatments) {
           const criticalReasons: string[] = [];
-          const unresolvedWhen = t.when_to_offer.filter(r =>
-            !VALID_OPERATORS.has(r.operator) || !candidateCatalog.has(normalizeFieldLabel(r.field_name))
-          );
-          const resolvedWhen = t.when_to_offer.filter(r =>
-            VALID_OPERATORS.has(r.operator) && candidateCatalog.has(normalizeFieldLabel(r.field_name))
-          );
-          if (t.when_to_offer_logic === "ALL" && unresolvedWhen.length > 0) {
-            criticalReasons.push(`when_to_offer (ALL logic): unresolved [${unresolvedWhen.map(r => r.field_name).join(", ")}] — all eligibility conditions must be resolvable`);
-          } else if (t.when_to_offer_logic === "ANY" && resolvedWhen.length === 0 && t.when_to_offer.length > 0) {
-            criticalReasons.push(`when_to_offer (ANY logic): all fields unresolved [${unresolvedWhen.map(r => r.field_name).join(", ")}] — at least one must be resolvable`);
+
+          // Structural validation: separate invalid-operator rules from unresolved-field rules
+          const invalidOpWhen = t.when_to_offer.filter(r => !VALID_OPERATORS.has(r.operator));
+          const validOpWhen = t.when_to_offer.filter(r => VALID_OPERATORS.has(r.operator));
+          const unresolvedFieldWhen = validOpWhen.filter(r => !candidateCatalog.has(normalizeFieldLabel(r.field_name)));
+          const resolvedWhen = validOpWhen.filter(r => candidateCatalog.has(normalizeFieldLabel(r.field_name)));
+
+          // Always track invalid-operator rules as structural failures (rule_reference)
+          for (const r of invalidOpWhen) {
+            if (!unresolvedFields.some(u => u.fieldName === r.field_name && u.fieldType === "rule_reference")) {
+              unresolvedFields.push({
+                fieldName: r.field_name,
+                fieldType: "rule_reference",
+                reason: `Invalid operator "${r.operator}" in when_to_offer for treatment "${t.name}" — operator not in allowed set`,
+              });
+            }
           }
-          const unresolvedBlocked = t.blocked_if.filter(r =>
-            !VALID_OPERATORS.has(r.operator) || !candidateCatalog.has(normalizeFieldLabel(r.field_name))
-          );
-          if (unresolvedBlocked.length > 0) {
-            criticalReasons.push(`blocked_if: unresolved safety guards [${unresolvedBlocked.map(r => r.field_name).join(", ")}]`);
+
+          const allWhenUnresolvable = t.when_to_offer.length > 0 && resolvedWhen.length === 0;
+          if (t.when_to_offer_logic === "ALL" && (invalidOpWhen.length > 0 || unresolvedFieldWhen.length > 0)) {
+            const badNames = [...invalidOpWhen, ...unresolvedFieldWhen].map(r => r.field_name);
+            criticalReasons.push(`when_to_offer (ALL logic): unresolved [${badNames.join(", ")}] — all eligibility conditions must be resolvable`);
+          } else if (t.when_to_offer_logic === "ANY" && allWhenUnresolvable) {
+            const badNames = [...invalidOpWhen, ...unresolvedFieldWhen].map(r => r.field_name);
+            criticalReasons.push(`when_to_offer (ANY logic): all conditions unresolvable [${badNames.join(", ")}] — at least one must be resolvable`);
           }
+
+          const invalidOpBlocked = t.blocked_if.filter(r => !VALID_OPERATORS.has(r.operator));
+          const validOpBlocked = t.blocked_if.filter(r => VALID_OPERATORS.has(r.operator));
+          const unresolvedFieldBlocked = validOpBlocked.filter(r => !candidateCatalog.has(normalizeFieldLabel(r.field_name)));
+
+          // Structural failures in blocked_if also tracked
+          for (const r of invalidOpBlocked) {
+            if (!unresolvedFields.some(u => u.fieldName === r.field_name && u.fieldType === "rule_reference")) {
+              unresolvedFields.push({
+                fieldName: r.field_name,
+                fieldType: "rule_reference",
+                reason: `Invalid operator "${r.operator}" in blocked_if for treatment "${t.name}" — operator not in allowed set`,
+              });
+            }
+          }
+
+          if (invalidOpBlocked.length > 0 || unresolvedFieldBlocked.length > 0) {
+            const badNames = [...invalidOpBlocked, ...unresolvedFieldBlocked].map(r => r.field_name);
+            criticalReasons.push(`blocked_if: unresolved safety guards [${badNames.join(", ")}]`);
+          }
+
           if (criticalReasons.length > 0) {
             const unresolvedFieldNames = Array.from(new Set([
-              ...unresolvedWhen.map(r => r.field_name),
-              ...unresolvedBlocked.map(r => r.field_name),
+              ...invalidOpWhen.map(r => r.field_name),
+              ...unresolvedFieldWhen.map(r => r.field_name),
+              ...invalidOpBlocked.map(r => r.field_name),
+              ...unresolvedFieldBlocked.map(r => r.field_name),
             ]));
             unresolvedTreatments.push({ name: t.name, reason: criticalReasons.join("; "), unresolvedFields: unresolvedFieldNames });
           } else {
@@ -1202,12 +1240,19 @@ export async function registerRoutes(
               VALID_OPERATORS.has(r.operator) && liveFieldMap.has(normalizeFieldLabel(r.field_name))
             );
             // Track skipped when_to_offer rules (ANY logic, some unresolved — non-critical)
-            for (const r of t.when_to_offer.filter(r => !liveFieldMap.has(normalizeFieldLabel(r.field_name)))) {
-              if (!unresolvedFields.some(u => u.fieldName === r.field_name)) {
-                unresolvedFields.push({
-                  fieldName: r.field_name, fieldType: "rule_reference",
-                  reason: `Skipped: unresolved field in when_to_offer (ANY) for treatment "${t.name}"`,
-                });
+            for (const r of t.when_to_offer) {
+              const isInvalidOp = !VALID_OPERATORS.has(r.operator);
+              const isUnresolved = !liveFieldMap.has(normalizeFieldLabel(r.field_name));
+              if (isInvalidOp || isUnresolved) {
+                const existing = unresolvedFields.find(u => u.fieldName === r.field_name && u.fieldType === "rule_reference");
+                if (!existing) {
+                  unresolvedFields.push({
+                    fieldName: r.field_name, fieldType: "rule_reference",
+                    reason: isInvalidOp
+                      ? `Invalid operator "${r.operator}" in when_to_offer for treatment "${t.name}" — operator not in allowed set`
+                      : `Skipped: unresolved field in when_to_offer (ANY) for treatment "${t.name}"`,
+                  });
+                }
               }
             }
             const [newTx] = await tx.insert(treatments).values({
