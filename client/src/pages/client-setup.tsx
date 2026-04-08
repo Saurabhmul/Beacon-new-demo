@@ -403,6 +403,8 @@ interface LocalTreatment {
   draftDerivedFields: DraftDerivedField[];
   draftBusinessFields: DraftBusinessField[];
   aiConfidence: "high" | "medium" | "low" | null;
+  priorityBasis: string | null;
+  priorityReason: string | null;
 }
 
 function makeEmptyRow(): LocalRuleRow {
@@ -457,6 +459,8 @@ function serverTxToLocal(tx: TreatmentWithRules): LocalTreatment {
     draftDerivedFields: tx.draftDerivedFields ?? [],
     draftBusinessFields: tx.draftBusinessFields ?? [],
     aiConfidence: (tx.aiConfidence as "high" | "medium" | "low" | null) ?? null,
+    priorityBasis: tx.priorityBasis ?? null,
+    priorityReason: tx.priorityReason ?? null,
   };
 }
 function extractionToLocal(e: { name: string; shortDescription: string; whenToOffer: { fieldName: string; operator: string; value: string }[]; blockedIf: { fieldName: string; operator: string; value: string }[] }): LocalTreatment {
@@ -482,6 +486,8 @@ function extractionToLocal(e: { name: string; shortDescription: string; whenToOf
     draftDerivedFields: [],
     draftBusinessFields: [],
     aiConfidence: null,
+    priorityBasis: null,
+    priorityReason: null,
   };
 }
 
@@ -493,6 +499,8 @@ function makeTemplateLocalBase(name: string, shortDescription: string, enabled =
     isDraft: true, expanded, activeSection: "when",
     draftSourceFields: [], draftDerivedFields: [], draftBusinessFields: [],
     aiConfidence: null,
+    priorityBasis: null,
+    priorityReason: null,
   };
 }
 
@@ -1288,6 +1296,11 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, o
             AI {local.aiConfidence} confidence
           </Badge>
         )}
+        {local.isDraft && local.priority && (
+          <Badge variant="outline" className="text-[10px] shrink-0 font-mono border-blue-400 text-blue-600 dark:text-blue-400">
+            P{local.priority}
+          </Badge>
+        )}
         <Input
           type="number"
           min={1}
@@ -1325,6 +1338,21 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, o
           </div>
         )}
       </div>
+
+      {local.isDraft && local.priority && (local.priorityBasis || local.priorityReason) && (
+        <div className="flex items-start gap-2 px-4 pb-2 flex-wrap">
+          {local.priorityBasis && (
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">
+              {local.priorityBasis.replace(/_/g, " ")}
+            </span>
+          )}
+          {local.priorityReason && (
+            <span className="text-[10px] text-muted-foreground italic line-clamp-2">
+              {local.priorityBasis ? "— " : ""}{local.priorityReason}
+            </span>
+          )}
+        </div>
+      )}
 
       {treatment.expanded && (
         <div className="px-4 pb-4 space-y-4 border-t pt-4">

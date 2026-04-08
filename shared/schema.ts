@@ -256,6 +256,8 @@ export const treatments = pgTable("treatments", {
   shortDescription: text("short_description"),
   enabled: boolean("enabled").notNull().default(true),
   priority: text("priority"),
+  priorityBasis: text("priority_basis"),
+  priorityReason: text("priority_reason"),
   tone: text("tone"),
   displayOrder: integer("display_order").notNull().default(0),
   draftSourceFields: jsonb("draft_source_fields").$type<DraftSourceField[]>(),

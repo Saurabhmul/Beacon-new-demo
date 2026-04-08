@@ -40,6 +40,19 @@ function wordToUiOperator(op: string): string {
   return WORD_TO_UI_OPERATOR[op] ?? op;
 }
 
+const PRIORITY_BASIS_MAP: Record<string, string> = {
+  MANDATORY_OVERRIDE: "1",
+  ELIGIBILITY_BLOCKER: "2",
+  STRUCTURED_SUPPORT: "3",
+  TEMPORARY_SUPPORT: "4",
+  FALLBACK_OR_REVIEW: "5",
+};
+
+function normalizePriorityFromBasis(basis: string | undefined): string {
+  if (!basis) return "5";
+  return PRIORITY_BASIS_MAP[basis] ?? "5";
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -1393,12 +1406,15 @@ export async function registerRoutes(
                 });
               }
             }
+            const priorityBasis = t.priority_basis ?? "FALLBACK_OR_REVIEW";
             const [newTx] = await tx.insert(treatments).values({
               policyPackId: pack.id,
               name: t.name.trim(),
               shortDescription: t.description || null,
               enabled: true,
-              priority: null,
+              priority: normalizePriorityFromBasis(priorityBasis),
+              priorityBasis: priorityBasis,
+              priorityReason: t.priority_reason?.trim() || null,
               tone: null,
               displayOrder: i,
               draftSourceFields: t.source_fields.map(sf => ({
