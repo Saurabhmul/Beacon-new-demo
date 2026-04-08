@@ -591,10 +591,10 @@ Rules:
     const p = JSON.parse(jsonText);
     parsed = Array.isArray(p) ? p : [];
     if (!Array.isArray(p)) {
-      console.warn(`[analyzeCategoryFields] json_parse produced non-array — category=${categoryId} headers=${headers.length} raw=${rawText.slice(0, 500)}`);
+      console.warn(`[analyzeCategoryFields] stage=json_parse category=${categoryId} headers=${headers.length} reason=non-array raw=${rawText.slice(0, 500)}`);
     }
   } catch (err) {
-    console.warn(`[analyzeCategoryFields] json_parse failed — category=${categoryId} headers=${headers.length} raw=${rawText.slice(0, 500)}`);
+    console.warn(`[analyzeCategoryFields] stage=json_parse category=${categoryId} headers=${headers.length} reason=parse-error raw=${rawText.slice(0, 500)}`);
     parsed = [];
   }
 
@@ -608,7 +608,7 @@ Rules:
       if (result.success) {
         validItems.push(result.data);
       } else {
-        console.warn(`[analyzeCategoryFields] zod_validation failed — category=${categoryId} headers=${headers.length} item=${JSON.stringify(item).slice(0, 200)}`);
+        console.warn(`[analyzeCategoryFields] stage=zod_validation category=${categoryId} headers=${headers.length} item=${JSON.stringify(item).slice(0, 200)} raw=${rawText.slice(0, 500)}`);
       }
     }
   }
@@ -618,7 +618,7 @@ Rules:
   for (const item of validItems) {
     const headerNorm = normaliseKey(item.fieldName);
     if (isWeakDescription(item.beaconsUnderstanding, headerNorm)) {
-      console.warn(`[analyzeCategoryFields] weak_description — category=${categoryId} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
+      console.warn(`[analyzeCategoryFields] stage=weak_description category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
     } else {
       strongItems.push(item);
     }
@@ -647,12 +647,12 @@ Rules:
     } else if (headerNorm.has(normaliseKey(item.fieldName))) {
       originalHeader = headerNorm.get(normaliseKey(item.fieldName));
     } else {
-      console.warn(`[analyzeCategoryFields] header_matching failed — category=${categoryId} fieldName=${item.fieldName}`);
+      console.warn(`[analyzeCategoryFields] stage=header_matching category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} raw=${rawText.slice(0, 500)}`);
       continue;
     }
 
     if (resolvedMap.has(originalHeader!)) {
-      console.warn(`[analyzeCategoryFields] duplicate — category=${categoryId} fieldName=${item.fieldName} resolvedTo=${originalHeader} (keeping first)`);
+      console.warn(`[analyzeCategoryFields] stage=duplicate category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} resolvedTo=${originalHeader} (keeping first)`);
     } else {
       resolvedMap.set(originalHeader!, { ...item, fieldName: originalHeader! });
     }
