@@ -47,9 +47,9 @@ import {
   BookOpen, Upload, FileText, Trash2, Plus, File as FileIcon,
   Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
   Copy, RefreshCw, Info, Eye, ChevronDown, ChevronRight, X, Wand2, FileUp,
-  CheckCircle2, Circle,
+  CheckCircle2, Circle, FileDown,
 } from "lucide-react";
-import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules, PolicyFieldDto, RuleSaveRow, DerivationConfig, DraftSourceField, DraftDerivedField, DraftBusinessField } from "@shared/schema";
+import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules, PolicyFieldDto, RuleSaveRow, DerivationConfig, DraftSourceField, DraftDerivedField, DraftBusinessField, SopSourceFile } from "@shared/schema";
 
 
 const MANDATORY_LOAN_FIELDS = [
@@ -1139,10 +1139,7 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
             {([
               { id: "when", label: "When to Offer", count: local.whenToOffer.rows.length },
               { id: "blocked", label: "Blocked If", count: local.blockedIf.rows.length },
-              { id: "source", label: "Source Fields", count: local.draftSourceFields.length },
-              { id: "derived", label: "Derived Fields", count: local.draftDerivedFields.length },
-              { id: "business", label: "Business Fields", count: local.draftBusinessFields.length },
-            ] as const).filter(s => s.id === "when" || s.id === "blocked" || s.count > 0).map(s => (
+            ] as const).map(s => (
               <button key={s.id} type="button"
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${local.activeSection === s.id ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted"}`}
                 onClick={() => setLocal(l => ({ ...l, activeSection: s.id }))}>
@@ -1162,107 +1159,6 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
             <RuleBuilderGroup group={local.blockedIf} policyFields={policyFields}
               onChange={g => setLocal(l => ({ ...l, blockedIf: g }))} isReadOnly={isReadOnly}
               onFieldCreated={onFieldCreated} />
-          )}
-          {local.activeSection === "source" && (
-            <div className="space-y-2">
-              {local.draftSourceFields.length === 0 ? (
-                <p className="text-xs text-muted-foreground italic">No source fields mapped by AI for this treatment.</p>
-              ) : local.draftSourceFields.map((sf, i) => (
-                <div key={i} className="rounded-md border px-3 py-2 bg-muted/20 space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium">{sf.fieldName}</span>
-                    <Badge variant="secondary" className="text-[10px]">source</Badge>
-                  </div>
-                  {sf.description && <p className="text-xs text-muted-foreground">{sf.description}</p>}
-                </div>
-              ))}
-            </div>
-          )}
-          {local.activeSection === "derived" && (
-            <div className="space-y-2">
-              {local.draftDerivedFields.length === 0 ? (
-                <p className="text-xs text-muted-foreground italic">No derived fields suggested by AI for this treatment.</p>
-              ) : local.draftDerivedFields.map((df, i) => (
-                <div key={i} className="rounded-md border p-3 space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <Input
-                      className="text-xs font-medium h-6 px-1 flex-1 border-none shadow-none focus-visible:ring-0 bg-transparent"
-                      value={df.fieldName}
-                      onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, fieldName: v } : f) })); }}
-                      readOnly={isReadOnly}
-                      placeholder="Field name"
-                    />
-                    <Badge variant="outline" className="text-[10px] shrink-0">derived</Badge>
-                  </div>
-                  <Textarea
-                    className="text-xs resize-none min-h-0"
-                    value={df.description}
-                    rows={2}
-                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, description: v } : f) })); }}
-                    readOnly={isReadOnly}
-                    placeholder="Description"
-                  />
-                  {df.dataType && (
-                    <Badge variant="secondary" className="text-[10px] w-fit">{df.dataType}</Badge>
-                  )}
-                  <Input
-                    className="text-[11px] font-mono h-7"
-                    value={df.derivationSummary ?? df.formulaHint ?? ""}
-                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, derivationSummary: v } : f) })); }}
-                    readOnly={isReadOnly}
-                    placeholder="Derivation logic"
-                  />
-                  <Input
-                    className="text-[11px] h-7"
-                    value={df.dependsOn.join(", ")}
-                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, dependsOn: v.split(",").map(s => s.trim()).filter(Boolean) } : f) })); }}
-                    readOnly={isReadOnly}
-                    placeholder="Depends on (comma-separated field names)"
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-          {local.activeSection === "business" && (
-            <div className="space-y-2">
-              {local.draftBusinessFields.length === 0 ? (
-                <p className="text-xs text-muted-foreground italic">No business fields suggested by AI for this treatment.</p>
-              ) : local.draftBusinessFields.map((bf, i) => (
-                <div key={i} className="rounded-md border p-3 space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <Input
-                      className="text-xs font-medium h-6 px-1 flex-1 border-none shadow-none focus-visible:ring-0 bg-transparent"
-                      value={bf.fieldName}
-                      onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftBusinessFields: l.draftBusinessFields.map((f, j) => j === i ? { ...f, fieldName: v } : f) })); }}
-                      readOnly={isReadOnly}
-                      placeholder="Field name"
-                    />
-                    <Badge variant="outline" className="text-[10px] shrink-0">business</Badge>
-                  </div>
-                  <Textarea
-                    className="text-xs resize-none min-h-0"
-                    value={bf.description}
-                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftBusinessFields: l.draftBusinessFields.map((f, j) => j === i ? { ...f, description: v } : f) })); }}
-                    readOnly={isReadOnly}
-                    placeholder="Description"
-                    rows={2}
-                  />
-                  {bf.dataType && (
-                    <Badge variant="secondary" className="text-[10px] w-fit">{bf.dataType}</Badge>
-                  )}
-                  {bf.businessMeaning && (
-                    <p className="text-[11px] text-muted-foreground italic leading-relaxed">{bf.businessMeaning}</p>
-                  )}
-                  <Input
-                    className="text-xs h-7"
-                    value={bf.allowedValues.join(", ")}
-                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftBusinessFields: l.draftBusinessFields.map((f, j) => j === i ? { ...f, allowedValues: v.split(",").map(s => s.trim()).filter(Boolean) } : f) })); }}
-                    readOnly={isReadOnly}
-                    placeholder="Allowed values (comma-separated)"
-                  />
-                </div>
-              ))}
-            </div>
           )}
         </div>
       )}
@@ -1505,6 +1401,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
               unresolvedTreatments = [], unresolvedFields = [] } = data;
       queryClient.invalidateQueries({ queryKey: ["/api/policy-pack/treatments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/policy-fields"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-pack"] });
       const newLocals: LocalTreatment[] = generatedTxs.map((tx: TreatmentWithRules) => serverTxToLocal(tx));
       await new Promise(r => setTimeout(r, 900));
       setLocalTreatments(newLocals);
@@ -1848,6 +1745,27 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                 })}
               </div>
             )}
+          </CardContent>
+        )}
+
+        {/* ── Source documents (PDFs used for last AI generation) ── */}
+        {policyPack.sopSourceFiles && policyPack.sopSourceFiles.length > 0 && (
+          <CardContent className="border-t pt-3 pb-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground font-medium shrink-0">Source documents:</span>
+              {policyPack.sopSourceFiles.map((f: SopSourceFile) => (
+                <a
+                  key={f.safeName}
+                  href={`/api/policy-pack/sop-files/${encodeURIComponent(f.safeName)}`}
+                  download={f.originalName}
+                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border border-border bg-muted/40 hover:bg-muted/70 text-foreground transition-colors"
+                  data-testid={`link-sop-file-${f.safeName}`}
+                >
+                  <FileDown className="w-3 h-3 shrink-0 text-muted-foreground" />
+                  <span className="truncate max-w-[200px]">{f.originalName}</span>
+                </a>
+              ))}
+            </div>
           </CardContent>
         )}
 

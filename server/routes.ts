@@ -932,6 +932,17 @@ export async function registerRoutes(
         }
 
         const sopBundle = textParts.join("\n\n");
+
+        // Save uploaded PDFs to disk so they can be downloaded later
+        const uploadsDir = path.join(process.cwd(), "uploads");
+        if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+        const sopFilesMeta: { originalName: string; safeName: string; uploadedAt: string }[] = [];
+        for (const file of files) {
+          const safeName = `sop-${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+          fs.writeFileSync(path.join(uploadsDir, safeName), file.buffer);
+          sopFilesMeta.push({ originalName: file.originalname, safeName, uploadedAt: new Date().toISOString() });
+        }
+
         const fullCatalog = await buildFullFieldCatalog(companyId, storage);
         const fieldCatalog = fullCatalog.map(f => ({
           label: f.label,
@@ -1383,12 +1394,13 @@ export async function registerRoutes(
             createdTreatments.push({ name: newTx.name, id: newTx.id });
           }
 
-          // 5. Update pack metadata
+          // 5. Update pack metadata (including the source PDFs used for this generation)
           await tx.update(policyPacks).set({
             lastAiGenerationRawOutput: draftResponse as unknown as Record<string, unknown>,
             lastAiGenerationAt: new Date(),
             aiGenerationSummary: draftResponse.summary || null,
             aiOpenQuestions: draftResponse.open_questions,
+            sopSourceFiles: sopFilesMeta,
             updatedAt: new Date(),
           }).where(eq(policyPacks.id, pack.id));
         });
@@ -1414,6 +1426,25 @@ export async function registerRoutes(
       }
     }
   );
+
+  app.get("/api/policy-pack/sop-files/:safeName", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const safeName = req.params.safeName as string;
+      if (!safeName || /[/\\]/.test(safeName)) return res.status(400).json({ error: "Invalid filename" });
+      const pack = await storage.getPolicyPack(companyId);
+      if (!pack) return res.status(404).json({ error: "No policy pack found" });
+      const meta = (pack.sopSourceFiles || []).find(f => f.safeName === safeName);
+      if (!meta) return res.status(404).json({ error: "File not found" });
+      const filePath = path.join(process.cwd(), "uploads", safeName);
+      if (!fs.existsSync(filePath)) return res.status(404).json({ error: "File not found on disk" });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(meta.originalName)}"`);
+      fs.createReadStream(filePath).pipe(res);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to serve file" });
+    }
+  });
 
   app.get("/api/prompt-preview", authenticate, authorize("superadmin"), companyFilter, async (req: any, res) => {
     try {

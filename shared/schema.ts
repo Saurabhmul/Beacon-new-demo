@@ -226,6 +226,12 @@ export const decisions = pgTable("decisions", {
 // Phase 1: ADD COLUMN company_id varchar (nullable) → backfill from client_configs → validate
 // Phase 2: ALTER COLUMN company_id SET NOT NULL + ADD CONSTRAINT UNIQUE (after validated backfill)
 // client_config_id was also made nullable in Phase 1. Existing rows retain their value.
+export interface SopSourceFile {
+  originalName: string;
+  safeName: string;
+  uploadedAt: string;
+}
+
 export const policyPacks = pgTable("policy_packs", {
   id: serial("id").primaryKey(),
   clientConfigId: integer("client_config_id"),
@@ -240,6 +246,7 @@ export const policyPacks = pgTable("policy_packs", {
   lastAiGenerationAt: timestamp("last_ai_generation_at"),
   aiGenerationSummary: text("ai_generation_summary"),
   aiOpenQuestions: jsonb("ai_open_questions").$type<string[]>(),
+  sopSourceFiles: jsonb("sop_source_files").$type<SopSourceFile[]>(),
 });
 
 export const treatments = pgTable("treatments", {
