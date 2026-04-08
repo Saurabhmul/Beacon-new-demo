@@ -965,6 +965,34 @@ export async function registerRoutes(
           return res.status(422).json({ error: "No treatments could be generated from the uploaded documents. Please check that the SOP files contain identifiable treatment policies and try again." });
         }
 
+        // Phase A-pre: Structural fail-fast validation — invalid rule shapes abort with 422, no commit
+        const structuralErrors: string[] = [];
+        for (const t of normalizedTreatments) {
+          for (const r of t.when_to_offer) {
+            if (!r.field_name || !r.field_name.trim()) {
+              structuralErrors.push(`Treatment "${t.name}": when_to_offer rule has empty field_name`);
+            }
+            if (!VALID_OPERATORS.has(r.operator)) {
+              structuralErrors.push(`Treatment "${t.name}": when_to_offer uses invalid operator "${r.operator}" (allowed: ${Array.from(VALID_OPERATORS).join(", ")})`);
+            }
+          }
+          for (const r of t.blocked_if) {
+            if (!r.field_name || !r.field_name.trim()) {
+              structuralErrors.push(`Treatment "${t.name}": blocked_if rule has empty field_name`);
+            }
+            if (!VALID_OPERATORS.has(r.operator)) {
+              structuralErrors.push(`Treatment "${t.name}": blocked_if uses invalid operator "${r.operator}" (allowed: ${Array.from(VALID_OPERATORS).join(", ")})`);
+            }
+          }
+        }
+        if (structuralErrors.length > 0) {
+          console.warn(`[generate-treatment-draft] [${requestId}] Structural validation failed: ${structuralErrors.length} error(s)`);
+          return res.status(422).json({
+            error: "AI output failed structural validation — no changes committed",
+            details: structuralErrors,
+          });
+        }
+
         // Phase B: Collect all unique derived + business fields (global + per-treatment)
         type AIDerived = (typeof normalizedTreatments)[0]["derived_fields"][0];
         type AIBusiness = (typeof normalizedTreatments)[0]["business_fields"][0];
@@ -1020,6 +1048,14 @@ export async function registerRoutes(
         }
         for (const [key, bf] of allBusinessByKey.entries()) {
           if (fieldByLabelLower.has(key)) continue;
+          if (!bf.field_name || !bf.field_name.trim()) {
+            unresolvedFields.push({ fieldName: "(unnamed)", fieldType: "business", reason: "Business field has an empty field_name and cannot be created" });
+            continue;
+          }
+          if (!bf.description || !bf.description.trim()) {
+            unresolvedFields.push({ fieldName: bf.field_name, fieldType: "business", reason: "Business field is missing a description — required for business meaning documentation" });
+            continue;
+          }
           fieldsToCreateBusiness.push(bf);
         }
 

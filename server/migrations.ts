@@ -10,9 +10,12 @@ export async function runMigrations(): Promise<void> {
         ADD COLUMN IF NOT EXISTS allowed_values JSONB,
         ADD COLUMN IF NOT EXISTS default_value TEXT,
         ADD COLUMN IF NOT EXISTS business_meaning TEXT,
-        ADD COLUMN IF NOT EXISTS ai_generated BOOLEAN,
+        ADD COLUMN IF NOT EXISTS ai_generated BOOLEAN DEFAULT false,
         ADD COLUMN IF NOT EXISTS created_by TEXT,
         ADD COLUMN IF NOT EXISTS source_document_id TEXT;
+    `);
+    await client.query(`
+      UPDATE policy_fields SET ai_generated = false WHERE ai_generated IS NULL;
     `);
     console.log("DB migrations applied (policy_fields columns idempotent).");
   } catch (err) {
