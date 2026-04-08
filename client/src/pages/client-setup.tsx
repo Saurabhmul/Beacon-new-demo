@@ -2663,16 +2663,8 @@ function DataConfigTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/data-config"] });
       toast({ title: "Data configuration saved" });
     },
-    onError: (error: Error) => {
-      if (error.message.includes("Configure client first")) {
-        toast({
-          title: "Client configuration required",
-          description: "Please complete the Client Configuration step before saving Data Configuration.",
-          variant: "destructive",
-        });
-      } else {
-        toast({ title: "Error", description: "Failed to save.", variant: "destructive" });
-      }
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save.", variant: "destructive" });
     },
   });
 
