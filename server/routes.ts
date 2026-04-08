@@ -857,9 +857,9 @@ export async function registerRoutes(
           return res.status(400).json({ error: "No files uploaded" });
         }
         for (const file of files) {
-          const name = file.originalname.toLowerCase();
-          if (!name.endsWith(".pdf")) {
-            return res.status(400).json({ error: `"${file.originalname}" is not a PDF. Only PDF files are supported.` });
+          const isPdf = file.mimetype === "application/pdf" && file.originalname.toLowerCase().endsWith(".pdf");
+          if (!isPdf) {
+            return res.status(400).json({ error: `"${file.originalname}" is not a PDF. Only PDF files (application/pdf) are accepted.` });
           }
         }
 
@@ -880,7 +880,10 @@ export async function registerRoutes(
             text = "";
           }
 
-          if (text.length < 80) {
+          const nonWsChars = (text.match(/\S/g) || []).length;
+          const alphaNumChars = (text.match(/[a-zA-Z0-9]/g) || []).length;
+          const textQuality = nonWsChars > 0 ? alphaNumChars / nonWsChars : 0;
+          if (nonWsChars < 100 || textQuality < 0.4) {
             try {
               text = await extractTextFromPdfWithVision(file.buffer);
             } catch (visionErr) {
@@ -925,9 +928,10 @@ export async function registerRoutes(
           }, [])
           .map(t => ({
             ...t,
-            source_fields: t.source_fields.filter(sf =>
-              sourceFieldLabels.has(sf.field_name.toLowerCase().trim())
-            ),
+            source_fields: t.source_fields.map(sf => ({
+              ...sf,
+              matched_existing_field: sourceFieldLabels.has(sf.field_name.toLowerCase().trim()),
+            })),
             derived_fields: t.derived_fields.reduce((acc: typeof t.derived_fields, df) => {
               if (!acc.some(x => x.field_name.toLowerCase() === df.field_name.toLowerCase())) acc.push(df);
               return acc;
@@ -991,7 +995,7 @@ export async function registerRoutes(
               }).returning();
               for (let j = 0; j < t.when_to_offer.length; j++) {
                 const r = t.when_to_offer[j];
-                if (!VALID_OPERATORS.has(r.operator)) continue;
+                if (!VALID_OPERATORS.has(r.operator)) throw new Error(`Invalid operator "${r.operator}" in "when_to_offer" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
                 const fieldRecord = fieldRecords.find(f => f.label.toLowerCase() === r.field_name.toLowerCase());
                 const leftFieldId = fieldRecord
                   ? `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`
@@ -1020,7 +1024,7 @@ export async function registerRoutes(
               }).returning();
               for (let j = 0; j < t.blocked_if.length; j++) {
                 const r = t.blocked_if[j];
-                if (!VALID_OPERATORS.has(r.operator)) continue;
+                if (!VALID_OPERATORS.has(r.operator)) throw new Error(`Invalid operator "${r.operator}" in "blocked_if" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
                 const fieldRecord = fieldRecords.find(f => f.label.toLowerCase() === r.field_name.toLowerCase());
                 const leftFieldId = fieldRecord
                   ? `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`

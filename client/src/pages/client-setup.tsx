@@ -47,6 +47,7 @@ import {
   BookOpen, Upload, FileText, Trash2, Plus, File as FileIcon,
   Database, Pencil, MessageSquare, RotateCcw, Shield, Lock, AlertTriangle,
   Copy, RefreshCw, Info, Eye, ChevronDown, ChevronRight, X, Wand2, FileUp,
+  CheckCircle2, Circle,
 } from "lucide-react";
 import type { ClientConfig, Rulebook, DataConfig, DpdStage, PolicyConfig, TreatmentOption, DecisionRule, EscalationRules, EscalationCustomCondition, AffordabilityRule, CategoryEntry, FieldReview, PolicyPack, TreatmentWithRules, TreatmentRuleGroupWithRules, PolicyFieldDto, RuleSaveRow, DerivationConfig, DraftSourceField, DraftDerivedField, DraftBusinessField } from "@shared/schema";
 
@@ -442,10 +443,10 @@ function serverTxToLocal(tx: TreatmentWithRules): LocalTreatment {
     isDraft: false,
     expanded: false,
     activeSection: "when",
-    draftSourceFields: (tx as any).draftSourceFields || [],
-    draftDerivedFields: (tx as any).draftDerivedFields || [],
-    draftBusinessFields: (tx as any).draftBusinessFields || [],
-    aiConfidence: (tx as any).aiConfidence || null,
+    draftSourceFields: tx.draftSourceFields ?? [],
+    draftDerivedFields: tx.draftDerivedFields ?? [],
+    draftBusinessFields: tx.draftBusinessFields ?? [],
+    aiConfidence: (tx.aiConfidence as "high" | "medium" | "low" | null) ?? null,
   };
 }
 function extractionToLocal(e: { name: string; shortDescription: string; whenToOffer: { fieldName: string; operator: string; value: string }[]; blockedIf: { fieldName: string; operator: string; value: string }[] }): LocalTreatment {
@@ -1150,15 +1151,32 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
               {local.draftDerivedFields.length === 0 ? (
                 <p className="text-xs text-muted-foreground italic">No derived fields suggested by AI for this treatment.</p>
               ) : local.draftDerivedFields.map((df, i) => (
-                <div key={i} className="rounded-md border px-3 py-2 space-y-1">
+                <div key={i} className="rounded-md border p-3 space-y-1.5">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium">{df.fieldName}</span>
-                    <Badge variant="outline" className="text-[10px]">derived</Badge>
+                    <Input
+                      className="text-xs font-medium h-6 px-1 flex-1 border-none shadow-none focus-visible:ring-0 bg-transparent"
+                      value={df.fieldName}
+                      onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, fieldName: v } : f) })); }}
+                      readOnly={isReadOnly}
+                      placeholder="Field name"
+                    />
+                    <Badge variant="outline" className="text-[10px] shrink-0">derived</Badge>
                   </div>
-                  {df.description && <p className="text-xs text-muted-foreground">{df.description}</p>}
-                  {df.formulaHint && (
-                    <p className="text-[11px] font-mono bg-muted px-2 py-1 rounded text-muted-foreground">{df.formulaHint}</p>
-                  )}
+                  <Textarea
+                    className="text-xs resize-none min-h-0"
+                    value={df.description}
+                    rows={2}
+                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, description: v } : f) })); }}
+                    readOnly={isReadOnly}
+                    placeholder="Description"
+                  />
+                  <Input
+                    className="text-[11px] font-mono h-7"
+                    value={df.formulaHint}
+                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, formulaHint: v } : f) })); }}
+                    readOnly={isReadOnly}
+                    placeholder="Formula hint (e.g. field_a / field_b)"
+                  />
                   {df.dependsOn.length > 0 && (
                     <p className="text-[11px] text-muted-foreground">Depends on: {df.dependsOn.join(", ")}</p>
                   )}
@@ -1171,15 +1189,32 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
               {local.draftBusinessFields.length === 0 ? (
                 <p className="text-xs text-muted-foreground italic">No business fields suggested by AI for this treatment.</p>
               ) : local.draftBusinessFields.map((bf, i) => (
-                <div key={i} className="rounded-md border px-3 py-2 space-y-1">
+                <div key={i} className="rounded-md border p-3 space-y-1.5">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium">{bf.fieldName}</span>
-                    <Badge variant="outline" className="text-[10px]">business</Badge>
+                    <Input
+                      className="text-xs font-medium h-6 px-1 flex-1 border-none shadow-none focus-visible:ring-0 bg-transparent"
+                      value={bf.fieldName}
+                      onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftBusinessFields: l.draftBusinessFields.map((f, j) => j === i ? { ...f, fieldName: v } : f) })); }}
+                      readOnly={isReadOnly}
+                      placeholder="Field name"
+                    />
+                    <Badge variant="outline" className="text-[10px] shrink-0">business</Badge>
                   </div>
-                  {bf.description && <p className="text-xs text-muted-foreground">{bf.description}</p>}
-                  {bf.allowedValues.length > 0 && (
-                    <p className="text-[11px] text-muted-foreground">Allowed values: {bf.allowedValues.join(", ")}</p>
-                  )}
+                  <Textarea
+                    className="text-xs resize-none min-h-0"
+                    value={bf.description}
+                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftBusinessFields: l.draftBusinessFields.map((f, j) => j === i ? { ...f, description: v } : f) })); }}
+                    readOnly={isReadOnly}
+                    placeholder="Description"
+                    rows={2}
+                  />
+                  <Input
+                    className="text-xs h-7"
+                    value={bf.allowedValues.join(", ")}
+                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftBusinessFields: l.draftBusinessFields.map((f, j) => j === i ? { ...f, allowedValues: v.split(",").map(s => s.trim()).filter(Boolean) } : f) })); }}
+                    readOnly={isReadOnly}
+                    placeholder="Allowed values (comma-separated)"
+                  />
                 </div>
               ))}
             </div>
@@ -1189,6 +1224,18 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
     </div>
   );
 }
+
+const SOP_STAGE_ORDER = ["uploading", "extracting", "field_matching", "ai_generating", "validating", "saving"] as const;
+type SopStageId = typeof SOP_STAGE_ORDER[number];
+type SopGenerationStage = "idle" | SopStageId | "error";
+const SOP_STAGE_LABELS: Record<SopStageId, string> = {
+  uploading: "Uploading files",
+  extracting: "Extracting PDF text",
+  field_matching: "Matching policy fields",
+  ai_generating: "AI generating draft",
+  validating: "Validating output",
+  saving: "Saving treatments",
+};
 
 const PRELOADED_TREATMENTS = [
   { name: "Forbearance / Payment Holiday", shortDescription: "Temporarily pausing or reducing payments for a set period (typically 1–6 months). The loan still accrues interest, but the customer gets breathing room. Used when the customer genuinely can't pay right now but the situation is temporary." },
@@ -1250,16 +1297,40 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onSaveReady, localTreatments]);
 
-  // Upload panel toggle
+  // Upload panel + AI generation
   const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [sopFiles, setSopFiles] = useState<File[]>([]);
-  const [generationStage, setGenerationStage] = useState<"idle" | "generating" | "error">("idle");
+  const [generationStage, setGenerationStage] = useState<SopGenerationStage>("idle");
   const [generationError, setGenerationError] = useState<string | null>(null);
   const sopInputRef = useRef<HTMLInputElement>(null);
   const [overwriteModalOpen, setOverwriteModalOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [aiReviewInfo, setAiReviewInfo] = useState<{ summary: string; openQuestions: string[]; generatedAt: string } | null>(null);
   const [openQuestionsExpanded, setOpenQuestionsExpanded] = useState(false);
+  const stageTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const errorStageRef = useRef<SopStageId>("ai_generating");
+
+  function clearStageTimers() {
+    stageTimersRef.current.forEach(t => clearTimeout(t));
+    stageTimersRef.current = [];
+  }
+
+  function getSopStageStatus(stageId: SopStageId): "pending" | "current" | "done" | "error" {
+    const stage = generationStage;
+    if (stage === "idle") return "pending";
+    if (stage === "error") {
+      const errorIdx = SOP_STAGE_ORDER.indexOf(errorStageRef.current);
+      const idx = SOP_STAGE_ORDER.indexOf(stageId);
+      if (idx < errorIdx) return "done";
+      if (idx === errorIdx) return "error";
+      return "pending";
+    }
+    const currentIdx = SOP_STAGE_ORDER.indexOf(stage as SopStageId);
+    const idx = SOP_STAGE_ORDER.indexOf(stageId);
+    if (idx < currentIdx) return "done";
+    if (idx === currentIdx) return "current";
+    return "pending";
+  }
 
   // Library selection (inline checklist)
   const [librarySelected, setLibrarySelected] = useState<Set<string>>(new Set());
@@ -1323,12 +1394,34 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   function handleFilesSelected(files: FileList | null) {
     if (!files || files.length === 0) return;
     const selected = Array.from(files);
+    const invalid = selected.filter(f => !f.name.toLowerCase().endsWith(".pdf"));
+    if (invalid.length > 0) {
+      setGenerationError(`Invalid file type: ${invalid.map(f => f.name).join(", ")}. Please select PDF files only.`);
+      return;
+    }
+    setGenerationError(null);
     setSopFiles(selected);
+    if (localTreatments.length > 0) {
+      setPendingFiles(selected);
+      setOverwriteModalOpen(true);
+    } else {
+      runGeneration(selected);
+    }
   }
 
   async function runGeneration(files: File[]) {
-    setGenerationStage("generating");
+    clearStageTimers();
     setGenerationError(null);
+    setSopFiles(files);
+    let activeStage: SopStageId = "uploading";
+    setGenerationStage("uploading");
+    function scheduleStage(stage: SopStageId, delay: number) {
+      const t = setTimeout(() => { activeStage = stage; setGenerationStage(stage); }, delay);
+      stageTimersRef.current.push(t);
+    }
+    scheduleStage("extracting", 1200);
+    scheduleStage("field_matching", 2800);
+    scheduleStage("ai_generating", 4500);
     try {
       const form = new FormData();
       for (const f of files) form.append("sopFiles", f);
@@ -1337,6 +1430,11 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
+      clearStageTimers();
+      setGenerationStage("validating");
+      await new Promise(r => setTimeout(r, 350));
+      setGenerationStage("saving");
+      await new Promise(r => setTimeout(r, 350));
       const { treatments: generatedTxs, summary, openQuestions, generatedAt } = data;
       queryClient.invalidateQueries({ queryKey: ["/api/policy-pack/treatments"] });
       const newLocals: LocalTreatment[] = generatedTxs.map((tx: TreatmentWithRules) => serverTxToLocal(tx));
@@ -1347,26 +1445,28 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
       setGenerationStage("idle");
       toast({ title: `${newLocals.length} treatment${newLocals.length !== 1 ? "s" : ""} generated`, description: "Review AI-generated treatments below before saving." });
     } catch (err) {
+      clearStageTimers();
+      errorStageRef.current = activeStage;
       const msg = err instanceof Error ? err.message : "Failed to generate treatments";
       setGenerationError(msg);
       setGenerationStage("error");
     }
   }
 
-  function handleStartGeneration() {
-    if (sopFiles.length === 0) return;
-    if (localTreatments.length > 0) {
-      setPendingFiles(sopFiles);
-      setOverwriteModalOpen(true);
-    } else {
-      runGeneration(sopFiles);
-    }
+  function handleOverwriteConfirm() {
+    const files = pendingFiles;
+    setOverwriteModalOpen(false);
+    setPendingFiles([]);
+    runGeneration(files);
   }
 
-  function handleOverwriteConfirm() {
+  function handleOverwriteCancel() {
     setOverwriteModalOpen(false);
-    runGeneration(pendingFiles);
     setPendingFiles([]);
+    setSopFiles([]);
+    setGenerationStage("idle");
+    setGenerationError(null);
+    setShowUploadPanel(false);
   }
 
   function closeAddDialog() {
@@ -1453,47 +1553,91 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
         {/* ── Inline Upload Panel ─────────────────────────────────── */}
         {showUploadPanel && !isReadOnly && (
           <CardContent className="border-t pt-4 space-y-3">
-            <div>
-              <p className="text-sm font-medium">Upload SOP / Policy PDFs</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Upload one or more PDF policy documents. Beacon will generate treatment rules using your configured fields.</p>
-            </div>
             <input ref={sopInputRef} type="file" accept=".pdf" multiple className="hidden"
-              onChange={e => handleFilesSelected(e.target.files)} />
-            <div className="flex items-center gap-3 flex-wrap">
-              <Button variant="outline" size="sm" onClick={() => sopInputRef.current?.click()}
-                disabled={generationStage === "generating"} data-testid="button-browse-sop">
-                <Upload className="w-3.5 h-3.5 mr-1" />Browse
-              </Button>
-              <span className="text-xs text-muted-foreground">PDF only</span>
-            </div>
-            {sopFiles.length > 0 && (
-              <div className="space-y-1">
-                {sopFiles.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <FileText className="w-3 h-3 shrink-0" />
-                    <span className="truncate max-w-xs">{f.name}</span>
-                    <span className="text-muted-foreground/60">({(f.size / 1024).toFixed(0)} KB)</span>
+              onChange={e => { handleFilesSelected(e.target.files); if (sopInputRef.current) sopInputRef.current.value = ""; }} />
+
+            {generationStage === "idle" ? (
+              <>
+                <div>
+                  <p className="text-sm font-medium">Upload SOP / Policy PDFs</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Select one or more PDF policy documents. Generation starts automatically once you pick your files.</p>
+                </div>
+                {generationError && (
+                  <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md p-2">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{generationError}</span>
                   </div>
-                ))}
-              </div>
+                )}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button variant="outline" size="sm" onClick={() => sopInputRef.current?.click()} data-testid="button-browse-sop">
+                    <Upload className="w-3.5 h-3.5 mr-1" />Browse PDF files
+                  </Button>
+                  <span className="text-xs text-muted-foreground">PDF only · up to 10 files · 25 MB each</span>
+                </div>
+                <Button size="sm" variant="ghost" className="text-muted-foreground"
+                  onClick={() => { setShowUploadPanel(false); setSopFiles([]); setGenerationError(null); }}>Cancel</Button>
+              </>
+            ) : generationStage === "error" ? (
+              <>
+                <div>
+                  <p className="text-sm font-medium">Generation failed</p>
+                  {sopFiles.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {sopFiles.map((f, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <FileText className="w-3 h-3 shrink-0" />
+                          <span className="truncate max-w-xs">{f.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md p-2">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{generationError}</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => runGeneration(sopFiles)} data-testid="button-retry-generation">
+                    <RefreshCw className="w-3.5 h-3.5 mr-1" />Retry
+                  </Button>
+                  <Button size="sm" variant="outline"
+                    onClick={() => { setShowUploadPanel(false); setSopFiles([]); setGenerationStage("idle"); setGenerationError(null); }}>Cancel</Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <p className="text-sm font-medium">Generating treatments from SOP…</p>
+                  {sopFiles.length > 0 && (
+                    <div className="mt-1.5 space-y-0.5">
+                      {sopFiles.map((f, i) => (
+                        <div key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <FileText className="w-3 h-3 shrink-0" />
+                          <span className="truncate max-w-xs">{f.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2" data-testid="sop-stage-progress">
+                  {SOP_STAGE_ORDER.map(stageId => {
+                    const status = getSopStageStatus(stageId);
+                    return (
+                      <div key={stageId} className="flex items-center gap-2.5">
+                        {status === "done" && <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />}
+                        {status === "current" && <Loader2 className="w-4 h-4 text-primary shrink-0 animate-spin" />}
+                        {status === "pending" && <Circle className="w-4 h-4 text-muted-foreground/30 shrink-0" />}
+                        {status === "error" && <AlertTriangle className="w-4 h-4 text-destructive shrink-0" />}
+                        <span className={`text-xs ${status === "done" ? "text-muted-foreground line-through" : status === "current" ? "text-foreground font-medium" : status === "error" ? "text-destructive" : "text-muted-foreground/50"}`}>
+                          {SOP_STAGE_LABELS[stageId]}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-muted-foreground italic">Keep this page open while treatments are being generated…</p>
+              </>
             )}
-            {generationStage === "error" && generationError && (
-              <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md p-2">
-                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                <span>{generationError}</span>
-              </div>
-            )}
-            <div className="flex gap-2">
-              <Button size="sm" onClick={handleStartGeneration}
-                disabled={sopFiles.length === 0 || generationStage === "generating"}
-                data-testid="button-generate-draft">
-                {generationStage === "generating"
-                  ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Generating…</>
-                  : <><Wand2 className="w-3.5 h-3.5 mr-1" />Generate Treatments</>}
-              </Button>
-              <Button size="sm" variant="outline" disabled={generationStage === "generating"}
-                onClick={() => { setShowUploadPanel(false); setSopFiles([]); setGenerationStage("idle"); setGenerationError(null); }}>Cancel</Button>
-            </div>
           </CardContent>
         )}
 
@@ -1574,7 +1718,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
       </Card>
 
       {/* ── Overwrite Confirmation Modal ────────────────────────────── */}
-      <Dialog open={overwriteModalOpen} onOpenChange={v => { if (!v) { setOverwriteModalOpen(false); setPendingFiles([]); } }}>
+      <Dialog open={overwriteModalOpen} onOpenChange={v => { if (!v) handleOverwriteCancel(); }}>
         <DialogContent className="max-w-md" onPointerDownOutside={e => e.preventDefault()}>
           <DialogHeader>
             <DialogTitle>Regenerate Treatments?</DialogTitle>
@@ -1592,7 +1736,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
             </div>
           </div>
           <DialogFooter className="gap-2 pt-1">
-            <Button variant="outline" onClick={() => { setOverwriteModalOpen(false); setPendingFiles([]); }} data-testid="button-overwrite-cancel">Cancel</Button>
+            <Button variant="outline" onClick={handleOverwriteCancel} data-testid="button-overwrite-cancel">Cancel</Button>
             <Button onClick={handleOverwriteConfirm} data-testid="button-overwrite-confirm">Overwrite and Regenerate</Button>
           </DialogFooter>
         </DialogContent>
