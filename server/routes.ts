@@ -5,7 +5,7 @@ import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
 import { authenticate, authorize, companyFilter } from "./middleware/auth";
 import multer from "multer";
 import Papa from "papaparse";
-import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSOPTreatments, extractTextFromPdfWithVision, generateTreatmentDraft } from "./ai-engine";
+import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSOPTreatments, extractTextFromPdfWithVision, generateTreatmentDraft, type ColumnEvidence } from "./ai-engine";
 import { batchProcessWithSSE } from "./replit_integrations/batch";
 import { users, uploadLogs, companies, treatments, treatmentRuleGroups, treatmentRules, policyPacks } from "@shared/schema";
 import type { PolicyFieldDto, RuleSaveRow, DerivationConfig } from "@shared/schema";
@@ -447,7 +447,7 @@ export async function registerRoutes(
       }
 
       let headers: string[] = [];
-      let sampleRows: Record<string, string>[] = [];
+      let allRows: Record<string, string>[] = [];
 
       if (isTabular) {
         if (/\.csv$/i.test(file.originalname)) {
@@ -455,7 +455,7 @@ export async function registerRoutes(
           const parsed = Papa.parse(content, { header: true, skipEmptyLines: true });
           if (parsed.data.length > 0) {
             headers = Object.keys(parsed.data[0] as Record<string, unknown>);
-            sampleRows = (parsed.data as Record<string, unknown>[]).slice(0, 3).map(row => {
+            allRows = (parsed.data as Record<string, unknown>[]).slice(0, 10).map(row => {
               const r: Record<string, string> = {};
               for (const [k, v] of Object.entries(row)) r[k] = String(v ?? "");
               return r;
@@ -468,7 +468,7 @@ export async function registerRoutes(
           const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as unknown[][];
           if (data.length > 0) {
             headers = (data[0] as unknown[]).map(h => String(h ?? "")).filter(h => h.trim());
-            sampleRows = data.slice(1, 4).map(row => {
+            allRows = data.slice(1, 11).map(row => {
               const r: Record<string, string> = {};
               headers.forEach((h, i) => { r[h] = String((row as unknown[])[i] ?? ""); });
               return r;
@@ -481,9 +481,39 @@ export async function registerRoutes(
         }
       }
 
+      // ── Build per-column compact evidence (up to 10 rows) ──────────────────
+      function inferColumnType(values: string[]): ColumnEvidence['inferredType'] {
+        if (values.length === 0) return 'categorical';
+        const BOOL_VALUES = new Set(['yes', 'no', 'true', 'false', '1', '0', 'y', 'n']);
+        const DATE_RE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/;
+        let numCount = 0, boolCount = 0, dateCount = 0;
+        for (const v of values) {
+          const lv = v.trim().toLowerCase();
+          if (!isNaN(Number(lv)) && lv !== '') numCount++;
+          if (BOOL_VALUES.has(lv)) boolCount++;
+          if (DATE_RE.test(v.trim())) dateCount++;
+        }
+        const n = values.length;
+        if (boolCount / n >= 0.8) return 'boolean-like';
+        if (dateCount / n >= 0.6) return 'date-like';
+        if (numCount / n >= 0.8) return 'numeric';
+        const maxLen = Math.max(...values.map(v => v.length));
+        if (maxLen > 60) return 'free-text';
+        return 'categorical';
+      }
+
+      const columnEvidence: ColumnEvidence[] = headers.map(h => {
+        const nonEmpty = allRows.map(r => String(r[h] ?? "").trim()).filter(v => v !== "");
+        const sampleValues = nonEmpty.slice(0, 5).map(v => v.slice(0, 60));
+        const inferredType = inferColumnType(nonEmpty);
+        const unique = [...new Set(nonEmpty)];
+        const distinctValues = unique.length <= 8 ? unique.map(v => v.slice(0, 60)) : undefined;
+        return { fieldName: h, sampleValues, inferredType, distinctValues };
+      });
+
       let fieldAnalysis: Array<{ fieldName: string; beaconsUnderstanding: string; confidence: 'High' | 'Medium' | 'Low' }> = [];
       if (isTabular && headers.length > 0) {
-        fieldAnalysis = await analyzeCategoryFields(category, headers, sampleRows);
+        fieldAnalysis = await analyzeCategoryFields(category, headers, columnEvidence);
       }
 
       res.json({

@@ -466,6 +466,14 @@ export async function extractTextFromImage(base64Data: string, mimeType: string)
   return response.text || "";
 }
 
+// ─── Column evidence type (built in routes, consumed here) ───────────────────
+export interface ColumnEvidence {
+  fieldName: string;
+  sampleValues: string[];
+  inferredType: 'numeric' | 'boolean-like' | 'date-like' | 'categorical' | 'free-text';
+  distinctValues?: string[];
+}
+
 // ─── Zod schema for a single field-analysis item ─────────────────────────────
 const FieldAnalysisItemSchema = z.object({
   fieldName: z.string().min(1),
@@ -490,182 +498,408 @@ function normaliseConfidence(raw: unknown): unknown {
   return raw;
 }
 
-const BOILERPLATE_DESCRIPTIONS = new Set([
+// Patterns that match when the ENTIRE description is a pure datatype/generic label.
+// These are tested against the full trimmed description — they do NOT trigger when
+// the phrase appears as part of a longer, domain-specific sentence.
+const PURE_DATATYPE_PATTERNS: RegExp[] = [
+  /^date\s+field\.?$/i,
+  /^boolean\s+flag\.?(\s+\(true\/false\))?\.?$/i,
+  /^boolean\s+flag\s+\(true\/false\)\s+indicating\s+[\w\s]+?\.?$/i,
+  /^boolean\s+flag\s+indicating\s+(whether\s+)?[\w\s]+?\.?$/i,
+  /^reference\s+identifier\.?$/i,
+  /^status\s+indicator\.?$/i,
+  /^currency\s+amount\s+in\s+gbp\.?$/i,
+  /^categorisation\s+or\s+type\s+field\.?$/i,
+  /^graded\s+or\s+tiered\s+level\s+indicator\.?$/i,
+  /^duration\s+expressed\s+in\s+months\.?$/i,
+  /^unique\s+identifier\.?$/i,
+  /^outstanding\s+balance\s+amount\.?$/i,
+  /^duration\s+(or\s+time-span\s+)?field\.?$/i,
+  /^count\s+or\s+flag\s+for\s+(inbound|outbound)\s+communications?\s+(sent|received)\.?$/i,
+  /^field\s+named\s+".+"\s+[—-]\s+please\s+describe/i,
+  /^.{1,80}\s+[—-]\s+please\s+describe\s+what\s+this\s+field\s+represents\.?$/i,
+];
+
+const BOILERPLATE_EXACT = new Set([
   "unknown", "field", "n/a", "na", "none", "null", "undefined", "tbd", "todo",
 ]);
 
-/** Return true if the description is empty, too short, boilerplate, or near-identical to the header */
+/**
+ * Returns true if the description is weak: too short, boilerplate, near-identical
+ * to the header, or is a pure datatype label without domain/business meaning.
+ * Does NOT reject descriptions that contain phrases like "count of" or "numerical
+ * score" unless those phrases constitute the ENTIRE description with no domain context.
+ */
 function isWeakDescription(desc: string, headerNorm: string): boolean {
   const trimmed = desc.trim();
-  if (trimmed.length < 15) return true;
-  if (BOILERPLATE_DESCRIPTIONS.has(trimmed.toLowerCase())) return true;
+  const lower = trimmed.toLowerCase();
+
+  if (trimmed.length < 20) return true;
+  if (BOILERPLATE_EXACT.has(lower)) return true;
   if (normaliseKey(trimmed) === headerNorm) return true;
+
+  for (const pattern of PURE_DATATYPE_PATTERNS) {
+    if (pattern.test(trimmed)) return true;
+  }
   return false;
 }
 
-/** Heuristic description for a header that the AI did not cover adequately */
-function heuristicDescription(header: string): { beaconsUnderstanding: string; confidence: 'Low' } {
-  const lower = header.toLowerCase();
-  const patterns: Array<[string, string]> = [
-    ["_gbp",        "Currency amount in GBP"],
-    ["_balance",    "Outstanding balance amount"],
-    ["_date",       "Date field"],
-    ["_active",     "Boolean flag (true/false) indicating active status"],
-    ["_completed",  "Boolean flag indicating whether an action has been completed"],
-    ["_months",     "Duration expressed in months"],
-    ["_rag",        "Red / Amber / Green status indicator"],
-    ["_type",       "Categorisation or type field"],
-    ["_ref",        "Reference identifier"],
-    ["_id",         "Unique identifier"],
-    ["_sent",       "Count or flag for outbound communications sent"],
-    ["_received",   "Count or flag for inbound communications received"],
-    ["_level",      "Graded or tiered level indicator"],
-    ["_score",      "Numerical score or rating"],
-    ["_count",      "Count of occurrences"],
-    ["_flag",       "Boolean flag"],
-    ["_status",     "Status indicator"],
-    ["_duration",   "Duration or time-span field"],
-  ];
-  for (const [suffix, desc] of patterns) {
-    if (lower.endsWith(suffix) || lower.includes(suffix + "_")) {
-      return { beaconsUnderstanding: desc, confidence: "Low" as const };
-    }
-  }
-  const humanReadable = header.replace(/[_-]/g, " ");
-  return {
-    beaconsUnderstanding: `Field named "${humanReadable}" — please describe what this field represents.`,
-    confidence: "Low" as const,
-  };
+/** Three-tier header matching: exact → case-insensitive → alphanumeric-normalised */
+function matchHeader(
+  fieldName: string,
+  headerExact: Map<string, string>,
+  headerLower: Map<string, string>,
+  headerNormMap: Map<string, string>,
+): string | undefined {
+  if (headerExact.has(fieldName)) return headerExact.get(fieldName);
+  if (headerLower.has(fieldName.toLowerCase())) return headerLower.get(fieldName.toLowerCase());
+  if (headerNormMap.has(normaliseKey(fieldName))) return headerNormMap.get(normaliseKey(fieldName));
+  return undefined;
 }
 
-export async function analyzeCategoryFields(
+/** Parse, fence-strip, JSON-parse, and Zod-validate AI response items */
+function parseAIResponse(
+  rawText: string,
   categoryId: string,
-  headers: string[],
-  sampleRows: Record<string, string>[]
-): Promise<Array<{ fieldName: string; beaconsUnderstanding: string; confidence: 'High' | 'Medium' | 'Low' }>> {
-  const categoryLabel = categoryId.replace(/_/g, ' ');
-  const sampleStr = sampleRows.length > 0
-    ? `\nSample data rows:\n${sampleRows.map((r, i) => `Row ${i + 1}: ${JSON.stringify(r)}`).join('\n')}`
-    : '';
-
-  const prompt = `You are a data analyst for a financial collections software called Beacon.
-A client has uploaded a sample file for the "${categoryLabel}" data category.
-Analyze these column headers and describe what each field likely means in a loan collections context.
-
-Column headers: ${headers.join(', ')}${sampleStr}
-
-Return a JSON array — one object per column — with exactly these keys:
-  fieldName        — the exact column name as provided above (do not rename or reformat it)
-  beaconsUnderstanding — a clear, plain-English description of 1–2 sentences explaining what the field represents in a collections context
-  confidence       — exactly one of: "High", "Medium", or "Low"
-                     "High" = field name is self-explanatory
-                     "Medium" = meaning can be reasonably inferred
-                     "Low" = field name is ambiguous
-
-Rules:
-- Return ONLY the raw JSON array. No markdown, no code fences, no explanation, no commentary.
-- Every column header listed above must appear exactly once in your output.
-- Do not invent new field names. Copy each header character-for-character.
-- Do not return empty, vague, or boilerplate descriptions such as "Unknown" or "Field".`;
-
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-pro",
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: {
-      maxOutputTokens: 4096,
-      responseMimeType: "application/json",
-    },
-  });
-
-  const rawText = response.text || "";
-
-  // ── Stage 1: strip markdown fences (safety net) ───────────────────────────
+  headerCount: number,
+  stage: string,
+): FieldAnalysisItem[] {
   let jsonText = rawText.trim();
   if (jsonText.startsWith("```")) {
     jsonText = jsonText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
   }
 
-  // ── Stage 2: JSON.parse ───────────────────────────────────────────────────
   let parsed: unknown[];
   try {
     const p = JSON.parse(jsonText);
     parsed = Array.isArray(p) ? p : [];
     if (!Array.isArray(p)) {
-      console.warn(`[analyzeCategoryFields] stage=json_parse category=${categoryId} headers=${headers.length} reason=non-array raw=${rawText.slice(0, 500)}`);
+      console.warn(`[analyzeCategoryFields] stage=${stage}_json_parse category=${categoryId} headers=${headerCount} reason=non-array raw=${rawText.slice(0, 500)}`);
     }
-  } catch (err) {
-    console.warn(`[analyzeCategoryFields] stage=json_parse category=${categoryId} headers=${headers.length} reason=parse-error raw=${rawText.slice(0, 500)}`);
-    parsed = [];
+  } catch {
+    console.warn(`[analyzeCategoryFields] stage=${stage}_json_parse category=${categoryId} headers=${headerCount} reason=parse-error raw=${rawText.slice(0, 500)}`);
+    return [];
   }
 
-  // ── Stage 3: per-item Zod validation with confidence normalisation ────────
-  const validItems: FieldAnalysisItem[] = [];
+  const valid: FieldAnalysisItem[] = [];
   for (const item of parsed) {
     if (item && typeof item === "object") {
       const patched = { ...(item as Record<string, unknown>) };
       patched.confidence = normaliseConfidence(patched.confidence);
       const result = FieldAnalysisItemSchema.safeParse(patched);
       if (result.success) {
-        validItems.push(result.data);
+        valid.push(result.data);
       } else {
-        console.warn(`[analyzeCategoryFields] stage=zod_validation category=${categoryId} headers=${headers.length} item=${JSON.stringify(item).slice(0, 200)} raw=${rawText.slice(0, 500)}`);
+        console.warn(`[analyzeCategoryFields] stage=${stage}_zod_validation category=${categoryId} headers=${headerCount} item=${JSON.stringify(item).slice(0, 200)}`);
       }
     }
   }
+  return valid;
+}
 
-  // ── Stage 4: weak-description rejection ──────────────────────────────────
-  const strongItems: FieldAnalysisItem[] = [];
-  for (const item of validItems) {
-    const headerNorm = normaliseKey(item.fieldName);
-    if (isWeakDescription(item.beaconsUnderstanding, headerNorm)) {
-      console.warn(`[analyzeCategoryFields] stage=weak_description category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
-    } else {
-      strongItems.push(item);
+/** Format column evidence into a compact string for the prompt */
+function buildEvidenceStr(columnEvidence: ColumnEvidence[]): string {
+  return columnEvidence.map((col, i) => {
+    const parts: string[] = [`${i + 1}. ${col.fieldName} [${col.inferredType}]`];
+    if (col.distinctValues && col.distinctValues.length > 0) {
+      parts.push(`distinct: ${col.distinctValues.join(", ")}`);
+    } else if (col.sampleValues.length > 0) {
+      parts.push(`samples: ${col.sampleValues.join(", ")}`);
     }
+    return parts.join(" | ");
+  }).join("\n");
+}
+
+/** Build the first-pass domain-specific prompt */
+function buildFirstPassPrompt(categoryLabel: string, evidenceStr: string): string {
+  return `You are a senior data analyst for Beacon, a software platform used in lending, servicing, arrears management, collections strategy, recoveries, payment operations, affordability assessment, customer engagement, vulnerability handling, and support operations.
+
+A client has uploaded a sample CSV for the "${categoryLabel}" data category in Beacon's Data Configuration area.
+
+Your task is to infer what each column most likely means in the business context most relevant to that category.
+
+Category interpretation guidance:
+- Loan / Account Data: interpret fields in the context of lending, balances, delinquency, arrears, recoveries, status, forbearance, insolvency, and account treatment
+- Payment Data: interpret fields in the context of payments, scheduled vs received amounts, payment dates, reversals, failed payments, allocations, repayment behaviour, and arrears progression
+- Conversation / Contact / Communication Data: interpret fields in the context of customer interactions, outreach attempts, channels, outcomes, promises to pay, complaints, engagement, and collections contact strategy
+- Customer Data: interpret fields in the context of identity, demographics, contactability, affordability, vulnerability, and customer servicing
+- Other categories: infer the most likely operational meaning based on headers, sample values, and Beacon's collections/servicing use case
+
+Domain glossary — expand these in descriptions where appropriate:
+DCA = Debt Collection Agency | CAIS = Credit Account Information Sharing (bureau reporting) | RAG = Red/Amber/Green status indicator | IE = Income and Expenditure assessment | PTP = Promise to Pay | RPC = Right Party Contact | IVA = Individual Voluntary Arrangement | DRO = Debt Relief Order | DMP = Debt Management Plan
+
+Column evidence (fieldName [inferredType] | sample or distinct values):
+${evidenceStr}
+
+For each column, return one JSON object with exactly these keys:
+- fieldName: the exact column name as listed above — copy it character-for-character, do not rename or reformat
+- beaconsUnderstanding: a concise but specific plain-English description (1–2 sentences)
+  Sentence 1: what the field most likely represents in the relevant business context
+  Sentence 2 if needed: how it is used or why it matters operationally
+  Use "likely", "appears to", or "probably" when certainty is limited
+- confidence: exactly one of "High", "Medium", or "Low"
+  High = column name and/or sample values make the meaning very clear
+  Medium = meaning is reasonably inferable but there is some ambiguity
+  Low = meaning is genuinely uncertain even after considering name and values
+
+Good description examples:
+- "Current amount overdue on the account, expressed in GBP. This is a core arrears severity measure used to prioritise collections treatment."
+- "Amount received from the customer for a payment transaction, likely used to track repayment behaviour and reconcile account performance."
+- "Outcome of a customer contact attempt, such as right party contact, voicemail, or no answer. This helps determine next-step collections strategy."
+- "Indicator showing whether the customer is currently in an approved Breathing Space protection period. This would affect collections activity and contact restrictions."
+
+Bad description examples — never produce these or similar:
+- "Currency amount in GBP"
+- "Date field"
+- "Reference identifier"
+- "Boolean flag"
+- "Status indicator"
+- "Field named X — please describe what this field represents"
+- "Categorisation or type field"
+
+Rules:
+- Return ONLY a raw JSON array — no markdown, no code fences, no explanation, no commentary
+- Every input column must appear exactly once in your output
+- Do not rename, normalise, or reformat field names — copy each one exactly as listed above
+- Do not invent columns not in the list
+- Do not use placeholder or generic descriptions — if uncertain, give the best likely category-relevant interpretation`;
+}
+
+/** Build the repair prompt for weak/missing fields */
+function buildRepairPrompt(categoryLabel: string, weakEvidence: ColumnEvidence[]): string {
+  const weakEvidenceStr = buildEvidenceStr(weakEvidence);
+  return `You previously generated field descriptions that were too generic or lacked business context for the "${categoryLabel}" data category in Beacon.
+
+Rewrite the descriptions for the fields below so they are more specific and useful in the operational context of ${categoryLabel}.
+
+Requirements:
+- Use the column name and sample/distinct values provided
+- Infer likely business meaning relevant to ${categoryLabel} operations
+- Avoid generic phrases like "date field", "boolean flag", "reference identifier", "status indicator", "currency amount", "categorisation or type"
+- Give the best likely interpretation even if confidence is Medium or Low
+- Use "likely", "appears to", or "probably" when certainty is limited
+- Keep each description to 1 or 2 sentences
+
+Fields to rewrite (fieldName [inferredType] | sample or distinct values):
+${weakEvidenceStr}
+
+Return ONLY a raw JSON array with keys: fieldName (exact original name, character-for-character), beaconsUnderstanding, confidence ("High", "Medium", or "Low").
+No markdown, no code fences, no explanation.`;
+}
+
+/** Domain-aware fallback when both AI passes fail — always includes business meaning */
+function buildDomainFallback(header: string, categoryLabel: string): { beaconsUnderstanding: string; confidence: 'Low' } {
+  const lower = header.toLowerCase();
+  const parts = lower.split(/[_\-\s]+/);
+  const cat = categoryLabel.toLowerCase();
+
+  const has = (...terms: string[]) => terms.some(t => parts.includes(t) || lower.includes(t));
+
+  if (has("breathing") && has("space")) {
+    return { beaconsUnderstanding: `Likely relates to a Breathing Space protection registration, which would restrict collections contact and activity for the affected customer.`, confidence: "Low" };
+  }
+  if (has("insolvency") || has("iva") || has("dro") || has("bankruptcy")) {
+    return { beaconsUnderstanding: `Likely indicates whether an insolvency event (such as IVA, DRO, or bankruptcy) applies to this customer, which would significantly affect collections strategy and permissible activity.`, confidence: "Low" };
+  }
+  if (has("vulnerability", "vulnerable") && has("rag")) {
+    return { beaconsUnderstanding: `Likely a Red / Amber / Green (RAG) indicator of the customer's vulnerability status, used to adjust the collections approach and ensure compliant, sensitive handling.`, confidence: "Low" };
+  }
+  if (has("vulnerability", "vulnerable")) {
+    return { beaconsUnderstanding: `Likely relates to the customer's vulnerability status or type, used to ensure appropriate and compliant collections treatment and engagement.`, confidence: "Low" };
+  }
+  if (has("forbearance", "arrangement", "deferral", "dmp")) {
+    return { beaconsUnderstanding: `Likely relates to a forbearance or repayment arrangement applied to the account, such as a payment plan, deferral, or support intervention used in collections treatment.`, confidence: "Low" };
+  }
+  if (has("dca")) {
+    return { beaconsUnderstanding: `Likely relates to placement of the account with a Debt Collection Agency (DCA), indicating the account may have been escalated beyond internal collections activity.`, confidence: "Low" };
+  }
+  if (has("cais", "bureau")) {
+    return { beaconsUnderstanding: `Likely relates to the account's credit bureau (CAIS) status or reporting, used in credit risk assessment and regulatory compliance.`, confidence: "Low" };
+  }
+  if (has("disposable", "affordability", "expenditure") || (has("income") && !has("arrears"))) {
+    return { beaconsUnderstanding: `Likely relates to the customer's income, expenditure, or disposable income assessment, used to determine payment affordability and appropriate collections treatment.`, confidence: "Low" };
+  }
+  if (lower.includes("_rag") || lower.startsWith("rag_") || lower === "rag") {
+    return { beaconsUnderstanding: `Likely a Red / Amber / Green (RAG) status indicator used to classify the account, customer, or risk level for operational prioritisation.`, confidence: "Low" };
+  }
+  if (has("ptp", "promise")) {
+    return { beaconsUnderstanding: `Likely relates to a Promise to Pay (PTP) commitment made by the customer, used to track expected payments and determine follow-up collections actions.`, confidence: "Low" };
+  }
+  if (has("outcome", "disposition", "rpc", "result")) {
+    return { beaconsUnderstanding: `Likely the outcome of a customer contact attempt — such as right party contact, voicemail, or no answer — used to guide next-step collections strategy.`, confidence: "Low" };
+  }
+  if (has("contact", "comms", "communication", "outbound", "inbound", "sms", "email", "call")) {
+    return { beaconsUnderstanding: `Likely relates to customer contact activity — such as channel, attempt count, or last contact date — used to inform engagement strategy in collections.`, confidence: "Low" };
+  }
+  if (has("settlement")) {
+    return { beaconsUnderstanding: `Likely relates to a settlement offer or agreed settlement amount for resolving the outstanding debt, used in late-stage collections and recoveries.`, confidence: "Low" };
+  }
+  if (has("arrears") && has("balance", "amount", "gbp")) {
+    return { beaconsUnderstanding: `Likely the amount currently overdue on the account, expressed as a monetary value. Used as a primary arrears severity measure in collections prioritisation.`, confidence: "Low" };
+  }
+  if (has("arrears") && has("duration", "months", "days", "period")) {
+    return { beaconsUnderstanding: `Likely the duration of the current arrears episode. Used to assess arrears severity and inform collections treatment decisions.`, confidence: "Low" };
+  }
+  if (has("arrears", "overdue", "delinquency", "missed")) {
+    return { beaconsUnderstanding: `Likely relates to the account's arrears position — such as arrears balance, duration, or category — used in collections prioritisation and treatment selection.`, confidence: "Low" };
+  }
+  if ((has("balance", "amount", "gbp", "value") || lower.includes("_gbp")) && (cat.includes("payment") || has("payment", "paid", "received", "scheduled", "due"))) {
+    return { beaconsUnderstanding: `Likely a monetary amount related to a payment transaction, scheduled amount, or repayment balance, used in payment reconciliation and arrears progression tracking.`, confidence: "Low" };
+  }
+  if (has("balance", "amount", "gbp", "outstanding") || lower.includes("_gbp")) {
+    return { beaconsUnderstanding: `Likely a monetary value — such as outstanding balance, payment amount, or repayment figure — potentially recorded in GBP and used in arrears assessment or account management.`, confidence: "Low" };
+  }
+  if (has("payment", "paid", "reversal", "transaction", "allocation", "failed") && has("date", "at", "when")) {
+    return { beaconsUnderstanding: `Likely the date associated with a payment event — such as payment received date or due date — used in repayment tracking and delinquency assessment.`, confidence: "Low" };
+  }
+  if (has("payment", "paid", "reversal", "transaction", "allocation", "failed")) {
+    return { beaconsUnderstanding: `Likely relates to a payment transaction, repayment status, or payment behaviour metric, used in arrears management and collections strategy.`, confidence: "Low" };
+  }
+  if (has("active") || has("enabled", "current")) {
+    return { beaconsUnderstanding: `Likely indicates whether this account, treatment, or status is currently active, which may affect applicable servicing rules and collections handling.`, confidence: "Low" };
+  }
+  if (has("date", "timestamp") || lower.endsWith("_at") || lower.endsWith("_date")) {
+    return { beaconsUnderstanding: `Likely a date associated with a key account or customer event — such as last contact date, payment date, or status change — used in operational tracking and follow-up scheduling.`, confidence: "Low" };
+  }
+  if (has("agent", "advisor", "handler", "user")) {
+    return { beaconsUnderstanding: `Likely identifies the agent or advisor responsible for handling this account or interaction, used in operational reporting and workload management.`, confidence: "Low" };
+  }
+  if (has("count", "num", "qty", "consecutive", "quantity") || lower.endsWith("_count")) {
+    return { beaconsUnderstanding: `Likely a count of occurrences — such as contact attempts, missed payments, or plan instances — used in operational analysis and collections strategy.`, confidence: "Low" };
+  }
+  if (has("status", "state", "stage") || lower.endsWith("_status")) {
+    const ctx = cat.includes("payment") ? "payment" : cat.includes("contact") || cat.includes("conversation") ? "contact or interaction" : "account or customer";
+    return { beaconsUnderstanding: `Likely a coded or labelled status used to track the current state of the ${ctx}, informing operational workflow and treatment decisions.`, confidence: "Low" };
+  }
+  if (has("ref", "reference") || lower.endsWith("_ref") || lower.endsWith("_id")) {
+    return { beaconsUnderstanding: `Likely a reference identifier linking this record to an associated account, customer, or operational event — used for traceability and record linkage.`, confidence: "Low" };
   }
 
-  // ── Stage 5: three-tier header matching with duplicate resolution ─────────
-  // Build lookup maps from original headers
-  const headerExact = new Map<string, string>();           // exact → original
-  const headerLower = new Map<string, string>();           // lowercase → original
-  const headerNorm  = new Map<string, string>();           // alphanumeric-only → original
+  // Last resort — domain-aware, never a bare datatype label
+  const domainContext = cat.includes("payment")
+    ? "payment processing, repayment tracking, or arrears reconciliation"
+    : cat.includes("contact") || cat.includes("conversation") || cat.includes("communication")
+    ? "customer contact activity, engagement strategy, or collections outreach"
+    : cat.includes("customer")
+    ? "customer identity, affordability, or vulnerability assessment"
+    : cat.includes("arrangement") || cat.includes("forbearance")
+    ? "repayment arrangement or forbearance treatment"
+    : "account management, collections strategy, or servicing operations";
+  const humanReadable = header.replace(/[_-]/g, " ");
+  return {
+    beaconsUnderstanding: `Likely relates to ${domainContext}. The exact business meaning of "${humanReadable}" could not be confidently determined from the available evidence.`,
+    confidence: "Low",
+  };
+}
+
+export async function analyzeCategoryFields(
+  categoryId: string,
+  headers: string[],
+  columnEvidence: ColumnEvidence[]
+): Promise<Array<{ fieldName: string; beaconsUnderstanding: string; confidence: 'High' | 'Medium' | 'Low' }>> {
+  const categoryLabel = categoryId.replace(/_/g, ' ');
+
+  console.log(`[analyzeCategoryFields] entry category=${categoryId} fieldCount=${headers.length} evidenceCount=${columnEvidence.length}`);
+
+  // ── Build header lookup maps (shared across both passes) ──────────────────
+  const headerExact  = new Map<string, string>();
+  const headerLower  = new Map<string, string>();
+  const headerNormMap = new Map<string, string>();
   for (const h of headers) {
     headerExact.set(h, h);
     if (!headerLower.has(h.toLowerCase())) headerLower.set(h.toLowerCase(), h);
-    if (!headerNorm.has(normaliseKey(h)))   headerNorm.set(normaliseKey(h), h);
+    const nk = normaliseKey(h);
+    if (!headerNormMap.has(nk)) headerNormMap.set(nk, h);
   }
 
-  const resolvedMap = new Map<string, FieldAnalysisItem>(); // originalHeader → item
+  const resolvedMap = new Map<string, FieldAnalysisItem>();
 
-  for (const item of strongItems) {
-    let originalHeader: string | undefined;
-
-    if (headerExact.has(item.fieldName)) {
-      originalHeader = headerExact.get(item.fieldName);
-    } else if (headerLower.has(item.fieldName.toLowerCase())) {
-      originalHeader = headerLower.get(item.fieldName.toLowerCase());
-    } else if (headerNorm.has(normaliseKey(item.fieldName))) {
-      originalHeader = headerNorm.get(normaliseKey(item.fieldName));
-    } else {
-      console.warn(`[analyzeCategoryFields] stage=header_matching category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} raw=${rawText.slice(0, 500)}`);
-      continue;
+  // ── Helper: validate, filter weak, match to header, add to resolvedMap ────
+  const mergeItems = (items: FieldAnalysisItem[], stage: string): void => {
+    for (const item of items) {
+      if (isWeakDescription(item.beaconsUnderstanding, normaliseKey(item.fieldName))) {
+        console.warn(`[analyzeCategoryFields] stage=${stage}_weak category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
+        continue;
+      }
+      const orig = matchHeader(item.fieldName, headerExact, headerLower, headerNormMap);
+      if (!orig) {
+        console.warn(`[analyzeCategoryFields] stage=${stage}_header_matching category=${categoryId} headers=${headers.length} fieldName=${item.fieldName}`);
+        continue;
+      }
+      if (resolvedMap.has(orig)) {
+        console.warn(`[analyzeCategoryFields] stage=${stage}_duplicate category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} resolvedTo=${orig} (keeping first)`);
+      } else {
+        resolvedMap.set(orig, { ...item, fieldName: orig });
+      }
     }
+  };
 
-    if (resolvedMap.has(originalHeader!)) {
-      console.warn(`[analyzeCategoryFields] stage=duplicate category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} resolvedTo=${originalHeader} (keeping first)`);
-    } else {
-      resolvedMap.set(originalHeader!, { ...item, fieldName: originalHeader! });
-    }
-  }
+  // ── FIRST PASS ────────────────────────────────────────────────────────────
+  const evidenceStr = buildEvidenceStr(columnEvidence);
+  const firstPassPrompt = buildFirstPassPrompt(categoryLabel, evidenceStr);
 
-  // ── Stage 6: assemble final results with heuristic fallback ──────────────
-  return headers.map(h => {
-    if (resolvedMap.has(h)) {
-      const item = resolvedMap.get(h)!;
-      return { fieldName: h, beaconsUnderstanding: item.beaconsUnderstanding, confidence: item.confidence };
-    }
-    return { fieldName: h, ...heuristicDescription(h) };
+  const firstPassResponse = await ai.models.generateContent({
+    model: "gemini-2.5-pro",
+    contents: [{ role: "user", parts: [{ text: firstPassPrompt }] }],
+    config: { maxOutputTokens: 4096, responseMimeType: "application/json" },
   });
+
+  const firstPassRaw = firstPassResponse.text || "";
+  const firstPassItems = parseAIResponse(firstPassRaw, categoryId, headers.length, "first_pass");
+  mergeItems(firstPassItems, "first_pass");
+
+  const firstPassWeakCount = headers.filter(h => !resolvedMap.has(h)).length;
+
+  // ── REPAIR PASS — only for unresolved fields ──────────────────────────────
+  const unresolvedAfterFirst = headers.filter(h => !resolvedMap.has(h));
+  let repairRequestedCount = 0;
+  let repairRecoveredCount = 0;
+
+  if (unresolvedAfterFirst.length > 0) {
+    repairRequestedCount = unresolvedAfterFirst.length;
+    console.log(`[analyzeCategoryFields] stage=repair_triggered category=${categoryId} weakCount=${repairRequestedCount}`);
+
+    const weakEvidence = unresolvedAfterFirst.map(h =>
+      columnEvidence.find(c => c.fieldName === h) ??
+      { fieldName: h, sampleValues: [], inferredType: 'categorical' as const }
+    );
+
+    const repairPrompt = buildRepairPrompt(categoryLabel, weakEvidence);
+    const repairResponse = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      contents: [{ role: "user", parts: [{ text: repairPrompt }] }],
+      config: { maxOutputTokens: 4096, responseMimeType: "application/json" },
+    });
+
+    const repairRaw = repairResponse.text || "";
+    const repairItems = parseAIResponse(repairRaw, categoryId, unresolvedAfterFirst.length, "repair");
+    const beforeRepair = resolvedMap.size;
+    mergeItems(repairItems, "repair");
+    repairRecoveredCount = resolvedMap.size - beforeRepair;
+
+    console.log(`[analyzeCategoryFields] stage=repair_result category=${categoryId} recoveredCount=${repairRecoveredCount}`);
+  }
+
+  // ── FALLBACK — only for fields still unresolved after repair ──────────────
+  const unresolvedAfterRepair = headers.filter(h => !resolvedMap.has(h));
+  const fallbackCount = unresolvedAfterRepair.length;
+
+  for (const h of unresolvedAfterRepair) {
+    const fb = buildDomainFallback(h, categoryLabel);
+    resolvedMap.set(h, { fieldName: h, beaconsUnderstanding: fb.beaconsUnderstanding, confidence: fb.confidence });
+  }
+
+  // ── Assemble final results (preserving exact original header order) ────────
+  const results = headers.map(h => {
+    const item = resolvedMap.get(h)!;
+    return { fieldName: h, beaconsUnderstanding: item.beaconsUnderstanding, confidence: item.confidence };
+  });
+
+  // ── Exit summary log (always emits all 7 fields) ──────────────────────────
+  const fallbackPercent = Math.round((fallbackCount / headers.length) * 100);
+  console.log(`[analyzeCategoryFields] summary category=${categoryId} fieldCount=${headers.length} firstPassWeakCount=${firstPassWeakCount} repairRequestedCount=${repairRequestedCount} repairRecoveredCount=${repairRecoveredCount} fallbackCount=${fallbackCount} fallbackPercent=${fallbackPercent}%`);
+
+  return results;
 }
 
 export interface SOPExtractedRule {
