@@ -815,15 +815,17 @@ export async function analyzeCategoryFields(
   const resolvedMap = new Map<string, FieldAnalysisItem>();
 
   // ── Helper: validate, filter weak, match to header, add to resolvedMap ────
+  // Header matching runs first so the restatement check uses the resolved
+  // original header's normalisation (stricter than the model-returned key).
   const mergeItems = (items: FieldAnalysisItem[], pass: string): void => {
     for (const item of items) {
-      if (isWeakDescription(item.beaconsUnderstanding, normaliseKey(item.fieldName))) {
-        console.warn(`[analyzeCategoryFields] stage=weak_description pass=${pass} category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
-        continue;
-      }
       const orig = matchHeader(item.fieldName, headerExact, headerLower, headerNormMap);
       if (!orig) {
         console.warn(`[analyzeCategoryFields] stage=header_matching pass=${pass} category=${categoryId} headers=${headers.length} fieldName=${item.fieldName}`);
+        continue;
+      }
+      if (isWeakDescription(item.beaconsUnderstanding, normaliseKey(orig))) {
+        console.warn(`[analyzeCategoryFields] stage=weak_description pass=${pass} category=${categoryId} headers=${headers.length} fieldName=${item.fieldName} desc=${item.beaconsUnderstanding.slice(0, 80)}`);
         continue;
       }
       if (resolvedMap.has(orig)) {

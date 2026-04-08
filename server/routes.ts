@@ -485,7 +485,7 @@ export async function registerRoutes(
       function inferColumnType(values: string[]): ColumnEvidence['inferredType'] {
         if (values.length === 0) return 'categorical';
         const BOOL_VALUES = new Set(['yes', 'no', 'true', 'false', '1', '0', 'y', 'n']);
-        const DATE_RE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/;
+        const DATE_RE = /^(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})$/;
         let numCount = 0, boolCount = 0, dateCount = 0;
         for (const v of values) {
           const lv = v.trim().toLowerCase();
