@@ -901,7 +901,7 @@ export async function registerRoutes(
           label: f.label,
           sourceType: f.sourceType,
           description: f.description?.slice(0, 200) ?? null,
-          derivationSummary: f.sourceType === "derived_field" ? (f.derivationSummary?.slice(0, 200) ?? null) : null,
+          ...(f.sourceType === "derived_field" ? { derivationSummary: f.derivationSummary?.slice(0, 200) ?? null } : {}),
         }));
 
         console.log(`[generate-treatment-draft] [${requestId}] company=${companyId} pack=${pack.id} files=${files.length} fields=${fieldCatalog.length}`);
@@ -1030,7 +1030,7 @@ export async function registerRoutes(
               }).returning();
               for (let j = 0; j < t.when_to_offer.length; j++) {
                 const r = t.when_to_offer[j];
-                const fieldRecord = fieldByLabelLower.get(r.field_name.toLowerCase().trim())!;
+                const fieldRecord = fieldByLabelLower.get(normalizeFieldLabel(r.field_name))!;
                 const canonicalLabel = fieldRecord.label;
                 const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${canonicalLabel}`;
                 const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
@@ -1057,7 +1057,7 @@ export async function registerRoutes(
               }).returning();
               for (let j = 0; j < t.blocked_if.length; j++) {
                 const r = t.blocked_if[j];
-                const fieldRecord = fieldByLabelLower.get(r.field_name.toLowerCase().trim())!;
+                const fieldRecord = fieldByLabelLower.get(normalizeFieldLabel(r.field_name))!;
                 const canonicalLabel = fieldRecord.label;
                 const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${canonicalLabel}`;
                 const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";

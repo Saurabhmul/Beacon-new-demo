@@ -57,20 +57,17 @@ export async function buildFullFieldCatalog(
       }
     }
 
-    try {
-      const dbFields = await storage.getPolicyFields(companyId);
-      for (const f of dbFields) {
-        const key = normalizeFieldLabel(f.label);
-        dedup.set(key, {
-          id: String(f.id),
-          label: f.label,
-          sourceType: f.sourceType === "derived_field" ? "derived_field" : "business_field",
-          description: f.description ?? null,
-          derivationSummary: f.derivationSummary ?? null,
-          derivationConfig: f.derivationConfig ?? null,
-        });
-      }
-    } catch {
+    const dbFields = await storage.getPolicyFields(companyId);
+    for (const f of dbFields) {
+      const key = normalizeFieldLabel(f.label);
+      dedup.set(key, {
+        id: String(f.id),
+        label: f.label,
+        sourceType: f.sourceType === "derived_field" ? "derived_field" : "business_field",
+        description: f.description ?? null,
+        derivationSummary: f.derivationSummary ?? null,
+        derivationConfig: f.derivationConfig ?? null,
+      });
     }
   }
 
