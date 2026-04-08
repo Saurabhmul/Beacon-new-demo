@@ -1,0 +1,295 @@
+You are working on the Beacon codebase.
+
+TASK
+Implement treatment priority interpretation in the SOP PDF upload flow only.
+
+This is NOT about customer-level decisioning after treatments are already created.
+This task is specifically about the flow where a user uploads an SOP PDF and Beacon generates treatment drafts from that document.
+
+GOAL
+When Beacon reads an uploaded SOP PDF and generates treatments, it must also interpret the operational priority of each treatment from the SOP meaning and save that priority in Beacon.
+
+Priority must be interpreted from policy meaning, not from the order treatments appear in the PDF.
+
+BUSINESS LOGIC TO IMPLEMENT
+
+Use this exact priority framework:
+
+1 = Mandatory override
+- Statutory, legal, safety, or mandatory handling that supersedes normal treatment choice
+- These are not discretionary “best fit” treatments
+- Examples:
+  - Breathing Space
+  - specialist handling for Red vulnerability
+  - mandatory pause in collections
+  - any treatment/status where the SOP clearly says collections/enforcement must stop or a special pathway is required
+
+2 = Eligibility blocker
+- Treatment cannot proceed until a blocker or prerequisite is resolved
+- These are gating conditions, not normal treatment choices
+- Examples:
+  - active insolvency
+  - active DCA/litigation blocker
+  - missing I&E / affordability information causing hold or review before a structured treatment can be applied
+  - any treatment/status that exists mainly to prevent or delay normal treatment selection until required information or conditions are resolved
+
+3 = Structured support
+- Ongoing or longer-term hardship treatment
+- Used where the SOP describes a sustained support arrangement
+- Examples:
+  - Payment Plan
+  - DMP
+  - Interest Freeze
+  - token payment arrangement if framed as a structured longer-term support tool
+
+4 = Temporary support
+- Short-term arrangement or holding treatment
+- Used where the SOP describes a temporary pause, short commitment, or short holding action
+- Examples:
+  - Promise to Pay
+  - Payment Deferral
+  - Account Hold
+
+5 = Fallback or review
+- Standard collections path, encourage payment, or generic review/manual review where no stronger category applies
+- Use this if the SOP treatment does not clearly fit into 1-4
+- This is the default fallback
+
+IMPORTANT INTERPRETATION RULES
+
+1. Priority is derived from the meaning of the treatment in the SOP, not the section order in the PDF.
+2. Do not assume the first treatment in the document is highest priority.
+3. If the SOP describes a treatment as mandatory, statutory, safety-related, or requiring collections suspension, it should usually be Priority 1.
+4. If the SOP describes a treatment or status mainly as a blocker, prerequisite, or gate before other treatment can be chosen, it should usually be Priority 2.
+5. If the SOP describes a treatment as an ongoing affordability support arrangement, it should usually be Priority 3.
+6. If the SOP describes a treatment as short-term, temporary, pending review, or a brief holding state, it should usually be Priority 4.
+7. If the treatment is generic, fallback, standard path, or unclear, use Priority 5.
+8. When uncertain, choose the closest category and explain the uncertainty in the reason text.
+9. Beacon should store both:
+   - the numeric priority
+   - the interpreted priority basis/category
+   - the reason why that priority was assigned
+
+SCOPE OF CODE CHANGES
+
+Only modify the SOP upload -> treatment draft generation flow.
+
+Relevant areas likely include:
+- server/ai-engine.ts
+- server/routes.ts
+- shared/schema.ts
+- any related client page that renders generated treatment drafts, likely client/src/pages/client-setup.tsx
+- any prompt/schema files used by treatment draft generation
+
+Do NOT redesign customer decisioning in this task.
+Do NOT change review queue prioritization for decisions in this task unless needed incidentally.
+Do NOT break any existing PDF upload or OCR fallback behavior.
+
+IMPLEMENTATION REQUIREMENTS
+
+A. DATA MODEL
+
+Beacon already has a treatments table with a priority field.
+Make sure generated treatments now populate priority instead of leaving it null.
+
+Add these fields to treatments if they do not already exist:
+- priorityBasis
+- priorityReason
+
+Recommended DB fields:
+- priority: text
+- priorityBasis: text("priority_basis")
+- priorityReason: text("priority_reason")
+
+Use a migration if needed.
+
+B. AI OUTPUT SCHEMA
+
+In the SOP treatment draft generation schema, extend each treatment object to include:
+
+- priority_basis
+- priority_rank
+- priority_reason
+
+Use this exact enum for priority_basis:
+- MANDATORY_OVERRIDE
+- ELIGIBILITY_BLOCKER
+- STRUCTURED_SUPPORT
+- TEMPORARY_SUPPORT
+- FALLBACK_OR_REVIEW
+
+Use this exact numeric range for priority_rank:
+- integer 1 to 5
+
+priority_reason must be a short plain-English explanation citing the treatment’s policy meaning.
+
+C. PROMPT CHANGES
+
+Update the SOP treatment draft prompt so that for every treatment extracted from the uploaded SOP, the model must return:
+- priority_basis
+- priority_rank
+- priority_reason
+
+The prompt must explicitly instruct that:
+- priority is based on policy meaning, not section order
+- the AI must classify each treatment using the business logic above
+- the AI must explain why the treatment belongs in that priority bucket
+
+Include examples in the prompt:
+- Breathing Space -> MANDATORY_OVERRIDE, 1
+- Red vulnerability specialist handling -> MANDATORY_OVERRIDE, 1
+- insolvency blocker / DCA blocker / missing mandatory I&E hold -> ELIGIBILITY_BLOCKER, 2
+- Payment Plan -> STRUCTURED_SUPPORT, 3
+- DMP -> STRUCTURED_SUPPORT, 3
+- Interest Freeze -> STRUCTURED_SUPPORT, 3
+- Promise to Pay -> TEMPORARY_SUPPORT, 4
+- Payment Deferral -> TEMPORARY_SUPPORT, 4
+- Account Hold -> TEMPORARY_SUPPORT, 4
+- generic review / standard path -> FALLBACK_OR_REVIEW, 5
+
+D. BACKEND NORMALIZATION
+
+Do not trust the raw numeric value from AI as the sole source of truth.
+
+Implement a backend helper that maps priority_basis to the numeric rank:
+
+- MANDATORY_OVERRIDE -> 1
+- ELIGIBILITY_BLOCKER -> 2
+- STRUCTURED_SUPPORT -> 3
+- TEMPORARY_SUPPORT -> 4
+- FALLBACK_OR_REVIEW -> 5
+
+Use this mapping as canonical when saving to the database.
+If AI returns a conflicting priority_rank, prefer the mapped value from priority_basis.
+
+This makes the system more stable and less brittle.
+
+Recommended helper signature:
+
+function normalizePriorityFromBasis(
+  basis:
+    | "MANDATORY_OVERRIDE"
+    | "ELIGIBILITY_BLOCKER"
+    | "STRUCTURED_SUPPORT"
+    | "TEMPORARY_SUPPORT"
+    | "FALLBACK_OR_REVIEW"
+): string
+
+Return string values "1" through "5" to match existing treatment priority storage if the schema expects text.
+
+E. ROUTE / SAVE LOGIC
+
+In the SOP draft generation route, when inserting generated treatments:
+- do not leave priority null
+- save:
+  - priority = normalized numeric string
+  - priorityBasis = priority_basis
+  - priorityReason = priority_reason
+
+If the insert currently uses something like priority: null, replace it.
+
+F. UI
+
+Update the treatment draft display in the setup UI so that after an SOP PDF is processed, each generated treatment visibly shows:
+- priority value, e.g. P1 / P2 / P3 / P4 / P5
+- priority basis label
+- priority reason
+
+Do not remove manual editing.
+If there is already a manual priority input, keep it editable.
+AI-generated priority should appear as the initial value.
+
+G. VALIDATION / ERROR HANDLING
+
+- If AI returns invalid priority_basis, fail validation cleanly.
+- If AI omits priority_reason, allow empty string or null.
+- If AI classification is weak or unclear, default to:
+  - FALLBACK_OR_REVIEW
+  - priority 5
+- Do not break treatment generation if one treatment has a weak explanation.
+- Prefer resilient parsing and safe defaults.
+
+H. ACCEPTANCE CRITERIA
+
+After implementation, this must work:
+
+1. User uploads an SOP PDF.
+2. Beacon extracts treatments from the PDF.
+3. Each generated treatment includes:
+   - name
+   - description
+   - when_to_offer / blocked_if logic
+   - confidence
+   - priority
+   - priority basis
+   - priority reason
+4. Priority is based on policy meaning, not document order.
+5. Priority is saved to the treatments table.
+6. Priority is visible in the UI immediately after treatment draft generation.
+7. Manual editing of priority still works.
+8. Existing SOP upload flow, OCR fallback, and treatment/rule extraction still work.
+
+EXACT PROMPT BLOCK TO ADD
+
+Add a section like this to the SOP treatment draft prompt:
+
+TREATMENT PRIORITY INTERPRETATION
+
+For each treatment, determine its policy priority using this exact framework:
+
+- Priority 1 = Mandatory override
+  This treatment represents statutory, legal, or safety handling that overrides normal treatment selection.
+  Examples: Breathing Space, specialist vulnerability handling, mandatory pause in collections.
+
+- Priority 2 = Eligibility blocker
+  This treatment or status indicates the customer cannot proceed to a normal treatment until a blocker or prerequisite is resolved.
+  Examples: active insolvency, DCA/litigation blocker, missing I&E requiring hold/review.
+
+- Priority 3 = Structured support
+  This is an ongoing or long-term hardship treatment designed to manage sustained financial difficulty.
+  Examples: Payment Plan, DMP, Interest Freeze.
+
+- Priority 4 = Temporary support
+  This is a short-term arrangement or holding treatment.
+  Examples: Promise to Pay, Payment Deferral, Account Hold.
+
+- Priority 5 = Fallback or review
+  This is a standard path, encourage-payment action, or generic review where no stronger treatment category applies.
+
+CRITICAL INSTRUCTIONS
+- Priority must reflect policy meaning, not the order treatments appear in the SOP.
+- Return both a categorical basis and a numeric rank.
+- The numeric rank must match the basis exactly.
+- If uncertain, choose the closest category and explain the uncertainty in priority_reason.
+- priority_reason must explain why this treatment belongs in that priority level using the SOP wording.
+
+EXACT OUTPUT FIELDS REQUIRED PER TREATMENT
+
+Each generated treatment object must include:
+
+{
+  "name": "string",
+  "description": "string",
+  "priority_basis": "MANDATORY_OVERRIDE|ELIGIBILITY_BLOCKER|STRUCTURED_SUPPORT|TEMPORARY_SUPPORT|FALLBACK_OR_REVIEW",
+  "priority_rank": 1,
+  "priority_reason": "string",
+  "when_to_offer_logic": "ALL|ANY",
+  "when_to_offer": [],
+  "blocked_if_logic": "ALL|ANY",
+  "blocked_if": [],
+  "source_fields": [],
+  "derived_fields": [],
+  "business_fields": [],
+  "confidence": "high|medium|low"
+}
+
+IMPLEMENTATION PREFERENCE
+
+Keep changes minimal, production-safe, and type-safe.
+Prefer explicit schemas over loose parsing.
+Prefer backend normalization over trusting free-form model output.
+Do not introduce unrelated refactors.
+
+DELIVERABLES
+
+Make the code changes, run through the SOP upload flow, and ensure the generated treatments now include interpreted priority from the PDF policy logic.

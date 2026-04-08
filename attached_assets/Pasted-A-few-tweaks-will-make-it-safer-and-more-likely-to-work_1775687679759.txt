@@ -1,0 +1,100 @@
+A few tweaks will make it safer and more likely to work cleanly in Beacon.
+
+What’s good already
+
+It correctly limits scope to the SOP upload → treatment draft generation flow.
+
+It also gets the key implementation pattern right:
+
+ask AI for priority_basis, priority_rank, priority_reason
+normalize priority in backend from priority_basis
+persist to DB
+render in UI
+
+That is the right architecture.
+
+What I would tighten before giving it to Replit
+1. Do not rely on priority_rank for storage
+
+Your plan already says canonical numeric rank comes from normalizePriorityFromBasis(t.priority_basis), which is right.
+
+I would make that even stricter in the instruction:
+
+priority_rank is for explainability/debugging only.
+Beacon must store canonical numeric priority from priority_basis, not from the model-provided integer.
+
+That avoids future drift.
+
+2. Make sure the response schema used by the model is updated everywhere
+
+The plan says “update output JSON schema example,” which is good, but I would make it explicit that there are usually two places in Beacon-like code:
+
+the Zod parser
+the prompt’s explicit JSON shape/example
+
+If one is updated and the other is not, the model often omits the fields.
+
+So I’d add:
+
+Ensure the new priority fields are present in both:
+
+DraftTreatmentItemSchema
+the literal JSON schema/example embedded in the treatment-draft prompt
+3. Use nullable/optional handling carefully
+
+Your plan says:
+
+priority_reason: coerceToString
+
+That is fine for resilience, but for priority_basis I would avoid overly-permissive parsing if you want predictability.
+
+Recommended:
+
+keep priority_basis as enum with .default("FALLBACK_OR_REVIEW")
+keep priority_rank as int with .default(5)
+keep priority_reason as coerced string/default ""
+
+That gives you resilience without silently accepting garbage.
+
+4. UI state should preserve manual editability
+
+Your plan mentions this, which is good. I would add one explicit instruction:
+
+The existing manual priority input remains the editable source in the form after generation; AI-generated priority only prepopulates it.
+
+That prevents Replit from rendering a read-only badge and forgetting the editable field matters for operations users.
+
+5. Migration instruction should include idempotency
+
+Your SQL is good. I’d keep it exactly as:
+
+ALTER TABLE treatments ADD COLUMN IF NOT EXISTS priority_basis text;
+ALTER TABLE treatments ADD COLUMN IF NOT EXISTS priority_reason text;
+
+And add:
+
+Do not drop or rewrite existing priority data.
+
+6. Add a fallback if model omits all three fields
+
+Right now the plan handles this mostly through defaults, but I’d make the save logic explicit:
+
+const basis = t.priority_basis ?? "FALLBACK_OR_REVIEW";
+const normalizedPriority = normalizePriorityFromBasis(basis);
+
+Then save:
+
+priority = normalizedPriority
+priorityBasis = basis
+priorityReason = t.priority_reason?.trim() || null
+
+That keeps DB values clean.
+
+7. Small wording correction in business logic
+
+One nuance from our earlier discussion:
+
+Active insolvency is better thought of as an eligibility blocker, not a mandatory override.
+Breathing Space / Red vulnerability specialist handling are the clearest mandatory overrides.
+
+Your plan already reflects that correctly. I’d keep that distinction explicit because it is one of the most important logic choices.
