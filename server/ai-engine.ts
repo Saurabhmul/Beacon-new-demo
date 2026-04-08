@@ -559,12 +559,30 @@ const DraftTreatmentItemSchema = z.object({
   confidence: z.enum(["high", "medium", "low"]).default("medium"),
 });
 
+const GlobalSourceFieldSchema = z.object({
+  field_name: z.string(),
+  description: z.string().default(""),
+});
+
+const GlobalDerivedFieldSchema = z.object({
+  field_name: z.string(),
+  description: z.string().default(""),
+  formula_hint: z.string().default(""),
+  depends_on: z.array(z.string()).default([]),
+});
+
+const GlobalBusinessFieldSchema = z.object({
+  field_name: z.string(),
+  description: z.string().default(""),
+  allowed_values: z.array(z.string()).default([]),
+});
+
 const DraftResponseSchema = z.object({
   summary: z.string().default(""),
   treatments: z.array(DraftTreatmentItemSchema).default([]),
-  global_source_fields: z.array(z.any()).default([]),
-  global_derived_fields: z.array(z.any()).default([]),
-  global_business_fields: z.array(z.any()).default([]),
+  global_source_fields: z.array(GlobalSourceFieldSchema).default([]),
+  global_derived_fields: z.array(GlobalDerivedFieldSchema).default([]),
+  global_business_fields: z.array(GlobalBusinessFieldSchema).default([]),
   open_questions: z.array(z.string()).default([]),
 });
 

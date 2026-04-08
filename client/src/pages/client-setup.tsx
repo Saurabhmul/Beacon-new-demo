@@ -1177,9 +1177,13 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
                     readOnly={isReadOnly}
                     placeholder="Formula hint (e.g. field_a / field_b)"
                   />
-                  {df.dependsOn.length > 0 && (
-                    <p className="text-[11px] text-muted-foreground">Depends on: {df.dependsOn.join(", ")}</p>
-                  )}
+                  <Input
+                    className="text-[11px] h-7"
+                    value={df.dependsOn.join(", ")}
+                    onChange={e => { const v = e.target.value; setLocal(l => ({ ...l, draftDerivedFields: l.draftDerivedFields.map((f, j) => j === i ? { ...f, dependsOn: v.split(",").map(s => s.trim()).filter(Boolean) } : f) })); }}
+                    readOnly={isReadOnly}
+                    placeholder="Depends on (comma-separated field names)"
+                  />
                 </div>
               ))}
             </div>
@@ -1227,14 +1231,14 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
 
 const SOP_STAGE_ORDER = ["uploading", "extracting", "field_matching", "ai_generating", "validating", "saving"] as const;
 type SopStageId = typeof SOP_STAGE_ORDER[number];
-type SopGenerationStage = "idle" | SopStageId | "error";
+type SopGenerationStage = "idle" | SopStageId | "complete" | "error";
 const SOP_STAGE_LABELS: Record<SopStageId, string> = {
-  uploading: "Uploading files",
-  extracting: "Extracting PDF text",
-  field_matching: "Matching policy fields",
-  ai_generating: "AI generating draft",
-  validating: "Validating output",
-  saving: "Saving treatments",
+  uploading: "Uploading files to server",
+  extracting: "Extracting text from PDFs",
+  field_matching: "Matching against policy field catalog",
+  ai_generating: "AI generating treatment draft",
+  validating: "Validating AI output",
+  saving: "Saving treatments to database",
 };
 
 const PRELOADED_TREATMENTS = [
@@ -1318,6 +1322,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   function getSopStageStatus(stageId: SopStageId): "pending" | "current" | "done" | "error" {
     const stage = generationStage;
     if (stage === "idle") return "pending";
+    if (stage === "complete") return "done";
     if (stage === "error") {
       const errorIdx = SOP_STAGE_ORDER.indexOf(errorStageRef.current);
       const idx = SOP_STAGE_ORDER.indexOf(stageId);
@@ -1432,12 +1437,14 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
       if (!res.ok) throw new Error(data.error || "Generation failed");
       clearStageTimers();
       setGenerationStage("validating");
-      await new Promise(r => setTimeout(r, 350));
+      await new Promise(r => setTimeout(r, 400));
       setGenerationStage("saving");
-      await new Promise(r => setTimeout(r, 350));
+      await new Promise(r => setTimeout(r, 400));
+      setGenerationStage("complete");
       const { treatments: generatedTxs, summary, openQuestions, generatedAt } = data;
       queryClient.invalidateQueries({ queryKey: ["/api/policy-pack/treatments"] });
       const newLocals: LocalTreatment[] = generatedTxs.map((tx: TreatmentWithRules) => serverTxToLocal(tx));
+      await new Promise(r => setTimeout(r, 900));
       setLocalTreatments(newLocals);
       setAiReviewInfo({ summary: summary || "", openQuestions: openQuestions || [], generatedAt });
       setShowUploadPanel(false);
@@ -1607,8 +1614,8 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
             ) : (
               <>
                 <div>
-                  <p className="text-sm font-medium">Generating treatments from SOP…</p>
-                  {sopFiles.length > 0 && (
+                  <p className="text-sm font-medium">{generationStage === "complete" ? "Treatments generated!" : "Generating treatments from SOP…"}</p>
+                  {sopFiles.length > 0 && generationStage !== "complete" && (
                     <div className="mt-1.5 space-y-0.5">
                       {sopFiles.map((f, i) => (
                         <div key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -1628,14 +1635,16 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                         {status === "current" && <Loader2 className="w-4 h-4 text-primary shrink-0 animate-spin" />}
                         {status === "pending" && <Circle className="w-4 h-4 text-muted-foreground/30 shrink-0" />}
                         {status === "error" && <AlertTriangle className="w-4 h-4 text-destructive shrink-0" />}
-                        <span className={`text-xs ${status === "done" ? "text-muted-foreground line-through" : status === "current" ? "text-foreground font-medium" : status === "error" ? "text-destructive" : "text-muted-foreground/50"}`}>
+                        <span className={`text-xs ${status === "done" ? "text-green-700 dark:text-green-400" : status === "current" ? "text-foreground font-medium" : status === "error" ? "text-destructive" : "text-muted-foreground/50"}`}>
                           {SOP_STAGE_LABELS[stageId]}
                         </span>
                       </div>
                     );
                   })}
                 </div>
-                <p className="text-[11px] text-muted-foreground italic">Keep this page open while treatments are being generated…</p>
+                {generationStage !== "complete" && (
+                  <p className="text-[11px] text-muted-foreground italic">Keep this page open — generation may take 20–60 seconds.</p>
+                )}
               </>
             )}
           </CardContent>

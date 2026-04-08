@@ -851,6 +851,7 @@ export async function registerRoutes(
     async (req: any, res) => {
       const companyId = getCompanyId(req);
       const files = req.files as Express.Multer.File[] | undefined;
+      const requestId = Math.random().toString(36).slice(2, 10);
 
       try {
         if (!files || files.length === 0) {
@@ -907,15 +908,16 @@ export async function registerRoutes(
           derivationSummary: f.derivationSummary,
         }));
 
-        console.log(`[generate-treatment-draft] company=${companyId} pack=${pack.id} files=${files.length} fields=${fieldCatalog.length}`);
+        console.log(`[generate-treatment-draft] [${requestId}] company=${companyId} pack=${pack.id} files=${files.length} fields=${fieldCatalog.length}`);
 
         const draftResponse = await generateTreatmentDraft(sopBundle, fieldCatalog);
 
-        console.log(`[generate-treatment-draft] generated treatments=${draftResponse.treatments.length} open_questions=${draftResponse.open_questions.length}`);
+        console.log(`[generate-treatment-draft] [${requestId}] ai_output treatments=${draftResponse.treatments.length} open_questions=${draftResponse.open_questions.length}`);
 
         const sourceFieldLabels = new Set(
           fieldRecords.filter(f => f.sourceType === "source_field").map(f => f.label.toLowerCase().trim())
         );
+        const fieldByLabelLower = new Map(fieldRecords.map(f => [f.label.toLowerCase().trim(), f]));
 
         const VALID_OPERATORS = new Set(["=", "!=", ">", ">=", "<", "<=", "contains", "in", "not_in", "is_true", "is_false"]);
 
@@ -941,6 +943,30 @@ export async function registerRoutes(
               return acc;
             }, []),
           }));
+
+        // Pre-validation: validate all operators and resolve all rule field references before DB write
+        const validationErrors: string[] = [];
+        for (const t of normalizedTreatments) {
+          for (const r of t.when_to_offer) {
+            if (!VALID_OPERATORS.has(r.operator)) {
+              validationErrors.push(`Invalid operator "${r.operator}" in "When to Offer" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
+            } else if (!fieldByLabelLower.has(r.field_name.toLowerCase().trim())) {
+              validationErrors.push(`Unresolved field "${r.field_name}" in "When to Offer" rule for treatment "${t.name}". Please configure this field in your Data Configuration first.`);
+            }
+          }
+          for (const r of t.blocked_if) {
+            if (!VALID_OPERATORS.has(r.operator)) {
+              validationErrors.push(`Invalid operator "${r.operator}" in "Blocked If" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
+            } else if (!fieldByLabelLower.has(r.field_name.toLowerCase().trim())) {
+              validationErrors.push(`Unresolved field "${r.field_name}" in "Blocked If" rule for treatment "${t.name}". Please configure this field in your Data Configuration first.`);
+            }
+          }
+        }
+        if (validationErrors.length > 0) {
+          console.log(`[generate-treatment-draft] [${requestId}] validation=failed errors=${validationErrors.length}`);
+          return res.status(422).json({ error: validationErrors[0], details: validationErrors });
+        }
+        console.log(`[generate-treatment-draft] [${requestId}] validation=ok normalized=${normalizedTreatments.length}`);
 
         await db.transaction(async (tx) => {
           const existingTxs = await tx.select({ id: treatments.id }).from(treatments)
@@ -995,15 +1021,13 @@ export async function registerRoutes(
               }).returning();
               for (let j = 0; j < t.when_to_offer.length; j++) {
                 const r = t.when_to_offer[j];
-                if (!VALID_OPERATORS.has(r.operator)) throw new Error(`Invalid operator "${r.operator}" in "when_to_offer" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
-                const fieldRecord = fieldRecords.find(f => f.label.toLowerCase() === r.field_name.toLowerCase());
-                const leftFieldId = fieldRecord
-                  ? `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`
-                  : null;
+                const fieldRecord = fieldByLabelLower.get(r.field_name.toLowerCase().trim())!;
+                const canonicalLabel = fieldRecord.label;
+                const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${canonicalLabel}`;
                 const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
                 await tx.insert(treatmentRules).values({
                   ruleGroupId: whenGroup.id,
-                  fieldName: r.field_name,
+                  fieldName: canonicalLabel,
                   operator: r.operator,
                   value: rawValue,
                   sortOrder: j,
@@ -1024,15 +1048,13 @@ export async function registerRoutes(
               }).returning();
               for (let j = 0; j < t.blocked_if.length; j++) {
                 const r = t.blocked_if[j];
-                if (!VALID_OPERATORS.has(r.operator)) throw new Error(`Invalid operator "${r.operator}" in "blocked_if" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
-                const fieldRecord = fieldRecords.find(f => f.label.toLowerCase() === r.field_name.toLowerCase());
-                const leftFieldId = fieldRecord
-                  ? `${fieldRecord.sourceType.replace("_field", "")}:${fieldRecord.label}`
-                  : null;
+                const fieldRecord = fieldByLabelLower.get(r.field_name.toLowerCase().trim())!;
+                const canonicalLabel = fieldRecord.label;
+                const leftFieldId = `${fieldRecord.sourceType.replace("_field", "")}:${canonicalLabel}`;
                 const rawValue = r.value != null ? String(Array.isArray(r.value) ? r.value.join(", ") : r.value) : "";
                 await tx.insert(treatmentRules).values({
                   ruleGroupId: blockedGroup.id,
-                  fieldName: r.field_name,
+                  fieldName: canonicalLabel,
                   operator: r.operator,
                   value: rawValue,
                   sortOrder: j,
@@ -1064,7 +1086,7 @@ export async function registerRoutes(
           generatedAt: updatedPack?.lastAiGenerationAt || new Date(),
         });
       } catch (error) {
-        console.error(`[generate-treatment-draft] error company=${companyId}:`, error instanceof Error ? error.message : error);
+        console.error(`[generate-treatment-draft] [${requestId}] error company=${companyId}:`, error instanceof Error ? error.message : error);
         res.status(500).json({ error: error instanceof Error ? error.message : "Failed to generate treatment draft" });
       }
     }
