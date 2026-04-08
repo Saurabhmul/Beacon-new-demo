@@ -1182,6 +1182,14 @@ IMPORTANT RULES
   Default: when_to_offer = "ALL", blocked_if = "ANY". Override only when SOP wording clearly implies otherwise.
 11. For derived fields, you MUST provide a structured derivation_config — not a formula hint. If you cannot determine the exact logic, set derivation_config to null and add the field to open_questions.
 12. Derived field depends_on must only reference fields from the Beacon field catalog or other derived/business fields defined in the same output.
+13. NEVER create a derived boolean field solely to wrap a single source field comparison that can already be expressed directly as a rule condition. If a condition can be written using an existing source field with a numeric, equality, or set operator, write it that way in when_to_offer / blocked_if — do NOT create a derived field for it.
+    Only create a derived field if the derivation:
+      (a) combines TWO OR MORE source fields into a single computed value, OR
+      (b) the same computed value is referenced in rules across 3 or more different treatments.
+    ✗ BAD  → derived field "is_in_arrears" (arrears_balance_gbp > 0), rule: { "field_name": "is_in_arrears", "operator": "is_true" }
+    ✓ GOOD → rule directly: { "field_name": "arrears_balance_gbp", "operator": "gt", "value": 0 }
+    ✗ BAD  → derived field "customer_has_engaged" (inbound_comms_received > 0), rule: { "field_name": "customer_has_engaged", "operator": "is_true" }
+    ✓ GOOD → rule directly: { "field_name": "inbound_comms_received", "operator": "gt", "value": 0 }
 
 FIELD TYPE DEFINITIONS
 - Source Field: already in the Beacon field catalog, directly usable in rules
