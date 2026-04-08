@@ -930,7 +930,11 @@ export async function registerRoutes(
 
         const fieldByLabelLower = new Map(fullCatalog.map(f => [normalizeFieldLabel(f.label), f]));
 
-        const VALID_OPERATORS = new Set(["=", "!=", ">", ">=", "<", "<=", "contains", "in", "not_in", "is_true", "is_false"]);
+        const UNARY_OPS = new Set(["is_true", "is_false", "exists", "not_exists"]);
+        const EQUALITY_OPS = new Set(["equals", "not_equals"]);
+        const SET_OPS = new Set(["in", "not_in"]);
+        const NUMERIC_OPS = new Set(["gt", "gte", "lt", "lte"]);
+        const VALID_OPERATORS = new Set([...UNARY_OPS, ...EQUALITY_OPS, ...SET_OPS, ...NUMERIC_OPS]);
 
         const normalizedTreatments = draftResponse.treatments
           .filter(t => t.name?.trim())
@@ -966,23 +970,43 @@ export async function registerRoutes(
         }
 
         // Phase A-pre: Structural fail-fast validation — invalid rule shapes abort with 422, no commit
+        const validateRule = (r: { field_name: string; operator: string; value?: unknown }, label: string) => {
+          const errors: string[] = [];
+          if (!r.field_name || !r.field_name.trim()) {
+            errors.push(`${label} rule has empty field_name`);
+          }
+          if (!VALID_OPERATORS.has(r.operator)) {
+            errors.push(`${label} uses invalid operator "${r.operator}" (allowed: ${Array.from(VALID_OPERATORS).join(", ")})`);
+            return errors;
+          }
+          if (UNARY_OPS.has(r.operator)) {
+            if (r.value != null) {
+              errors.push(`${label} operator "${r.operator}" must not have a value (got ${JSON.stringify(r.value)})`);
+            }
+          } else if (EQUALITY_OPS.has(r.operator)) {
+            const vt = typeof r.value;
+            if (r.value == null || !["string", "number", "boolean"].includes(vt)) {
+              errors.push(`${label} operator "${r.operator}" requires a string, number, or boolean value (got ${r.value == null ? "null/undefined" : vt})`);
+            }
+          } else if (SET_OPS.has(r.operator)) {
+            if (!Array.isArray(r.value)) {
+              errors.push(`${label} operator "${r.operator}" requires an array value (got ${r.value == null ? "null/undefined" : typeof r.value})`);
+            }
+          } else if (NUMERIC_OPS.has(r.operator)) {
+            if (typeof r.value !== "number") {
+              errors.push(`${label} operator "${r.operator}" requires a numeric value (got ${r.value == null ? "null/undefined" : typeof r.value})`);
+            }
+          }
+          return errors;
+        };
+
         const structuralErrors: string[] = [];
         for (const t of normalizedTreatments) {
           for (const r of t.when_to_offer) {
-            if (!r.field_name || !r.field_name.trim()) {
-              structuralErrors.push(`Treatment "${t.name}": when_to_offer rule has empty field_name`);
-            }
-            if (!VALID_OPERATORS.has(r.operator)) {
-              structuralErrors.push(`Treatment "${t.name}": when_to_offer uses invalid operator "${r.operator}" (allowed: ${Array.from(VALID_OPERATORS).join(", ")})`);
-            }
+            structuralErrors.push(...validateRule(r, `Treatment "${t.name}": when_to_offer`));
           }
           for (const r of t.blocked_if) {
-            if (!r.field_name || !r.field_name.trim()) {
-              structuralErrors.push(`Treatment "${t.name}": blocked_if rule has empty field_name`);
-            }
-            if (!VALID_OPERATORS.has(r.operator)) {
-              structuralErrors.push(`Treatment "${t.name}": blocked_if uses invalid operator "${r.operator}" (allowed: ${Array.from(VALID_OPERATORS).join(", ")})`);
-            }
+            structuralErrors.push(...validateRule(r, `Treatment "${t.name}": blocked_if`));
           }
         }
         if (structuralErrors.length > 0) {

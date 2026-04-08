@@ -920,19 +920,66 @@ export interface SOPExtractedTreatment {
 
 // ─── Zod schemas for AI-driven treatment draft generation ─────────────────────
 
-const RuleItemSchema = z.object({
+// Symbol-to-word operator map — applied only in the SOP ingestion path
+const SYMBOL_TO_WORD_OPERATOR: Record<string, string> = {
+  "=": "equals",
+  "!=": "not_equals",
+  ">": "gt",
+  ">=": "gte",
+  "<": "lt",
+  "<=": "lte",
+};
+
+const UNARY_OPERATORS = new Set(["is_true", "is_false", "exists", "not_exists"]);
+
+function normalizeRuleItem(rule: Record<string, unknown>): Record<string, unknown> {
+  const normalized = { ...rule };
+  if (typeof normalized.operator === "string" && SYMBOL_TO_WORD_OPERATOR[normalized.operator]) {
+    normalized.operator = SYMBOL_TO_WORD_OPERATOR[normalized.operator];
+  }
+  if (typeof normalized.operator === "string" && UNARY_OPERATORS.has(normalized.operator)) {
+    if (normalized.value == null) {
+      delete normalized.value;
+    }
+  }
+  return normalized;
+}
+
+const _ruleCommon = {
   field_name: z.string(),
   field_type: z.enum(["source", "derived", "business"]).optional(),
-  operator: z.string(),
-  value: z.union([
-    z.string(),
-    z.number(),
-    z.boolean(),
-    z.null(),
-    z.array(z.union([z.string(), z.number(), z.boolean()])),
-  ]).optional(),
   reason: z.string().optional(),
+};
+
+const UnaryRuleSchema = z.object({
+  ..._ruleCommon,
+  operator: z.enum(["is_true", "is_false", "exists", "not_exists"]),
+}).strict();
+
+const EqualityRuleSchema = z.object({
+  ..._ruleCommon,
+  operator: z.enum(["equals", "not_equals"]),
+  value: z.union([z.string(), z.number(), z.boolean()]),
 });
+
+const SetRuleSchema = z.object({
+  ..._ruleCommon,
+  operator: z.enum(["in", "not_in"]),
+  value: z.array(z.union([z.string(), z.number(), z.boolean()])),
+});
+
+const NumericRuleSchema = z.object({
+  ..._ruleCommon,
+  operator: z.enum(["gt", "gte", "lt", "lte"]),
+  value: z.number(),
+});
+
+const RuleItemSchema = z.union([
+  UnaryRuleSchema,
+  EqualityRuleSchema,
+  SetRuleSchema,
+  NumericRuleSchema,
+]);
 
 const AIDerivedFieldSchema = z.object({
   field_name: z.string(),
@@ -1074,10 +1121,24 @@ RULE FORMAT
 {
  "field_name": "string — must match a field in the catalog or a derived/business field defined in this output",
  "field_type": "source|derived|business",
- "operator": "=|!=|>|>=|<|<=|contains|in|not_in|is_true|is_false",
- "value": "string or number or array",
+ "operator": "one of the operators below — choose the correct class for the field type",
+ "value": "see per-operator requirements below",
  "reason": "short explanation"
 }
+
+OPERATOR CLASSES (use exactly these operator strings):
+- Unary (boolean flags — NO value field, omit value entirely):
+    is_true, is_false, exists, not_exists
+    Example: { "operator": "is_true" }  — do NOT include "value" at all
+- Equality (scalar value required — string, number, or boolean):
+    equals, not_equals
+    Example: { "operator": "equals", "value": "High" }
+- Set membership (array value required):
+    in, not_in
+    Example: { "operator": "in", "value": ["High", "Medium"] }
+- Numeric comparison (number value required):
+    gt, gte, lt, lte
+    Example: { "operator": "gte", "value": 3 }
 
 DERIVATION CONFIG FORMAT (for derived fields only)
 {
@@ -1166,6 +1227,30 @@ Return JSON only. Do not include any markdown formatting or code blocks.`;
     parsed = JSON.parse(jsonText);
   } catch {
     throw new Error("AI returned invalid JSON — cannot parse treatment draft");
+  }
+
+  // Normalize rule items in each treatment before Zod validation
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const raw = parsed as Record<string, unknown>;
+    if (Array.isArray(raw.treatments)) {
+      raw.treatments = raw.treatments.map((t: unknown) => {
+        if (!t || typeof t !== "object" || Array.isArray(t)) return t;
+        const treatment = t as Record<string, unknown>;
+        const normalizeRules = (rules: unknown) =>
+          Array.isArray(rules)
+            ? rules.map((r: unknown) =>
+                r && typeof r === "object" && !Array.isArray(r)
+                  ? normalizeRuleItem(r as Record<string, unknown>)
+                  : r
+              )
+            : rules;
+        return {
+          ...treatment,
+          when_to_offer: normalizeRules(treatment.when_to_offer),
+          blocked_if: normalizeRules(treatment.blocked_if),
+        };
+      });
+    }
   }
 
   const result = DraftResponseSchema.safeParse(parsed);
