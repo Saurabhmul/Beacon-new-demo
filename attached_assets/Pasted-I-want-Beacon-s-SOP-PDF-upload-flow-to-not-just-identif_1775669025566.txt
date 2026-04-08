@@ -1,0 +1,324 @@
+I want Beacon’s SOP PDF upload flow to not just identify treatments and rules, but also automatically create any required **derived fields** and **business fields** in a format the system can actually consume.
+
+Please implement the following.
+
+## Goal
+
+When a user uploads an SOP PDF in the Treatment / Policy creation flow, the system should:
+
+1. extract treatments
+2. extract rules for:
+
+   * when to offer
+   * blocked if
+3. identify any missing **source fields**, **derived fields**, and **business fields**
+4. automatically create the missing **derived fields** and **business fields** in the field catalog
+5. then use those created fields in the generated treatment rules
+
+The output should be system-consumable, not just AI suggestions.
+
+---
+
+## Current gap to fix
+
+Today the SOP draft can suggest derived/business fields, but those are only draft ideas.
+They are not automatically turned into saved Policy Fields that the rules engine can use.
+
+I want to close that gap.
+
+---
+
+## Required behavior
+
+### 1. AI output must become structured and executable
+
+Update the SOP / treatment draft generation so that for every missing field it returns structured definitions, not just names.
+
+For **derived fields**, the AI output must include:
+
+* `field_name`
+* `display_name`
+* `description`
+* `field_type = "derived_field"`
+* `data_type` (boolean / number / string / enum)
+* `depends_on` (list of source/business/derived fields used)
+* `derivation_config` in a machine-readable format
+* `derivation_summary` in human-readable format
+* `allowed_values` if relevant
+
+For **business fields**, the AI output must include:
+
+* `field_name`
+* `display_name`
+* `description`
+* `field_type = "business_field"`
+* `data_type`
+* `allowed_values`
+* `default_value` if appropriate
+* `business_meaning` / usage note
+
+Important:
+I do not want only `formula_hint`.
+I want a real structured config the backend can save and the UI/rules engine can consume.
+
+---
+
+### 2. Introduce a canonical schema for derivation logic
+
+Create a strict JSON schema for `derivationConfig` so derived fields can be saved automatically.
+
+Example shape:
+
+```json
+{
+  "type": "logical",
+  "operator": "AND",
+  "conditions": [
+    {
+      "field": "arrears_balance_gbp",
+      "field_type": "source",
+      "operator": ">",
+      "value": 0
+    },
+    {
+      "field": "ie_assessment_completed",
+      "field_type": "source",
+      "operator": "=",
+      "value": "Yes"
+    }
+  ]
+}
+```
+
+Support at least:
+
+* comparison: `=`, `!=`, `>`, `>=`, `<`, `<=`
+* boolean: `is_true`, `is_false`
+* set operators: `in`, `not_in`
+* string operators: `contains`
+* logical groups: `AND`, `OR`
+
+Optional later:
+
+* arithmetic / aggregation
+* date logic
+* null checks
+
+For now, keep the first version simple and robust.
+
+---
+
+### 3. Auto-create missing fields during SOP upload
+
+In the SOP upload / generate-treatment-draft flow:
+
+* if the AI draft references a derived field that does not exist:
+
+  * validate its `derivationConfig`
+  * save it into `policy_fields` as `sourceType = "derived_field"`
+  * store:
+
+    * name
+    * display name
+    * description
+    * derivationConfig
+    * derivationSummary
+    * companyId / policyPackId linkage
+* if the AI draft references a business field that does not exist:
+
+  * save it into `policy_fields` as `sourceType = "business_field"`
+  * store:
+
+    * name
+    * display name
+    * description
+    * allowed values
+    * default value if given
+
+Then, when creating treatment rules, use the created field records instead of unresolved text references.
+
+---
+
+### 4. Validation before saving
+
+Do not blindly save AI output.
+
+Add backend validation so that before a derived/business field is created:
+
+#### Derived field validation
+
+* `field_name` is present and normalized
+* `derivationConfig` matches the canonical schema
+* all `depends_on` fields exist already, or are also being created in the same transaction
+* no circular dependency between derived fields
+* data type is consistent with the derivation logic
+* field name is unique within the company / policy pack scope
+
+#### Business field validation
+
+* `field_name` is present and normalized
+* allowed values are valid for the data type
+* field name is unique within scope
+
+If validation fails:
+
+* do not silently skip
+* return the field in an `unresolved_fields` / `setup_issues` response block
+
+---
+
+### 5. Treat field setup + treatment creation as one coordinated flow
+
+The SOP creation flow should be:
+
+1. parse SOP
+2. draft treatments
+3. identify referenced fields
+4. auto-create missing derived/business fields
+5. resolve field references to saved field ids / canonical names
+6. create treatment definitions and rules
+7. return:
+
+   * created treatments
+   * created fields
+   * unresolved items if any
+
+I want the treatment section to be usable immediately after upload, not require manual field setup in a separate step for common cases.
+
+---
+
+### 6. Save enough metadata for explainability
+
+For every auto-created field, store:
+
+* created_by = `system_sop_import`
+* source_document_id or SOP upload id
+* ai_generated = true
+* derivationSummary / businessMeaning
+* created_at / updated_at
+
+This is important so users can see:
+
+* which fields were created automatically
+* why they were created
+* from which SOP upload
+
+---
+
+### 7. UI behavior in Treatment section
+
+After SOP upload completes, show a setup summary in the Treatment section:
+
+* `X treatments created`
+* `Y derived fields created`
+* `Z business fields created`
+* `N unresolved items requiring review`
+
+For each auto-created field, allow user review/edit.
+
+For unresolved fields, show:
+
+* field name
+* why it could not be auto-created
+* what input is missing
+
+---
+
+### 8. Suggested DB / model expectations
+
+Please extend the field model so auto-created fields are fully first-class.
+
+For derived fields, the system should store:
+
+* `name`
+* `displayName`
+* `description`
+* `sourceType = "derived_field"`
+* `dataType`
+* `derivationConfig`
+* `derivationSummary`
+* `dependsOn`
+* `aiGenerated`
+* `createdBy`
+* `sourceDocumentId`
+
+For business fields:
+
+* `name`
+* `displayName`
+* `description`
+* `sourceType = "business_field"`
+* `dataType`
+* `allowedValues`
+* `defaultValue`
+* `businessMeaning`
+* `aiGenerated`
+* `createdBy`
+* `sourceDocumentId`
+
+If some of these columns do not exist, please propose the minimal schema change needed.
+
+---
+
+### 9. Prompt / AI contract changes
+
+Update the AI prompt so it does not only say:
+
+* “list derived fields”
+* “list business fields”
+
+Instead require:
+
+* executable structured definitions for derived fields
+* structured definitions for business fields
+* explicit dependencies
+* explicit allowed values
+* confidence per field
+* unresolved / ambiguous fields called out separately
+
+If the SOP is ambiguous, the AI should not invent logic silently.
+It should return the field as unresolved with a reason.
+
+---
+
+### 10. Transaction + safety requirements
+
+Use a transaction for:
+
+* field creation
+* treatment creation
+* rule creation
+
+So we do not end up with:
+
+* fields created but no treatments
+* treatments created with broken field references
+
+If any critical step fails, rollback and return a clear error payload.
+
+---
+
+## What “done” looks like
+
+After uploading an SOP PDF:
+
+* treatments are created
+* `when_to_offer` and `blocked_if` rules are created
+* required derived fields are automatically created in a real consumable format
+* required business fields are automatically created in a real consumable format
+* treatment rules reference those saved fields
+* unresolved/ambiguous items are surfaced clearly for manual review
+
+In other words:
+the SOP upload should move us from “AI suggested fields” to “working configured fields”.
+
+---
+
+## Please also answer these implementation questions in your response
+
+1. What schema changes are required?
+2. What exact files / routes / storage methods will change?
+3. How will you prevent circular derived-field dependencies?
+4. What will the `derivationConfig` JSON schema be?
+5. How will unresolved fields be surfaced in the API and UI?
+6. Which parts can be done in phase 1 vs later improvements?
