@@ -14,6 +14,7 @@ import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import { normalizeFieldLabel, buildFullFieldCatalog } from "./field-catalog";
+import { toLogicOperator } from "./lib/treatment-logic";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
 import { assemblePrompt, assemblePreview, formatCustomerData, clearTemplateCache } from "./lib/prompt/assemble-prompt";
 import { seedDatabase } from "./seed";
@@ -1025,7 +1026,7 @@ export async function registerRoutes(
               const [whenGroup] = await tx.insert(treatmentRuleGroups).values({
                 treatmentId: newTx.id,
                 ruleType: "when_to_offer",
-                logicOperator: "AND",
+                logicOperator: toLogicOperator(t.when_to_offer_logic, "AND"),
                 groupOrder: 0,
               }).returning();
               for (let j = 0; j < t.when_to_offer.length; j++) {
@@ -1052,7 +1053,7 @@ export async function registerRoutes(
               const [blockedGroup] = await tx.insert(treatmentRuleGroups).values({
                 treatmentId: newTx.id,
                 ruleType: "blocked_if",
-                logicOperator: "AND",
+                logicOperator: toLogicOperator(t.blocked_if_logic, "OR"),
                 groupOrder: 0,
               }).returning();
               for (let j = 0; j < t.blocked_if.length; j++) {

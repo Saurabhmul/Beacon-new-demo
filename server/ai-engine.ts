@@ -927,10 +927,12 @@ const RuleItemSchema = z.object({
   reason: z.string().optional(),
 });
 
-const DraftTreatmentItemSchema = z.object({
+export const DraftTreatmentItemSchema = z.object({
   name: z.string(),
   description: z.string().default(""),
+  when_to_offer_logic: z.enum(["ALL", "ANY"]).catch("ALL"),
   when_to_offer: z.array(RuleItemSchema).default([]),
+  blocked_if_logic: z.enum(["ALL", "ANY"]).catch("ANY"),
   blocked_if: z.array(RuleItemSchema).default([]),
   source_fields: z.array(z.object({
     field_name: z.string(),
@@ -1044,6 +1046,10 @@ IMPORTANT RULES
 7. If the SOP is ambiguous, add the uncertainty to open_questions instead of guessing.
 8. You MUST always generate a complete draft — never leave treatments empty because of ambiguity. Put ambiguities in open_questions.
 9. Return JSON only. No markdown formatting, no code blocks, just raw JSON.
+10. For each treatment, you MUST also set:
+  - "when_to_offer_logic": "ALL" if ALL listed conditions must be true (prerequisites / eligibility); "ANY" if any one condition is sufficient.
+  - "blocked_if_logic": "ANY" if ANY single blocker should block the treatment (most common); "ALL" only if ALL blockers must be true simultaneously.
+  Default interpretation: when_to_offer usually = "ALL" (eligibility checks), blocked_if usually = "ANY" (exclusions). Override only when the SOP wording clearly implies otherwise.
 
 FIELD TYPE DEFINITIONS
 - Source Field: already configured in Beacon and directly usable in rules
@@ -1066,7 +1072,9 @@ OUTPUT JSON SCHEMA
    {
      "name": "string",
      "description": "string",
+     "when_to_offer_logic": "ALL",
      "when_to_offer": [RULE],
+     "blocked_if_logic": "ANY",
      "blocked_if": [RULE],
      "source_fields": [
        {

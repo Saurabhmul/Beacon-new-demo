@@ -403,18 +403,19 @@ function makeEmptyRow(): LocalRuleRow {
     leftFieldId: null, rightMode: "constant", rightConstantValue: "", rightFieldId: null,
   };
 }
-function makeEmptyGroup(): LocalRuleGroup {
-  return { logicOperator: "AND", rows: [] };
+function makeEmptyGroup(logicOperator: "AND" | "OR" = "AND"): LocalRuleGroup {
+  return { logicOperator, rows: [] };
 }
 function serverGroupToLocal(ruleType: string, ruleGroups: TreatmentRuleGroupWithRules[]): LocalRuleGroup {
+  const defaultOp: "AND" | "OR" = ruleType === "blocked_if" ? "OR" : "AND";
   const matching = ruleGroups.filter(g => g.ruleType === ruleType);
   const group = matching.length > 0
     ? matching.reduce((best, g) => g.id > best.id ? g : best, matching[0])
     : undefined;
-  if (!group) return makeEmptyGroup();
+  if (!group) return makeEmptyGroup(defaultOp);
   return {
     dbId: group.id,
-    logicOperator: (group.logicOperator as "AND" | "OR") || "AND",
+    logicOperator: (group.logicOperator as "AND" | "OR") || defaultOp,
     rows: group.rules.map((r): LocalRuleRow => ({
       localId: `r${r.id}`,
       fieldName: r.fieldName,
@@ -464,7 +465,7 @@ function extractionToLocal(e: { name: string; shortDescription: string; whenToOf
     priority: "",
     tone: "",
     whenToOffer: { logicOperator: "AND", rows: e.whenToOffer.map(mapRow) },
-    blockedIf: { logicOperator: "AND", rows: e.blockedIf.map(mapRow) },
+    blockedIf: { logicOperator: "OR", rows: e.blockedIf.map(mapRow) },
     isDraft: true,
     expanded: true,
     activeSection: "when",
@@ -479,7 +480,7 @@ function makeTemplateLocalBase(name: string, shortDescription: string, enabled =
   return {
     localId: crypto.randomUUID(), dbId: undefined, name, shortDescription,
     enabled, priority: "", tone: "",
-    whenToOffer: makeEmptyGroup(), blockedIf: makeEmptyGroup(),
+    whenToOffer: makeEmptyGroup("AND"), blockedIf: makeEmptyGroup("OR"),
     isDraft: true, expanded, activeSection: "when",
     draftSourceFields: [], draftDerivedFields: [], draftBusinessFields: [],
     aiConfidence: null,
