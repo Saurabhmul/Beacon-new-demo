@@ -497,7 +497,15 @@ function makeTemplateLocalBase(name: string, shortDescription: string, enabled =
 }
 
 // ── FieldInfoPopover ────────────────────────────────────────────────────────
-function FieldInfoPopover({ field }: { field: PolicyFieldDto }) {
+function FieldInfoPopover({ field, onEdit }: { field: PolicyFieldDto; onEdit?: (field: PolicyFieldDto) => void }) {
+  const isEditable = field.sourceType === "derived_field" || field.sourceType === "business_field";
+  if (isEditable && onEdit) {
+    return (
+      <button type="button" className="text-muted-foreground hover:text-foreground shrink-0 p-0.5 rounded hover:bg-muted" onClick={() => onEdit(field)} data-testid={`btn-field-info-${field.id}`}>
+        <Info className="w-3 h-3" />
+      </button>
+    );
+  }
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -588,13 +596,19 @@ function FieldPicker({ value, policyFields, onChange, onAddField, disabled, test
 }
 
 // ── AddCustomFieldModal ──────────────────────────────────────────────────────
-function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
+function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFieldUpdated, onFieldDeleted, editField }: {
   open: boolean;
   policyFields: PolicyFieldDto[];
   onClose: () => void;
   onFieldCreated: (field: PolicyFieldDto) => void;
+  onFieldUpdated?: (field: PolicyFieldDto) => void;
+  onFieldDeleted?: (fieldId: string) => void;
+  editField?: PolicyFieldDto | null;
 }) {
   const { toast } = useToast();
+  const isEditMode = !!editField;
+  const isLogicalDerived = isEditMode && editField?.sourceType === "derived_field" && editField?.derivationConfig && "type" in editField.derivationConfig && (editField.derivationConfig as any).type === "logical";
+
   const [fieldType, setFieldType] = useState<"business_field" | "derived_field">("business_field");
   const [label, setLabel] = useState("");
   const [description, setDescription] = useState("");
@@ -607,26 +621,71 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
   const [derivCType, setDerivCType] = useState<"field" | "constant">("constant");
   const [derivCValue, setDerivCValue] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [dupError, setDupError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open && editField) {
+      setFieldType(editField.sourceType as "business_field" | "derived_field");
+      setLabel(editField.label);
+      setDescription(editField.description || "");
+      setDupError(null);
+      setSaving(false);
+      setDeleting(false);
+      setConfirmDelete(false);
+      if (editField.sourceType === "derived_field" && editField.derivationConfig && !isLogicalDerived) {
+        const c = editField.derivationConfig as any;
+        setDerivFieldA(c.fieldA || null);
+        setDerivOp1(c.operator1 || "+");
+        setDerivBType(c.operandBType || "constant");
+        setDerivBValue(c.operandBValue || "");
+        if (c.operator2) {
+          setDerivHasStep2(true);
+          setDerivOp2(c.operator2);
+          setDerivCType(c.operandCType || "constant");
+          setDerivCValue(c.operandCValue || "");
+        } else {
+          setDerivHasStep2(false);
+          setDerivOp2("+");
+          setDerivCType("constant");
+          setDerivCValue("");
+        }
+      } else {
+        setDerivFieldA(null);
+        setDerivOp1("+");
+        setDerivBType("constant");
+        setDerivBValue("");
+        setDerivHasStep2(false);
+        setDerivOp2("+");
+        setDerivCType("constant");
+        setDerivCValue("");
+      }
+    } else if (open && !editField) {
+      resetForm();
+    }
+  }, [open, editField]);
 
   function resetForm() {
     setLabel(""); setDescription(""); setFieldType("business_field");
     setDerivFieldA(null); setDerivOp1("+"); setDerivBType("constant"); setDerivBValue("");
     setDerivHasStep2(false); setDerivOp2("+"); setDerivCType("constant"); setDerivCValue("");
-    setSaving(false); setDupError(null);
+    setSaving(false); setDeleting(false); setConfirmDelete(false); setDupError(null);
   }
   function handleClose() { resetForm(); onClose(); }
 
   async function handleSave() {
     const trimmed = label.trim();
     if (!trimmed) return;
-    if (fieldType === "derived_field" && (!derivFieldA || !derivBValue.trim())) return;
-    if (fieldType === "derived_field" && derivHasStep2 && !derivCValue.trim()) return;
+    if (!isEditMode && fieldType === "derived_field" && (!derivFieldA || !derivBValue.trim())) return;
+    if (!isEditMode && fieldType === "derived_field" && derivHasStep2 && !derivCValue.trim()) return;
+    if (isEditMode && !isLogicalDerived && fieldType === "derived_field" && (!derivFieldA || !derivBValue.trim())) return;
     setSaving(true); setDupError(null);
+
     const fieldAField = derivFieldA ? policyFields.find(f => f.id === derivFieldA) : null;
     const operandBField = derivBType === "field" ? policyFields.find(f => f.id === derivBValue) : null;
     const operandCField = derivHasStep2 && derivCType === "field" ? policyFields.find(f => f.id === derivCValue) : null;
-    const derivationConfig = fieldType === "derived_field" ? {
+    const derivationConfig = (fieldType === "derived_field" && !isLogicalDerived) ? {
       fieldA: derivFieldA!, fieldALabel: fieldAField?.label || derivFieldA!,
       operator1: derivOp1, operandBType: derivBType, operandBValue: derivBValue,
       ...(operandBField ? { operandBLabel: operandBField.label } : {}),
@@ -635,24 +694,55 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
         ...(operandCField ? { operandCLabel: operandCField.label } : {}),
       } : {}),
     } : null;
+
     try {
-      const res = await fetch("/api/policy-fields", {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: trimmed, description: description.trim() || null, sourceType: fieldType, derivationConfig }),
-      });
-      if (res.status === 409) { const d = await res.json(); setDupError(d.error || `"${trimmed}" already exists.`); return; }
-      if (!res.ok) throw new Error();
-      const newField: PolicyFieldDto = await res.json();
-      onFieldCreated(newField);
-      handleClose();
-      toast({ title: `Field "${newField.label}" created` });
-    } catch { toast({ title: "Failed to create field", variant: "destructive" }); }
+      if (isEditMode && editField) {
+        const body: Record<string, any> = { label: trimmed, description: description.trim() || null };
+        if (derivationConfig !== null) body.derivationConfig = derivationConfig;
+        const res = await fetch(`/api/policy-fields/${editField.id}`, {
+          method: "PATCH", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (res.status === 409) { const d = await res.json(); setDupError(d.error || `"${trimmed}" already exists.`); return; }
+        if (!res.ok) throw new Error();
+        const updated: PolicyFieldDto = await res.json();
+        onFieldUpdated?.(updated);
+        handleClose();
+        toast({ title: `Field "${updated.label}" updated` });
+      } else {
+        const res = await fetch("/api/policy-fields", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label: trimmed, description: description.trim() || null, sourceType: fieldType, derivationConfig }),
+        });
+        if (res.status === 409) { const d = await res.json(); setDupError(d.error || `"${trimmed}" already exists.`); return; }
+        if (!res.ok) throw new Error();
+        const newField: PolicyFieldDto = await res.json();
+        onFieldCreated(newField);
+        handleClose();
+        toast({ title: `Field "${newField.label}" created` });
+      }
+    } catch { toast({ title: isEditMode ? "Failed to update field" : "Failed to create field", variant: "destructive" }); }
     finally { setSaving(false); }
   }
 
+  async function handleDelete() {
+    if (!editField) return;
+    if (!confirmDelete) { setConfirmDelete(true); return; }
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/policy-fields/${editField.id}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) throw new Error();
+      onFieldDeleted?.(editField.id);
+      handleClose();
+      toast({ title: `Field "${editField.label}" deleted` });
+    } catch { toast({ title: "Failed to delete field", variant: "destructive" }); }
+    finally { setDeleting(false); }
+  }
+
   const canSave = !!label.trim() && (
-    fieldType !== "derived_field" || (!!derivFieldA && !!derivBValue.trim() && (!derivHasStep2 || !!derivCValue.trim()))
+    fieldType !== "derived_field" || isLogicalDerived || (!!derivFieldA && !!derivBValue.trim() && (!derivHasStep2 || !!derivCValue.trim()))
   );
 
   const OperandToggle = ({ type, onType, onClear }: { type: "field" | "constant"; onType: (t: "field" | "constant") => void; onClear: () => void }) => (
@@ -668,21 +758,29 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
   return (
     <Dialog open={open} onOpenChange={v => !v && handleClose()}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Add Customer Field</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{isEditMode ? "Edit Field" : "Add Customer Field"}</DialogTitle></DialogHeader>
         <div className="space-y-4 pt-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium">Field Type</Label>
-            <div className="flex gap-2">
-              {([["business_field", "Business Field"], ["derived_field", "Derived Field"]] as const).map(([t, l]) => (
-                <button key={t} type="button"
-                  className={`flex-1 px-3 py-2 text-xs rounded-md border transition-colors ${fieldType === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
-                  onClick={() => setFieldType(t)}>{l}</button>
-              ))}
+          {isEditMode && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 px-3 py-2 rounded-md">
+              <span className="font-medium capitalize">{fieldType === "business_field" ? "Business Field" : "Derived Field"}</span>
+              {editField?.aiGenerated && <span className="ml-auto text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">AI-generated</span>}
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              {fieldType === "business_field" ? "A custom field not present in source data — e.g. a manual assessment or category." : "A field computed from other fields using a formula — e.g. Debt-to-Income Ratio."}
-            </p>
-          </div>
+          )}
+          {!isEditMode && (
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Field Type</Label>
+              <div className="flex gap-2">
+                {([["business_field", "Business Field"], ["derived_field", "Derived Field"]] as const).map(([t, l]) => (
+                  <button key={t} type="button"
+                    className={`flex-1 px-3 py-2 text-xs rounded-md border transition-colors ${fieldType === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
+                    onClick={() => setFieldType(t)}>{l}</button>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {fieldType === "business_field" ? "A custom field not present in source data — e.g. a manual assessment or category." : "A field computed from other fields using a formula — e.g. Debt-to-Income Ratio."}
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label className="text-xs font-medium">Field Label <span className="text-destructive">*</span></Label>
             <Input value={label} onChange={e => { setLabel(e.target.value); setDupError(null); }}
@@ -696,7 +794,14 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
               placeholder="Optional — describe how this field is used…"
               className="text-xs min-h-[56px] resize-none" data-testid="textarea-field-desc" />
           </div>
-          {fieldType === "derived_field" && (
+          {fieldType === "derived_field" && isLogicalDerived && (
+            <div className="space-y-2 rounded-md border p-3 bg-muted/30">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Derivation Conditions (read-only)</div>
+              <div className="font-mono text-[11px] bg-muted px-2 py-1.5 rounded whitespace-pre-wrap break-words">{editField?.derivationSummary || "AI-generated logical conditions"}</div>
+              <p className="text-[10px] text-muted-foreground">AI-generated logical derivation conditions cannot be edited here.</p>
+            </div>
+          )}
+          {fieldType === "derived_field" && !isLogicalDerived && (
             <div className="space-y-3 rounded-md border p-3 bg-muted/30">
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Derivation Formula</div>
               <div className="space-y-2">
@@ -751,10 +856,27 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
             </div>
           )}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={handleClose} disabled={saving}>Cancel</Button>
-          <Button onClick={handleSave} disabled={!canSave || saving} data-testid="button-save-field">
-            {saving && <Loader2 className="w-3 h-3 animate-spin mr-1" />}Create Field
+        <DialogFooter className="flex-col sm:flex-row gap-2">
+          {isEditMode && (
+            <div className="flex-1 flex items-center">
+              {confirmDelete ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-destructive">Delete this field permanently?</span>
+                  <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={handleDelete} disabled={deleting} data-testid="button-confirm-delete-field">
+                    {deleting && <Loader2 className="w-3 h-3 animate-spin mr-1" />}Yes, Delete
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setConfirmDelete(false)} disabled={deleting}>Cancel</Button>
+                </div>
+              ) : (
+                <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive hover:bg-destructive/10" onClick={handleDelete} data-testid="button-delete-field">
+                  <Trash2 className="w-3 h-3 mr-1" />Delete Field
+                </Button>
+              )}
+            </div>
+          )}
+          <Button variant="outline" onClick={handleClose} disabled={saving || deleting}>Cancel</Button>
+          <Button onClick={handleSave} disabled={!canSave || saving || deleting} data-testid="button-save-field">
+            {saving && <Loader2 className="w-3 h-3 animate-spin mr-1" />}{isEditMode ? "Save Changes" : "Create Field"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -763,16 +885,19 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated }: {
 }
 
 // ── RuleBuilderGroup ─────────────────────────────────────────────────────────
-function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOnly, onFieldCreated }: {
+function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOnly, onFieldCreated, onFieldUpdated, onFieldDeleted }: {
   group: LocalRuleGroup;
   knownFields?: string[];
   policyFields?: PolicyFieldDto[];
   onChange: (g: LocalRuleGroup) => void;
   isReadOnly: boolean;
   onFieldCreated?: (field: PolicyFieldDto) => void;
+  onFieldUpdated?: (field: PolicyFieldDto) => void;
+  onFieldDeleted?: (fieldId: string) => void;
 }) {
   const [addFieldOpen, setAddFieldOpen] = useState(false);
   const [pendingFieldTarget, setPendingFieldTarget] = useState<{ rowId: string; side: "left" | "right" } | null>(null);
+  const [editingField, setEditingField] = useState<PolicyFieldDto | null>(null);
 
   function updateRow(localId: string, patch: Partial<LocalRuleRow>) {
     onChange({ ...group, rows: group.rows.map(r => r.localId === localId ? { ...r, ...patch } : r) });
@@ -793,6 +918,22 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
       else updateRow(rowId, { rightFieldId: field.id, rightMode: "field" });
       setPendingFieldTarget(null);
     }
+  }
+  function handleFieldUpdated(field: PolicyFieldDto) {
+    setEditingField(null);
+    onFieldUpdated?.(field);
+  }
+  function handleFieldDeleted(fieldId: string) {
+    setEditingField(null);
+    onFieldDeleted?.(fieldId);
+    onChange({
+      ...group,
+      rows: group.rows.map(r => ({
+        ...r,
+        ...(r.leftFieldId === fieldId ? { leftFieldId: null } : {}),
+        ...(r.rightFieldId === fieldId ? { rightFieldId: null, rightMode: "constant" as const } : {}),
+      })),
+    });
   }
 
   // Shared logic operator toggle
@@ -904,7 +1045,7 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
                 onChange={fieldId => updateRow(row.localId, { leftFieldId: fieldId })}
                 onAddField={() => openAddField(row.localId, "left")}
                 disabled={isReadOnly} testId={`picker-left-${row.localId}`} />
-              {leftField && <FieldInfoPopover field={leftField} />}
+              {leftField && <FieldInfoPopover field={leftField} onEdit={!isReadOnly ? setEditingField : undefined} />}
             </div>
             <Select value={row.operator} onValueChange={v => updateRow(row.localId, { operator: v })} disabled={isReadOnly}>
               <SelectTrigger className="h-8 text-xs w-32" data-testid={`select-operator-${row.localId}`}>
@@ -929,7 +1070,7 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
                       onChange={fieldId => updateRow(row.localId, { rightFieldId: fieldId })}
                       onAddField={() => openAddField(row.localId, "right")}
                       disabled={isReadOnly} testId={`picker-right-${row.localId}`} />
-                    {rightField && <FieldInfoPopover field={rightField} />}
+                    {rightField && <FieldInfoPopover field={rightField} onEdit={!isReadOnly ? setEditingField : undefined} />}
                   </div>
                 ) : (
                   <Input value={row.rightConstantValue} onChange={e => updateRow(row.localId, { rightConstantValue: e.target.value })}
@@ -960,15 +1101,23 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
       <AddCustomFieldModal open={addFieldOpen} policyFields={policyFields}
         onClose={() => { setAddFieldOpen(false); setPendingFieldTarget(null); }}
         onFieldCreated={handleNewFieldCreated} />
+      <AddCustomFieldModal open={!!editingField} policyFields={policyFields}
+        editField={editingField}
+        onClose={() => setEditingField(null)}
+        onFieldCreated={handleNewFieldCreated}
+        onFieldUpdated={handleFieldUpdated}
+        onFieldDeleted={handleFieldDeleted} />
     </div>
   );
 }
 
-function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, isReadOnly, onUpdate, onDelete, onExpandToggle, onRegisterSave, onUnregisterSave }: {
+function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, onFieldUpdated, onFieldDeleted, isReadOnly, onUpdate, onDelete, onExpandToggle, onRegisterSave, onUnregisterSave }: {
   treatment: LocalTreatment;
   knownFields: string[];
   policyFields: PolicyFieldDto[];
   onFieldCreated: (field: PolicyFieldDto) => void;
+  onFieldUpdated?: (field: PolicyFieldDto) => void;
+  onFieldDeleted?: (fieldId: string) => void;
   isReadOnly: boolean;
   onUpdate: (updated: LocalTreatment) => void;
   onDelete: () => void;
@@ -1153,12 +1302,12 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
           {local.activeSection === "when" && (
             <RuleBuilderGroup group={local.whenToOffer} policyFields={policyFields}
               onChange={g => setLocal(l => ({ ...l, whenToOffer: g }))} isReadOnly={isReadOnly}
-              onFieldCreated={onFieldCreated} />
+              onFieldCreated={onFieldCreated} onFieldUpdated={onFieldUpdated} onFieldDeleted={onFieldDeleted} />
           )}
           {local.activeSection === "blocked" && (
             <RuleBuilderGroup group={local.blockedIf} policyFields={policyFields}
               onChange={g => setLocal(l => ({ ...l, blockedIf: g }))} isReadOnly={isReadOnly}
-              onFieldCreated={onFieldCreated} />
+              onFieldCreated={onFieldCreated} onFieldUpdated={onFieldUpdated} onFieldDeleted={onFieldDeleted} />
           )}
         </div>
       )}
@@ -1190,12 +1339,14 @@ const PRELOADED_TREATMENTS = [
   { name: "None — encourage payment", shortDescription: "Customer is encouraged to pay at least the minimum amount due. No loan modification or system intervention — focus is on positive reinforcement: explaining the credit score benefits of on-time payment, the long-term risk of further arrears, and motivating the customer to bring their account back on track." },
 ];
 
-function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, onFieldCreated, onSaveReady }: {
+function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, onFieldCreated, onFieldUpdated, onFieldDeleted, onSaveReady }: {
   isReadOnly: boolean;
   policyPack: PolicyPack;
   policyFields: PolicyFieldDto[];
   knownFields: string[];
   onFieldCreated: (field: PolicyFieldDto) => void;
+  onFieldUpdated?: (field: PolicyFieldDto) => void;
+  onFieldDeleted?: (fieldId: string) => void;
   onSaveReady?: (saveAll: () => Promise<void>) => void;
 }) {
   const { toast } = useToast();
@@ -1785,7 +1936,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
           ) : (
             localTreatments.map(tx => (
               <TreatmentCard key={tx.localId} treatment={tx} knownFields={knownFields} policyFields={policyFields}
-                onFieldCreated={onFieldCreated} isReadOnly={isReadOnly}
+                onFieldCreated={onFieldCreated} onFieldUpdated={onFieldUpdated} onFieldDeleted={onFieldDeleted} isReadOnly={isReadOnly}
                 onExpandToggle={() => handleExpandToggle(tx.localId)}
                 onUpdate={updated => setLocalTreatments(prev => sortByPriority(prev.map(t => t.localId === tx.localId ? { ...updated, expanded: t.expanded } : t)))}
                 onDelete={() => setLocalTreatments(prev => sortByPriority(prev.filter(t => t.localId !== tx.localId)))}
@@ -1920,6 +2071,14 @@ function PolicyConfigTab() {
       if (prev.find(f => f.id === field.id)) return prev;
       return [...prev, field];
     });
+  }
+  function handleFieldUpdated(field: PolicyFieldDto) {
+    setPolicyFields(prev => prev.map(f => f.id === field.id ? field : f));
+    queryClient.invalidateQueries({ queryKey: ["/api/policy-fields"] });
+  }
+  function handleFieldDeleted(fieldId: string) {
+    setPolicyFields(prev => prev.filter(f => f.id !== fieldId));
+    queryClient.invalidateQueries({ queryKey: ["/api/policy-fields"] });
   }
 
   const [vulnerabilityDefinition, setVulnerabilityDefinition] = useState("");
@@ -2398,6 +2557,7 @@ function PolicyConfigTab() {
 
         <PolicyPackSection isReadOnly={isReadOnly} policyPack={policyPack!}
           policyFields={policyFields} knownFields={knownFields} onFieldCreated={handleFieldCreated}
+          onFieldUpdated={handleFieldUpdated} onFieldDeleted={handleFieldDeleted}
           onSaveReady={fn => { saveTreatmentsRef.current = fn; }} />
 
 
@@ -2438,6 +2598,8 @@ For example:
                 onChange={setVulnerabilityRulesGroup}
                 isReadOnly={isReadOnly}
                 onFieldCreated={handleFieldCreated}
+                onFieldUpdated={handleFieldUpdated}
+                onFieldDeleted={handleFieldDeleted}
               />
             </div>
 
@@ -2568,6 +2730,8 @@ For example:
                 onChange={setEscalationCustomGroup}
                 isReadOnly={isReadOnly}
                 onFieldCreated={handleFieldCreated}
+                onFieldUpdated={handleFieldUpdated}
+                onFieldDeleted={handleFieldDeleted}
               />
             </div>
 

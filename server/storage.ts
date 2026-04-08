@@ -76,7 +76,10 @@ export interface IStorage {
   deleteRuleGroupsByTreatmentAndType(treatmentId: number, ruleType: string): Promise<void>;
 
   getPolicyFields(companyId: string): Promise<PolicyFieldRecord[]>;
+  getPolicyFieldById(id: number): Promise<PolicyFieldRecord | undefined>;
   createPolicyField(data: InsertPolicyField): Promise<PolicyFieldRecord>;
+  updatePolicyField(id: number, data: Partial<Pick<PolicyFieldRecord, "label" | "description" | "derivationConfig" | "derivationSummary">>): Promise<PolicyFieldRecord>;
+  deletePolicyField(id: number): Promise<void>;
 
   getCompanies(): Promise<Company[]>;
   getCompany(id: string): Promise<Company | undefined>;
@@ -397,6 +400,20 @@ export class DatabaseStorage implements IStorage {
   async createPolicyField(data: InsertPolicyField): Promise<PolicyFieldRecord> {
     const [field] = await db.insert(policyFields).values(data).returning();
     return field;
+  }
+
+  async getPolicyFieldById(id: number): Promise<PolicyFieldRecord | undefined> {
+    const [field] = await db.select().from(policyFields).where(eq(policyFields.id, id));
+    return field || undefined;
+  }
+
+  async updatePolicyField(id: number, data: Partial<Pick<PolicyFieldRecord, "label" | "description" | "derivationConfig" | "derivationSummary">>): Promise<PolicyFieldRecord> {
+    const [field] = await db.update(policyFields).set(data).where(eq(policyFields.id, id)).returning();
+    return field;
+  }
+
+  async deletePolicyField(id: number): Promise<void> {
+    await db.delete(policyFields).where(eq(policyFields.id, id));
   }
 
   async getCompanies(): Promise<Company[]> {

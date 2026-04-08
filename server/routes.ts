@@ -866,6 +866,65 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/policy-fields/:id", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const fieldId = parseInt(req.params.id, 10);
+      if (isNaN(fieldId)) return res.status(400).json({ error: "Invalid field id" });
+      const existing = await storage.getPolicyFieldById(fieldId);
+      if (!existing) return res.status(404).json({ error: "Field not found" });
+      if (existing.companyId !== companyId) return res.status(403).json({ error: "Forbidden" });
+      if (!["business_field", "derived_field"].includes(existing.sourceType)) {
+        return res.status(400).json({ error: "Only business and derived fields can be edited" });
+      }
+      const { label, description, derivationConfig } = req.body;
+      const patch: Partial<Pick<typeof existing, "label" | "description" | "derivationConfig" | "derivationSummary">> = {};
+      if (label !== undefined) {
+        const trimmed = label.trim();
+        if (!trimmed) return res.status(400).json({ error: "label cannot be empty" });
+        const allFields = await storage.getPolicyFields(companyId!);
+        const dup = allFields.find(f => f.id !== fieldId && normalizeFieldLabel(f.label) === normalizeFieldLabel(trimmed));
+        if (dup) return res.status(409).json({ error: `Field "${trimmed}" already exists` });
+        patch.label = trimmed;
+      }
+      if (description !== undefined) patch.description = description?.trim() || null;
+      if (derivationConfig !== undefined && existing.sourceType === "derived_field") {
+        if (!derivationConfig.fieldA) return res.status(400).json({ error: "derivationConfig.fieldA is required" });
+        if (!derivationConfig.operator1) return res.status(400).json({ error: "derivationConfig.operator1 is required" });
+        if (!derivationConfig.operandBType || !derivationConfig.operandBValue?.toString().trim()) return res.status(400).json({ error: "derivationConfig operandB is required" });
+        if (derivationConfig.operator2 !== undefined && derivationConfig.operator2 !== "") {
+          if (!derivationConfig.operandCType || !derivationConfig.operandCValue?.toString().trim()) return res.status(400).json({ error: "derivationConfig operandC is required when operator2 is set" });
+        }
+        patch.derivationConfig = derivationConfig;
+        patch.derivationSummary = generateDerivationSummary(derivationConfig);
+      }
+      const updated = await storage.updatePolicyField(fieldId, patch);
+      res.json(toFieldDto(updated));
+    } catch (error) {
+      console.error("Update policy field error:", error);
+      res.status(500).json({ error: "Failed to update policy field" });
+    }
+  });
+
+  app.delete("/api/policy-fields/:id", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
+    try {
+      const companyId = getCompanyId(req);
+      const fieldId = parseInt(req.params.id, 10);
+      if (isNaN(fieldId)) return res.status(400).json({ error: "Invalid field id" });
+      const existing = await storage.getPolicyFieldById(fieldId);
+      if (!existing) return res.status(404).json({ error: "Field not found" });
+      if (existing.companyId !== companyId) return res.status(403).json({ error: "Forbidden" });
+      if (!["business_field", "derived_field"].includes(existing.sourceType)) {
+        return res.status(400).json({ error: "Only business and derived fields can be deleted" });
+      }
+      await storage.deletePolicyField(fieldId);
+      res.status(204).end();
+    } catch (error) {
+      console.error("Delete policy field error:", error);
+      res.status(500).json({ error: "Failed to delete policy field" });
+    }
+  });
+
   app.post("/api/policy-pack/extract-sop", authenticate, authorize("admin"), companyFilter, (_req: any, res: any) => {
     res.status(410).json({ error: "This endpoint has been replaced. Please use POST /api/policy-pack/generate-treatment-draft with PDF files instead." });
   });
