@@ -800,7 +800,7 @@ export async function registerRoutes(
         }
       }
       const existing = await storage.getPolicyFields(companyId!);
-      const dup = existing.find(f => f.label.trim().toLowerCase() === label.trim().toLowerCase());
+      const dup = existing.find(f => normalizeFieldLabel(f.label) === normalizeFieldLabel(label));
       if (dup) return res.status(409).json({ error: `Field "${label.trim()}" already exists` });
       const derivationSummary = sourceType === "derived_field" && derivationConfig
         ? generateDerivationSummary(derivationConfig)
