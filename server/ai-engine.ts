@@ -924,7 +924,13 @@ const RuleItemSchema = z.object({
   field_name: z.string(),
   field_type: z.enum(["source", "derived", "business"]).optional(),
   operator: z.string(),
-  value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional(),
+  value: z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(z.union([z.string(), z.number(), z.boolean()])),
+  ]).optional(),
   reason: z.string().optional(),
 });
 
