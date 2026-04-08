@@ -1,0 +1,243 @@
+Please do **not** implement the previous fix as “allow null and boolean in value everywhere.” I don’t want a broader permissive schema that hides bad rule shapes.
+
+I want the importer changed to use **operator-aware validation**.
+
+## What is actually wrong
+
+The issue is not just that `null` was rejected.
+
+The issue is that the importer currently treats all rules as if they share one generic shape:
+
+* `field`
+* `operator`
+* `value`
+
+But some operators are **unary** and do **not require a value** at all, while others are **binary** and **must** have a value.
+
+Example from the SOP import:
+
+```json
+{
+  "field": "ie_assessment_completed",
+  "operator": "is_true",
+  "value": null
+}
+```
+
+That is a reasonable AI output, but the correct handling is **not** “allow null everywhere.”
+The correct handling is:
+
+* `is_true` / `is_false` should not require `value`
+* `equals`, `in`, `gte`, etc. should require `value` with the correct type
+
+## What I want changed
+
+Please redesign validation around the **operator**, not around a single loose `value` field.
+
+### Supported rule behavior
+
+#### 1) Unary operators — no value required
+
+These operators should **not require** `value`, and if the AI returns `value: null`, the importer should normalize it away before validation/storage.
+
+Supported unary operators:
+
+* `is_true`
+* `is_false`
+* `exists`
+* `not_exists`
+
+Examples:
+
+```json
+{ "field": "ie_assessment_completed", "operator": "is_true" }
+{ "field": "active_breathing_space", "operator": "is_false" }
+```
+
+If AI sends:
+
+```json
+{ "field": "ie_assessment_completed", "operator": "is_true", "value": null }
+```
+
+normalize it to:
+
+```json
+{ "field": "ie_assessment_completed", "operator": "is_true" }
+```
+
+#### 2) Equality-style operators — scalar value required
+
+These should require a single scalar value.
+
+Supported operators:
+
+* `equals`
+* `not_equals`
+
+Allowed value types:
+
+* `string`
+* `number`
+* `boolean`
+
+Examples:
+
+```json
+{ "field": "contractual_recovery_confidence", "operator": "equals", "value": "High" }
+{ "field": "payments_down", "operator": "equals", "value": 3 }
+{ "field": "up_to_date_with_priority_bills", "operator": "equals", "value": true }
+```
+
+#### 3) Set membership operators — array value required
+
+Supported operators:
+
+* `in`
+* `not_in`
+
+Allowed value type:
+
+* array of `string | number | boolean`
+
+Examples:
+
+```json
+{ "field": "contractual_recovery_confidence", "operator": "in", "value": ["High", "Medium"] }
+{ "field": "status_code", "operator": "in", "value": [1, 2, 3] }
+```
+
+#### 4) Numeric comparison operators — number required
+
+Supported operators:
+
+* `gt`
+* `gte`
+* `lt`
+* `lte`
+
+Allowed value type:
+
+* `number`
+
+Examples:
+
+```json
+{ "field": "plan_term_months", "operator": "lte", "value": 12 }
+{ "field": "arrears_months", "operator": "gte", "value": 3 }
+```
+
+## Important requirement: strings must be supported
+
+Yes, I need `value` to support strings for categorical logic.
+
+Examples that must work:
+
+* `"High"`
+* `"Medium"`
+* `"Low"`
+* `"Very low"`
+* `"Short-term"`
+* `"Medium-term"`
+* `"Long-term"`
+* `"Full"`
+* `"Partial"`
+* `"Token"`
+* `"None"`
+
+So please ensure the schema explicitly supports **string values** anywhere a scalar value is valid.
+
+## Validation rules I want
+
+### Normalize before validating
+
+Please add a normalization pass before strict validation:
+
+* If operator is unary (`is_true`, `is_false`, `exists`, `not_exists`)
+
+  * remove `value` if it is `null` or `undefined`
+  * ideally remove `value` entirely even if AI included it
+* If operator requires scalar value
+
+  * ensure `value` exists and is `string | number | boolean`
+* If operator requires array value
+
+  * ensure `value` is an array of `string | number | boolean`
+* If operator requires numeric value
+
+  * ensure `value` is a number only
+
+### Reject invalid combinations
+
+These should fail validation:
+
+* `{ operator: "gte", value: null }`
+* `{ operator: "in", value: true }`
+* `{ operator: "is_true", value: "High" }`
+* `{ operator: "lte", value: "12" }` unless you explicitly coerce numeric strings before validation
+* `{ operator: "equals" }` with missing value
+
+## Preferred schema shape
+
+Please model the rule type as a discriminated union by operator.
+
+Something like:
+
+```ts
+type Rule =
+  | { field: string; operator: "is_true" | "is_false" | "exists" | "not_exists" }
+  | { field: string; operator: "equals" | "not_equals"; value: string | number | boolean }
+  | { field: string; operator: "in" | "not_in"; value: Array<string | number | boolean> }
+  | { field: string; operator: "gt" | "gte" | "lt" | "lte"; value: number }
+```
+
+If you’re using Zod, please implement this as a union/discriminated union instead of a single permissive object schema.
+
+## Why I want this approach
+
+I do **not** want a hotfix that simply broadens `value` to accept anything.
+That would allow invalid rule states to pass and make the importer less reliable.
+
+I want:
+
+* unary operators handled correctly
+* strings supported properly
+* booleans supported where appropriate
+* numeric operators enforced strictly
+* invalid operator/value combinations rejected
+
+## Test cases I want added
+
+### Should pass
+
+```json
+{ "field": "ie_assessment_completed", "operator": "is_true" }
+{ "field": "active_breathing_space", "operator": "is_false" }
+{ "field": "contractual_recovery_confidence", "operator": "equals", "value": "High" }
+{ "field": "financial_difficulty_duration", "operator": "equals", "value": "Medium-term" }
+{ "field": "payment_amount_affordability", "operator": "in", "value": ["Full", "Partial", "Token"] }
+{ "field": "up_to_date_with_priority_bills", "operator": "equals", "value": true }
+{ "field": "arrears_months", "operator": "gte", "value": 3 }
+{ "field": "plan_term_months", "operator": "lte", "value": 12 }
+```
+
+### Should normalize and pass
+
+```json
+{ "field": "ie_assessment_completed", "operator": "is_true", "value": null }
+{ "field": "active_breathing_space", "operator": "is_false", "value": null }
+```
+
+### Should fail
+
+```json
+{ "field": "arrears_months", "operator": "gte", "value": null }
+{ "field": "payment_amount_affordability", "operator": "in", "value": true }
+{ "field": "ie_assessment_completed", "operator": "is_true", "value": "High" }
+{ "field": "plan_term_months", "operator": "lte", "value": "12" }
+{ "field": "contractual_recovery_confidence", "operator": "equals" }
+```
+
+## Final implementation note
+
+If production is blocked, you can temporarily keep the current flow running by normalizing unary `null` values away before validation. But the actual fix I want merged is **operator-specific validation**, not a global “allow null/boolean anywhere” patch.

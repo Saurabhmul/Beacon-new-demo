@@ -1,0 +1,114 @@
+This plan is directionally correct and much better than the previous broad null/boolean fix.
+
+Please proceed, but make these adjustments before implementation:
+
+### 1) Don’t rely on a literal `discriminatedUnion("operator", ...)` by operator class
+
+Because each class contains multiple operators, please implement this as an **operator-specific union / validation layer** rather than assuming a single discriminated-union branch per class.
+
+I’m fine with any clean implementation pattern as long as operator-value compatibility is enforced strictly.
+
+### 2) Tighten unary normalization
+
+For unary operators (`is_true`, `is_false`, `exists`, `not_exists`):
+
+* if `value` is `null` or `undefined`, strip it before validation
+* if `value` is anything else, fail validation
+
+I do **not** want non-null values silently tolerated for unary operators.
+
+Examples:
+
+* pass: `{ operator: "is_true" }`
+* normalize and pass: `{ operator: "is_true", value: null }`
+* fail: `{ operator: "is_true", value: "High" }`
+* fail: `{ operator: "is_true", value: true }`
+
+### 3) Add temporary normalization for legacy/symbol operators in SOP ingestion
+
+The prompt should be updated to the new word-based operators, but the ingestion path should also be resilient if the model still emits symbol-style operators.
+
+Please normalize the following before validation:
+
+* `=` → `equals`
+* `!=` → `not_equals`
+* `>` → `gt`
+* `>=` → `gte`
+* `<` → `lt`
+* `<=` → `lte`
+
+Then validate only against the canonical word-based operators.
+
+This should apply only to the SOP ingestion path, not necessarily to the rest of the product.
+
+## Additional requirement
+
+Please ensure scalar string values are fully supported anywhere equality operators are allowed.
+
+Examples that must pass:
+
+* `"High"`
+* `"Medium"`
+* `"Low"`
+* `"Very low"`
+* `"Short-term"`
+* `"Medium-term"`
+* `"Long-term"`
+* `"Full"`
+* `"Partial"`
+* `"Token"`
+* `"None"`
+
+## Preferred behavior summary
+
+### Unary
+
+* `is_true`, `is_false`, `exists`, `not_exists`
+* no value allowed
+* only `null`/`undefined` may be stripped during normalization
+
+### Equality
+
+* `equals`, `not_equals`
+* value required
+* allowed: `string | number | boolean`
+
+### Set membership
+
+* `in`, `not_in`
+* value required
+* allowed: `Array<string | number | boolean>`
+
+### Numeric comparison
+
+* `gt`, `gte`, `lt`, `lte`
+* value required
+* allowed: `number` only
+
+## Tests to add
+
+### Pass
+
+* `{ operator: "is_true" }`
+* `{ operator: "equals", value: "High" }`
+* `{ operator: "equals", value: true }`
+* `{ operator: "in", value: ["Full", "Partial"] }`
+* `{ operator: "gte", value: 3 }`
+
+### Normalize and pass
+
+* `{ operator: "is_true", value: null }`
+* `{ operator: "is_false", value: undefined }`
+* `{ operator: "=", value: "High" }` → normalized to `equals`
+* `{ operator: ">=", value: 3 }` → normalized to `gte`
+
+### Fail
+
+* `{ operator: "gte", value: null }`
+* `{ operator: "in", value: true }`
+* `{ operator: "equals" }`
+* `{ operator: "lte", value: "12" }`
+* `{ operator: "is_true", value: "High" }`
+* `{ operator: "is_false", value: true }`
+
+If these changes are included, I’m happy with the plan.
