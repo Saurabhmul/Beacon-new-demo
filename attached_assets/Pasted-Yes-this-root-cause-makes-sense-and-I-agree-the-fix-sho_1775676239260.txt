@@ -1,0 +1,90 @@
+Yes — this root cause makes sense, and I agree the fix should be a **single normalization pass before Zod safeParse**, rather than patching fields one by one.
+
+However, please implement it in a **typed and explicit way**, not as a blanket “convert all nulls everywhere.”
+
+## What I want
+
+Add a normalization step for the full SOP AI response object before any Zod parse runs.
+
+This normalization should:
+
+### 1) Convert `null` to default values only for specific optional fields that are semantically nullable-but-defaultable
+
+Examples include optional text/array fields such as:
+
+* `display_name`
+* `description`
+* `default_value`
+* `business_meaning`
+* `derivation_summary`
+
+If those fields are `null`, convert them to their intended schema defaults:
+
+* optional strings → `""`
+* optional arrays → `[]`
+
+### 2) Do **not** blanket-convert every null in the payload
+
+I do **not** want a generic deep “replace all null with empty string/empty array” transform.
+
+That could hide real structural issues in fields where `null` should still fail.
+
+### 3) Keep operator-aware rule normalization separate
+
+Please keep the existing rule-item normalization logic separate and intact:
+
+* symbol operator mapping
+* unary null stripping for rule values
+
+This new normalization is for **AI response metadata / field definitions**, not for relaxing rule validation.
+
+### 4) Apply normalization only in the SOP ingestion path
+
+This should be scoped to the SOP AI import flow only, before `safeParse`, not as a global app-wide coercion policy.
+
+## Why
+
+The correct behavior here is:
+
+* if the AI returns `null` for optional descriptive/defaultable text fields, normalize that safely
+* if the AI returns invalid structure for required or strongly-typed fields, fail fast
+
+I want the importer to be **defensive**, but not **permissive to the point of hiding bad data**.
+
+## Implementation preference
+
+Please implement this as an explicit normalizer for the AI response shape, for example:
+
+* normalize business fields
+* normalize derived fields
+* normalize treatment fields
+* then pass the normalized result into Zod
+
+Not as a generic “JSON scrubber”.
+
+## Expected behavior
+
+### Should normalize and pass
+
+```json id="x7luo3"
+{ "default_value": null }   -> { "default_value": "" }
+{ "description": null }     -> { "description": "" }
+{ "tags": null }            -> { "tags": [] }
+```
+
+### Should still fail
+
+```json id="w40vs2"
+{ "field_name": null }
+{ "operator": null }
+{ "value": null }   // for numeric/equality/set operators where value is required
+```
+
+## Summary
+
+Please implement:
+
+* a **targeted pre-parse normalization layer**
+* only for known optional string/array fields that currently use `.default(...)`
+* no blanket null scrubbing
+* keep strict validation for required fields and operator/value compatibility
