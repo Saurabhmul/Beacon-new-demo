@@ -945,6 +945,37 @@ function normalizeRuleItem(rule: Record<string, unknown>): Record<string, unknow
   return normalized;
 }
 
+const WORD_TO_SYMBOL_OPERATOR: Record<string, string> = {
+  equals: "=",
+  not_equals: "!=",
+  gt: ">",
+  gte: ">=",
+  lt: "<",
+  lte: "<=",
+};
+
+function normalizeDerivationCondition(cond: unknown): unknown {
+  if (!cond || typeof cond !== "object" || Array.isArray(cond)) return cond;
+  const c = cond as Record<string, unknown>;
+  if ("field" in c) {
+    if (typeof c.operator === "string" && WORD_TO_SYMBOL_OPERATOR[c.operator]) {
+      return { ...c, operator: WORD_TO_SYMBOL_OPERATOR[c.operator] };
+    }
+    return c;
+  }
+  if ("conditions" in c && Array.isArray(c.conditions)) {
+    return { ...c, conditions: c.conditions.map(normalizeDerivationCondition) };
+  }
+  return c;
+}
+
+function normalizeDerivationConfig(config: unknown): unknown {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return config;
+  const cfg = config as Record<string, unknown>;
+  if (!Array.isArray(cfg.conditions)) return cfg;
+  return { ...cfg, conditions: cfg.conditions.map(normalizeDerivationCondition) };
+}
+
 function normalizeSourceField(obj: Record<string, unknown>): Record<string, unknown> {
   const n = { ...obj };
   if (n.description === null) n.description = "";
@@ -957,6 +988,9 @@ function normalizeDerivedField(obj: Record<string, unknown>): Record<string, unk
   if (n.description === null) n.description = "";
   if (n.derivation_summary === null) n.derivation_summary = "";
   if (n.depends_on === null) n.depends_on = [];
+  if (n.derivation_config !== null && n.derivation_config !== undefined) {
+    n.derivation_config = normalizeDerivationConfig(n.derivation_config);
+  }
   return n;
 }
 
@@ -1200,8 +1234,8 @@ DERIVATION CONFIG FORMAT (for derived fields only)
    {
      "field": "source_field_name",
      "fieldType": "source|derived|business",
-     "operator": "equals|not_equals|gt|gte|lt|lte|in|not_in|is_true|is_false|exists|not_exists",
-     "value": "string or number or array — omit entirely for is_true/is_false/exists/not_exists"
+     "operator": "=|!=|>|>=|<|<=|in|not_in|contains|is_true|is_false",
+     "value": "string or number or array — omit entirely for is_true/is_false"
    }
  ]
 }
