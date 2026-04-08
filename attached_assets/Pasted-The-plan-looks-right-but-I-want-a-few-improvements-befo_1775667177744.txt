@@ -1,0 +1,54 @@
+The plan looks right, but I want a few improvements before implementation:
+
+1. Include a proper migration/backfill plan
+
+* Add `company_id` to `policy_packs`
+* Backfill it from `client_config.company_id` for all existing rows
+* Only after backfill, make `client_config_id` nullable
+* Add an index on `policy_packs.company_id`
+* Add a uniqueness constraint on `company_id` if the product expects one policy pack per company
+
+2. Be explicit about schema expectations
+   Please confirm whether:
+
+* every policy pack should belong to exactly one company
+* a company can have more than one policy pack
+* old rows with `client_config_id` but no `company_id` will be impossible after migration
+
+If one pack per company is the intended model, enforce it in the database, not just in code.
+
+3. Update all read/write paths, not just the three routes
+   Please check for any other code paths that assume:
+   `company -> client_config -> policy_pack`
+
+In particular, verify:
+
+* treatment creation/update
+* treatment review / review queue
+* policy fetch/edit/delete
+* admin/reporting pages
+* seed/demo scripts
+* any joins in storage methods
+
+I want a grep-level audit, not just the obvious routes.
+
+4. Improve rollout safety
+   During rollout, reads should prefer `policy_packs.company_id`, but it would be safer to support a temporary fallback for legacy rows until migration is confirmed complete.
+   Also add a small data validation step to confirm no policy packs are left without `company_id`.
+
+5. Improve error handling even if frontend changes are “not required”
+   Frontend does not need a workflow change, but please still expose the backend error message in the toast instead of always showing “Failed to create policy”.
+   That will make future debugging much easier.
+
+Also please update the GET behavior so it returns:
+
+* 404 with “No policy pack found” when absent
+  and not anything mentioning client config.
+
+If helpful, please revise the plan with:
+
+* exact migration steps
+* storage methods to change
+* routes to change
+* any risk to existing tenants like Prodigy Finance
+* rollback plan
