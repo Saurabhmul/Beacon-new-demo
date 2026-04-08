@@ -959,16 +959,24 @@ function TreatmentCard({ treatment, knownFields, policyFields, onFieldCreated, i
   const saveMutation = useMutation({
     mutationFn: async () => {
       let dbId = local.dbId;
+      const draftPayload = {
+        draftSourceFields: local.draftSourceFields,
+        draftDerivedFields: local.draftDerivedFields,
+        draftBusinessFields: local.draftBusinessFields,
+        aiConfidence: local.aiConfidence,
+      };
       if (!dbId) {
         const tx = await apiRequest("POST", "/api/policy-pack/treatments", {
           name: local.name, shortDescription: local.shortDescription || null,
           enabled: local.enabled, priority: local.priority || null, tone: local.tone || null, displayOrder: 0,
+          ...draftPayload,
         }).then(r => r.json());
         dbId = tx.id;
       } else {
         await apiRequest("PATCH", `/api/policy-pack/treatments/${dbId}`, {
           name: local.name, shortDescription: local.shortDescription || null,
           enabled: local.enabled, priority: local.priority || null, tone: local.tone || null,
+          ...draftPayload,
         });
       }
       const saveWhenGroup = (g: LocalRuleGroup) =>
@@ -1235,10 +1243,10 @@ type SopGenerationStage = "idle" | SopStageId | "complete" | "error";
 const SOP_STAGE_LABELS: Record<SopStageId, string> = {
   uploading: "Uploading PDF files",
   extracting: "Reading policy documents",
-  field_matching: "Matching policy language to your field catalog",
-  ai_generating: "Generating treatment rules with AI",
-  validating: "Validating AI output",
-  saving: "Saving treatments",
+  field_matching: "Matching policy language to your configured Beacon fields",
+  ai_generating: "Generating treatment draft with AI",
+  validating: "Validating treatment rules",
+  saving: "Updating Section B",
 };
 
 const PRELOADED_TREATMENTS = [

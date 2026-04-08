@@ -627,7 +627,7 @@ export async function registerRoutes(
       if (!clientConfig) return res.status(400).json({ error: "Configure client first" });
       const pack = await storage.getPolicyPack(clientConfig.id);
       if (!pack) return res.status(400).json({ error: "Create a policy pack first" });
-      const { name, shortDescription, enabled, priority, tone, displayOrder } = req.body;
+      const { name, shortDescription, enabled, priority, tone, displayOrder, draftSourceFields, draftDerivedFields, draftBusinessFields, aiConfidence } = req.body;
       if (!name?.trim()) return res.status(400).json({ error: "Treatment name is required" });
       const tx = await storage.createTreatment({
         policyPackId: pack.id,
@@ -637,6 +637,10 @@ export async function registerRoutes(
         priority: priority || null,
         tone: tone || null,
         displayOrder: displayOrder ?? 0,
+        ...(draftSourceFields !== undefined && { draftSourceFields }),
+        ...(draftDerivedFields !== undefined && { draftDerivedFields }),
+        ...(draftBusinessFields !== undefined && { draftBusinessFields }),
+        ...(aiConfidence !== undefined && { aiConfidence }),
       });
       res.status(201).json(tx);
     } catch (error) {
@@ -648,7 +652,7 @@ export async function registerRoutes(
   app.patch("/api/policy-pack/treatments/:id", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { name, shortDescription, enabled, priority, tone, displayOrder } = req.body;
+      const { name, shortDescription, enabled, priority, tone, displayOrder, draftSourceFields, draftDerivedFields, draftBusinessFields, aiConfidence } = req.body;
       const tx = await storage.updateTreatment(id, {
         ...(name !== undefined && { name }),
         ...(shortDescription !== undefined && { shortDescription }),
@@ -656,6 +660,10 @@ export async function registerRoutes(
         ...(priority !== undefined && { priority }),
         ...(tone !== undefined && { tone }),
         ...(displayOrder !== undefined && { displayOrder }),
+        ...(draftSourceFields !== undefined && { draftSourceFields }),
+        ...(draftDerivedFields !== undefined && { draftDerivedFields }),
+        ...(draftBusinessFields !== undefined && { draftBusinessFields }),
+        ...(aiConfidence !== undefined && { aiConfidence }),
       });
       res.json(tx);
     } catch (error) {
@@ -948,9 +956,14 @@ export async function registerRoutes(
             }, []),
           }));
 
-        // Pre-validation: validate operators and resolve all rule field references before DB write
+        // Pre-validation: validate operators and resolve all field/source references before DB write
         const validationErrors: string[] = [];
         for (const t of normalizedTreatments) {
+          for (const sf of t.source_fields) {
+            if (!sf.matched_existing_field) {
+              validationErrors.push(`Source field "${sf.field_name}" suggested for treatment "${t.name}" is not in your Beacon field catalog. Please add it to your Data Configuration first, then regenerate.`);
+            }
+          }
           for (const r of t.when_to_offer) {
             if (!VALID_OPERATORS.has(r.operator)) {
               validationErrors.push(`Invalid operator "${r.operator}" in "When to Offer" rule for treatment "${t.name}". Valid operators: ${Array.from(VALID_OPERATORS).join(", ")}.`);
