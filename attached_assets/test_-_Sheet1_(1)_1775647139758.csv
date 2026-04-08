@@ -1,0 +1,21 @@
+customer_id,arrears_months,arrears_balance_gbp,monthly_contractual_payment_gbp,disposable_income_gbp,vulnerability_rag,vulnerability_type,forbearance_in_last_6_months,prior_forbearance_type,consecutive_payment_plans,active_insolvency,active_dca_placement,breathing_space_active,breathing_space_ref,ie_assessment_completed,priority_bills_up_to_date,financial_difficulty_duration,payment_affordability_level,contacts_whilst_in_arrears,date_last_contact,outbound_comms_sent,inbound_comms_received,worse_CAIS_status
+CUST-001,1,320,320,280,None,None,No,None,0,No,No,No,,Yes,Yes,Short-term,Full,3,2025-06-10,2,1,1
+CUST-002,3,960,320,95,None,None,No,None,0,No,No,No,,Yes,Yes,Medium-term,Partial,7,2025-06-08,5,2,0
+CUST-003,6,1920,320,0,Red,Suicidal ideation,No,None,0,No,No,No,,Yes,No,Long-term,None,12,2025-06-12,8,4,2
+CUST-004,6,1920,320,850,Red,Terminal illness,No,None,0,No,No,No,,Yes,Yes,Long-term,Partial,14,2025-06-11,9,5,8
+CUST-005,2,640,320,310,Amber,Mental health — anxiety,Yes,Payment Plan,1,No,No,No,,Yes,Yes,Short-term,Full,8,2025-06-09,4,4,1
+CUST-006,9,2880,320,110,Amber,Domestic abuse — financial control,Yes,Payment Plan,2,No,No,No,,No,No,Long-term,Partial,5,2025-05-20,8,0,2
+CUST-007,4,1280,320,0,None,None,No,None,0,No,No,No,,Yes,No,Long-term,None,9,2025-06-05,7,2,2
+CUST-008,1,320,320,420,None,None,No,None,0,No,No,No,,No,Yes,Short-term,Full,6,2025-06-01,5,0,4
+CUST-009,3,960,320,175,None,None,No,None,0,No,No,Yes,BS-2025-44821,Yes,Yes,Medium-term,Partial,6,2025-06-10,4,2,8
+CUST-010,5,1600,320,220,None,None,No,None,0,Yes,No,No,,Yes,Yes,Long-term,Partial,10,2025-06-11,6,4,8
+CUST-011,2,640,320,310,None,None,No,None,0,No,Yes,No,,Yes,Yes,Short-term,Full,5,2025-06-12,3,2,8
+CUST-012,1,320,320,500,Green,Cognitive impairment — mild,No,None,0,No,No,No,,No,Yes,Short-term,Full,4,2025-06-08,2,2,0
+CUST-013,8,2560,320,400,None,None,No,DMP,0,No,No,No,,Yes,Yes,Long-term,Partial,15,2025-06-10,7,8,0
+CUST-014,12,3840,320,0,Red,Attempted suicide — recent,Yes,Payment Plan,2,No,No,No,,No,No,Long-term,None,3,2025-04-15,12,0,5
+CUST-015,2,640,320,150,Amber,Long-term physical health condition,Yes,Payment Deferral,0,No,No,No,,Yes,No,Medium-term,Partial,9,2025-06-11,5,4,3
+CUST-016,1,320,320,650,None,None,No,None,0,No,No,No,,Yes,Yes,Short-term,Full,2,2025-06-13,1,1,2
+CUST-017,4,1280,320,320,None,None,No,None,0,No,No,No,,No,Yes,Medium-term,Full,11,2025-06-07,8,3,0
+CUST-018,7,2240,320,240,Amber,Bereavement — recent,No,None,0,No,No,No,,Yes,Yes,Long-term,Partial,13,2025-06-12,6,7,8
+CUST-019,3,960,320,80,None,None,No,None,0,No,No,No,,Yes,No,Short-term,Token,8,2025-06-06,6,2,1
+CUST-020,5,1600,320,900,None,None,No,None,0,No,No,No,,Yes,Yes,Long-term,Full,16,2025-06-13,9,7,4
