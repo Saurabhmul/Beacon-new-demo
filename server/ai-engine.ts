@@ -736,7 +736,16 @@ Return JSON only. Do not include any markdown formatting or code blocks.`;
     throw new Error("AI returned invalid JSON — cannot parse treatment draft");
   }
 
-  return DraftResponseSchema.parse(parsed);
+  const result = DraftResponseSchema.safeParse(parsed);
+  if (!result.success) {
+    const firstIssue = result.error.issues[0];
+    const path = firstIssue?.path?.join(".") || "unknown";
+    throw Object.assign(
+      new Error(`AI output did not match the expected treatment schema (field: ${path} — ${firstIssue?.message}). Try again or adjust your SOP document.`),
+      { isValidationError: true, zodErrors: result.error.issues }
+    );
+  }
+  return result.data;
 }
 
 export async function extractSOPTreatments(fileText: string): Promise<SOPExtractedTreatment[]> {

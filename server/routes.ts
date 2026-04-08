@@ -818,33 +818,8 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/policy-pack/extract-sop", authenticate, authorize("admin"), companyFilter, upload.single("file"), async (req: any, res) => {
-    try {
-      const file = req.file;
-      if (!file) return res.status(400).json({ error: "No file uploaded" });
-
-      let fileText = "";
-      if (file.mimetype === "application/pdf") {
-        try {
-          const base64 = file.buffer.toString("base64");
-          fileText = await extractTextFromImage(base64, "application/pdf");
-        } catch {
-          fileText = "";
-        }
-      } else {
-        fileText = file.buffer.toString("utf8");
-      }
-
-      if (!fileText.trim()) {
-        return res.status(422).json({ error: "Could not extract text from the uploaded file. Please use a TXT or DOCX file." });
-      }
-
-      const treatments = await extractSOPTreatments(fileText);
-      res.json({ treatments, fileName: file.originalname });
-    } catch (error) {
-      console.error("SOP extraction error:", error);
-      res.status(500).json({ error: "Failed to extract treatments from SOP" });
-    }
+  app.post("/api/policy-pack/extract-sop", authenticate, authorize("admin"), companyFilter, (_req: any, res: any) => {
+    res.status(410).json({ error: "This endpoint has been replaced. Please use POST /api/policy-pack/generate-treatment-draft with PDF files instead." });
   });
 
   const sopUpload = multer({
@@ -1108,7 +1083,9 @@ export async function registerRoutes(
         });
       } catch (error) {
         console.error(`[generate-treatment-draft] [${requestId}] error company=${companyId}:`, error instanceof Error ? error.message : error);
-        res.status(500).json({ error: error instanceof Error ? error.message : "Failed to generate treatment draft" });
+        const isValidation = error && typeof error === "object" && "isValidationError" in error && (error as any).isValidationError;
+        const statusCode = isValidation ? 422 : 500;
+        res.status(statusCode).json({ error: error instanceof Error ? error.message : "Failed to generate treatment draft" });
       }
     }
   );
