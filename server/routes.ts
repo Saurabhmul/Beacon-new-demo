@@ -841,9 +841,10 @@ export async function registerRoutes(
           return res.status(400).json({ error: "No files uploaded" });
         }
         for (const file of files) {
-          const isPdf = file.mimetype === "application/pdf" && file.originalname.toLowerCase().endsWith(".pdf");
-          if (!isPdf) {
-            return res.status(400).json({ error: `"${file.originalname}" is not a PDF. Only PDF files (application/pdf) are accepted.` });
+          const hassPdfExtension = file.originalname.toLowerCase().endsWith(".pdf");
+          const hasPdfMime = file.mimetype === "application/pdf" || file.mimetype === "application/x-pdf";
+          if (!hassPdfExtension && !hasPdfMime) {
+            return res.status(400).json({ error: `"${file.originalname}" is not a PDF. Only PDF files are accepted.` });
           }
         }
 
@@ -899,9 +900,6 @@ export async function registerRoutes(
 
         console.log(`[generate-treatment-draft] [${requestId}] ai_output treatments=${draftResponse.treatments.length} open_questions=${draftResponse.open_questions.length}`);
 
-        const sourceFieldLabels = new Set(
-          fieldRecords.filter(f => f.sourceType === "source_field").map(f => f.label.toLowerCase().trim())
-        );
         const fieldByLabelLower = new Map(fieldRecords.map(f => [f.label.toLowerCase().trim(), f]));
 
         const VALID_OPERATORS = new Set(["=", "!=", ">", ">=", "<", "<=", "contains", "in", "not_in", "is_true", "is_false"]);
