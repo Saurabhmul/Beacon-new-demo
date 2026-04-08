@@ -852,15 +852,16 @@ export async function registerRoutes(
         const pack = await storage.getPolicyPack(clientConfig.id);
         if (!pack) return res.status(400).json({ error: "No policy pack found — save your policy configuration first" });
 
-        const { PDFParse } = await import("pdf-parse");
+        const pdfParseMod = await import("pdf-parse");
+        const PdfParser: { new(opts: { data: Buffer }): { getText(): Promise<{ text: string }> } } = pdfParseMod.PDFParse;
         const textParts: string[] = [];
 
         for (const file of files) {
           let text = "";
           try {
-            const parser = new (PDFParse as any)({ data: file.buffer });
+            const parser = new PdfParser({ data: file.buffer });
             const result = await parser.getText();
-            text = (result?.text ?? result ?? "").toString().trim();
+            text = result.text?.trim() ?? "";
           } catch {
             text = "";
           }
@@ -914,14 +915,14 @@ export async function registerRoutes(
           }, [])
           .map(t => ({
             ...t,
-            source_fields: t.source_fields.map(sf => {
+            source_fields: t.source_fields.reduce((acc: typeof t.source_fields, sf) => {
               const resolved = fieldByLabelLower.get(sf.field_name.toLowerCase().trim());
-              return {
-                ...sf,
-                field_name: resolved ? resolved.label : sf.field_name,
-                matched_existing_field: !!resolved,
-              };
-            }),
+              const canonicalName = resolved ? resolved.label : sf.field_name;
+              if (!acc.some(x => x.field_name.toLowerCase() === canonicalName.toLowerCase())) {
+                acc.push({ ...sf, field_name: canonicalName, matched_existing_field: !!resolved });
+              }
+              return acc;
+            }, []),
             derived_fields: t.derived_fields.reduce((acc: typeof t.derived_fields, df) => {
               if (!acc.some(x => x.field_name.toLowerCase() === df.field_name.toLowerCase())) acc.push(df);
               return acc;
@@ -1084,7 +1085,7 @@ export async function registerRoutes(
         });
       } catch (error) {
         console.error(`[generate-treatment-draft] [${requestId}] error company=${companyId}:`, error instanceof Error ? error.message : error);
-        const isValidation = error && typeof error === "object" && "isValidationError" in error && (error as any).isValidationError;
+        const isValidation = error instanceof Error && "isValidationError" in error && (error as Error & { isValidationError: boolean }).isValidationError;
         const statusCode = isValidation ? 422 : 500;
         res.status(statusCode).json({ error: error instanceof Error ? error.message : "Failed to generate treatment draft" });
       }

@@ -1445,7 +1445,15 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
         method: "POST", body: form, credentials: "include",
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Generation failed");
+      if (!res.ok) {
+        clearStageTimers();
+        // When server responds (even with error), AI generation ran — error is in validating or saving
+        const failedStage: SopStageId = res.status === 422 ? "validating" : activeStage;
+        errorStageRef.current = failedStage;
+        setGenerationError(data.error || "Generation failed");
+        setGenerationStage("error");
+        return;
+      }
       clearStageTimers();
       setGenerationStage("validating");
       await new Promise(r => setTimeout(r, 400));
@@ -1645,7 +1653,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                   </div>
                 )}
                 {generationStage !== "complete" && generationStage !== "error" && (
-                  <p className="text-[11px] text-muted-foreground italic">Keep this page open — generation may take 20–60 seconds.</p>
+                  <p className="text-[11px] text-muted-foreground italic">This may take a short while for larger PDFs. Keep this page open.</p>
                 )}
               </>
             )}
@@ -1734,7 +1742,7 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
           <DialogHeader>
             <DialogTitle>Regenerate Treatments?</DialogTitle>
             <p className="text-sm text-muted-foreground mt-1">
-              This policy already has {localTreatments.length} treatment{localTreatments.length !== 1 ? "s" : ""}. Uploading new SOP PDFs will regenerate all treatments from scratch using your selected files. Your current treatments will be replaced.
+              This policy already has {localTreatments.length} treatment{localTreatments.length !== 1 ? "s" : ""}. Generating from these PDFs will replace all existing treatments with a new AI-generated draft. This cannot be undone.
             </p>
           </DialogHeader>
           <div className="py-2">
