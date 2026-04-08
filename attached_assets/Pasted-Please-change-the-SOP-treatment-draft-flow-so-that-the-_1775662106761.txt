@@ -1,0 +1,124 @@
+Please change the SOP treatment-draft flow so that the AI and validator use the full company field catalog, not just policy_fields.
+
+Goal
+
+When generating treatment drafts from an SOP, Beacon should use all fields configured by the company in Data Configuration, plus existing business fields and derived fields.
+
+Today /api/policy-pack/generate-treatment-draft only calls:
+
+const fieldRecords = await storage.getPolicyFields(companyId);
+
+This is too narrow.
+
+What I want changed
+
+Create a single shared “full field catalog” source that merges:
+
+Source fields from Data Configuration
+read from dataConfig.categoryData[*].fieldAnalysis
+include fields where ignored !== true
+map each to:
+label = fieldName
+description = beaconsUnderstanding ?? null
+sourceType = "source_field"
+Business fields from policy_fields
+Derived fields from policy_fields
+
+This merged catalog should be used in both places:
+
+the /api/policy-fields GET endpoint
+the /api/policy-pack/generate-treatment-draft route
+Implementation approach
+
+Please refactor this into one shared server-side helper, for example:
+
+storage.getFullPolicyFieldCatalog(companyId)
+
+or a helper function in routes/service layer like:
+
+buildFullFieldCatalog(companyId)
+
+It should return a deduplicated list by label, case-insensitive.
+
+Deduping rules
+dedupe by label.trim().toLowerCase()
+if the same field exists in multiple places:
+prefer policy_fields record for business/derived metadata
+but still include Data Configuration source fields when they do not exist in policy_fields
+source fields should not disappear just because they are not in policy_fields
+Generate-treatment-draft changes
+
+In /api/policy-pack/generate-treatment-draft:
+
+Replace this:
+const fieldRecords = await storage.getPolicyFields(companyId);
+const fieldCatalog = fieldRecords.map(...)
+const fieldByLabelLower = new Map(fieldRecords.map(...))
+With:
+
+Use the merged catalog from full company field configuration.
+
+That means:
+
+AI prompt gets the full merged field catalog
+validation of when_to_offer
+validation of blocked_if
+matching of source_fields
+
+all happen against the same merged catalog
+
+Important validation behavior
+
+Do not reject a field just because it is missing from policy_fields if it exists in Data Configuration.
+
+If the field exists in the merged catalog, it should be treated as valid.
+
+Optional but recommended
+
+If AI suggests a field that is not in the merged catalog:
+
+still return 422
+but error message should say:
+not found in company field catalog
+add it in Data Configuration or create it as a business/derived field
+Acceptance criteria
+A source field present only in Data Configuration is visible to the AI during SOP draft generation
+A rule using that field does not fail validation
+/api/policy-fields and /api/policy-pack/generate-treatment-draft use the same merged catalog logic
+Existing business fields and derived fields still work exactly as before
+Deduping is case-insensitive and stable
+Please also add a small unit/integration test for this case
+
+Test case:
+
+Data Configuration has source field active_breathing_space
+policy_fields does not contain it
+SOP draft returns a blocked rule using active_breathing_space
+validation should pass
+In plain English
+
+What you’re asking Replit to do is:
+
+“Stop using a partial field list for SOP drafting. Use the same complete field universe the company already configured elsewhere in Beacon.”
+
+Why this is the right change
+
+Because right now the experience is inconsistent:
+
+user configures fields in Data Configuration
+Beacon shows them in the field UI
+but SOP draft may still fail saying the field does not exist
+
+That feels broken from the customer’s point of view.
+
+One extra suggestion
+
+Ask Replit to also rename the validation message from:
+
+“Please configure this field in your Data Configuration first”
+
+to something broader like:
+
+“Please add this field to the company field catalog in Data Configuration or as a business/derived field.”
+
+Because after this change, fields can come from more than one place.

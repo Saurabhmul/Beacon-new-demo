@@ -1,0 +1,175 @@
+What I would improve before implementation
+1) Return more than just label/sourceType if validation depends on it
+
+Your CatalogEntry = { label, sourceType, description, derivationSummary } is enough for AI prompting, but for scale and maintainability I’d also include a stable internal key if available.
+
+Why:
+
+today validation is label-based
+label matching is brittle if users rename fields slightly
+even if you keep label validation now, having optional id / fieldKey in the helper gives you room later
+
+Minimal improvement:
+
+type CatalogEntry = {
+  id?: string;
+  label: string;
+  sourceType: "source_field" | "business_field" | "derived_field";
+  description?: string | null;
+  derivationSummary?: string | null;
+};
+
+No behavior change required now.
+
+2) Be explicit about dedupe precedence
+
+Right now you said “DB policy_fields records take precedence.” Good, but define exactly what happens when duplicates exist.
+
+At scale, ambiguous precedence causes weird bugs.
+
+Tell Replit:
+
+dedupe key = label.trim().toLowerCase()
+if a DB field and source field share a label:
+keep DB field as canonical entry
+do not emit duplicate
+if multiple source fields across categories share same label:
+keep first seen
+optionally log a warning with category names
+sort after dedupe, not before
+
+That is enough.
+
+3) Add a tiny in-request cache
+
+Not system-wide caching. Just avoid fetching the same catalog twice in one request path if it happens.
+
+This is not mandatory, but cheap and useful.
+
+Why:
+
+dataConfig can get large
+fieldAnalysis across categories may grow
+repeated rebuilds inside same request are wasteful
+
+Minimal version:
+
+call buildFullFieldCatalog once per route
+derive both fieldCatalog and fieldByLabelLower from that in memory
+
+No Redis, no background cache, nothing fancy.
+
+4) Normalize label matching in one shared helper
+
+This matters more than people think.
+
+Instead of repeating:
+
+label.trim().toLowerCase()
+
+create:
+
+function normalizeFieldLabel(label: string): string
+
+Why:
+
+prevents drift between GET route, POST route, tests
+helps later if you want to collapse whitespace too
+
+I’d actually make it:
+
+label.trim().replace(/\s+/g, " ").toLowerCase()
+
+That is still simple, and it avoids false mismatches like:
+
+"Active Breathing Space"
+"active breathing space"
+5) Don’t let AI prompt size grow unbounded
+
+This is the only real scale concern.
+
+If a company has a lot of configured fields, passing the full catalog to AI can become noisy and expensive. You still should pass the full company field catalog for correctness, but keep it compact.
+
+Minimal improvement:
+
+send only the fields needed for AI in a compact shape:
+label
+sourceType
+short description
+trim long descriptions
+omit empty fields
+
+For example:
+
+fieldCatalog.map(f => ({
+  label: f.label,
+  sourceType: f.sourceType,
+  description: f.description?.slice(0, 200) ?? null,
+  derivationSummary: f.sourceType === "derived_field"
+    ? f.derivationSummary?.slice(0, 200) ?? null
+    : null
+}))
+
+That is enough. No ranking or retrieval system needed yet.
+
+6) Add one more test for duplicate precedence
+
+Your proposed test is good, but I would add exactly one more.
+
+Current test:
+
+source field only in dataConfig → included → validation passes
+
+Add:
+
+same label exists in dataConfig and policy_fields
+returned catalog contains only one entry
+entry uses DB precedence
+
+That catches the most likely production bug.
+
+7) Keep error messaging user-facing, but log developer detail
+
+Good call changing errors to “company field catalog.”
+
+For scale, I’d also ask Replit to log the unresolved label and treatment name server-side. Not expose more to user, just log it.
+
+Why:
+
+helps debug bad AI drafts
+helps identify common missing-field patterns
+
+Minimal:
+
+console.warn("[treatment-draft] unresolved field", {
+  companyId,
+  treatment: treatment.name,
+  field: r.field_name
+});
+
+That’s enough.
+
+What I would not do
+
+I would not do any of these right now:
+
+new DB table for unified field catalog
+background sync from Data Configuration into policy_fields
+fuzzy matching / embeddings for field resolution
+category-aware ranking of fields for prompts
+frontend changes
+heavy caching layer
+
+Those are unnecessary at this stage.
+
+My recommended final version of the ask
+
+Your plan is solid. I would just add these small requirements:
+
+create shared normalizeFieldLabel()
+define duplicate precedence explicitly
+keep AI field payload compact
+add one duplicate-precedence test
+log unresolved fields server-side
+
+That keeps it simple, but makes it much safer at scale.
