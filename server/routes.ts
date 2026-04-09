@@ -444,6 +444,17 @@ export async function registerRoutes(
       const companyId = getCompanyId(req);
       const clientConfig = await storage.getClientConfig(companyId);
 
+      if (req.body.categoryData && typeof req.body.categoryData === "object") {
+        for (const catEntry of Object.values(req.body.categoryData) as any[]) {
+          if (!catEntry || !Array.isArray(catEntry.fieldAnalysis)) continue;
+          for (const field of catEntry.fieldAnalysis) {
+            if (Array.isArray(field.sampleValues)) {
+              field.sampleValues = normalizeSampleValues(field.sampleValues);
+            }
+          }
+        }
+      }
+
       const config = await storage.createDataConfig({
         ...req.body,
         userId,

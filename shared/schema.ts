@@ -386,6 +386,7 @@ export interface PolicyFieldDto {
   businessMeaning: string | null;
   aiGenerated: boolean;
   createdBy: string | null;
+  sampleValues?: string[] | null;
 }
 
 export interface RuleSaveRow {
