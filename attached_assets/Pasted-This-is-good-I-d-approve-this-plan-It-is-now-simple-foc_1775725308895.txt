@@ -1,0 +1,89 @@
+This is good. I’d approve this plan.
+
+It is now:
+
+simple
+focused on the actual failure mode
+technically light
+robust enough for review workflows
+not drifting into fuzzy matching
+What’s strong about this version
+
+It correctly does four important things:
+
+First, it moves the fix to the right layer: AI decision-making before field creation.
+
+Second, it keeps backend behavior clean:
+
+backend still resolves exact reused source fields
+backend does not try to “guess” semantic matches
+backend only validates and flags
+
+Third, it adds the right accountability:
+
+new field creation now needs a creation_reason
+missing reason is flagged, not silently ignored
+
+Fourth, it improves trust in UI:
+
+users can see both
+what Beacon created
+what Beacon reused
+
+That is exactly the right product shape.
+
+Minor refinements I would still suggest
+
+These are small, not blockers.
+
+1. In step 6, flagging should be attached to review UI if possible
+
+You already say:
+
+log warning
+add to unresolvedFields
+
+That is good.
+
+I would just make sure the unresolved item includes enough structure for UI to render clearly:
+
+treatment name or id
+field name
+field type (business or derived)
+issue type = missing_creation_reason
+human-readable message
+
+That will make the review panel much more usable.
+
+2. Be explicit that creation_reason applies only to newly created fields
+
+This is implied, but I would make it explicit in prompt and backend comments.
+
+You do not want confusion where reused fields are expected to carry creation_reason.
+
+3. In the UI reuse section, dedupe repeated reused source fields
+
+A source field may appear in multiple rules/treatments.
+
+So in the SOP Import Summary:
+
+show unique reused source fields
+optionally group by treatment later, but not necessary now
+
+That keeps the summary clean.
+
+4. Keep acceptance criteria slightly probabilistic
+
+This line is good now:
+
+When an existing source field is a reasonable fit, AI should reuse it
+
+That is the right wording. I would keep it exactly like that and avoid any stronger promise.
+
+One optional sentence I’d add to the plan
+
+Under step 1 or step 6, add:
+
+A missing or weak creation_reason should not block import, but it should make the draft visibly review-worthy.
+
+That captures the intended product behavior very well.

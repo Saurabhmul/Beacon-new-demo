@@ -1,0 +1,266 @@
+Updated instruction for Replit
+Problem we faced
+
+In the SOP upload flow, Beacon passes existing fields to AI, but AI still created a new field like is_on_dmp instead of reusing an existing field.
+
+Example:
+
+existing source field: active_dca_placement
+AI-created new field: is_on_dmp
+
+The core issue is not that we need a full fuzzy-matching engine.
+
+The real issue is:
+
+we need AI to make an explicit reuse-vs-create decision first, before creating any new business or derived field.
+
+Right now the flow appears too permissive:
+
+AI sees the SOP concept
+AI invents a new field if the exact source field name is not obvious
+Beacon accepts that too easily
+
+This leads to:
+
+duplicate fields
+unnecessary business fields
+confusing setup
+weaker trust in the generated output
+Proposed solution
+
+Keep implementation simple.
+
+New rule
+
+In SOP upload flow, when AI is generating treatments/rules and needs a field:
+
+first check whether an existing source field already matches the concept
+if yes, reuse that source field
+only create a new business/derived field if no existing source field is a reasonable fit
+
+So we want AI to act like this:
+
+“Does an existing source field already represent this?”
+if yes → use it
+if no → create a new business/derived field
+Important
+
+This is an AI decision step, not a backend fuzzy-matching system.
+
+We do not want:
+
+similarity scoring engine
+vector search
+heuristic ranking system
+complex field-resolution subsystem
+
+We want:
+
+better AI instructions
+better field context passed to AI
+structured AI output showing whether it reused or created a field and why
+Implementation approach
+High-level change
+
+Update the SOP generation prompt and output contract so AI must explicitly decide one of these for each field it uses:
+
+reuse_existing_source_field
+create_new_business_field
+create_new_derived_field
+
+And if it reuses an existing source field, it must name the existing field exactly from the catalog.
+
+If it creates a new field, it must explain why no existing source field was sufficient.
+
+Detailed implementation plan
+1) Keep field catalog strong and clear
+Files
+server/routes.ts
+server/field-catalog.ts
+
+When sending field context into SOP generation, make sure the AI gets a clean list of existing source fields.
+
+Each source field should include:
+
+fieldName
+beaconsUnderstanding / description
+sampleValues if available
+source type
+
+Example shape passed into AI:
+
+type ExistingFieldCatalogItem = {
+  label: string;
+  sourceType: "source_field";
+  description: string | null;
+  sampleValues?: string[];
+};
+
+This is important because AI can only reuse fields well if the catalog is clear.
+
+2) Update SOP prompt so AI must prefer reuse
+File
+
+server/ai-engine.ts
+
+Add a strong instruction to the SOP generation prompt:
+
+When generating treatments and rules, always check whether an existing source field already captures the SOP concept before creating any new field.
+
+Prefer reusing an existing source field whenever it is a reasonable semantic match based on:
+- field name
+- field description
+- sample values, if provided
+
+Do not create a new business or derived field merely because the ideal new label sounds cleaner or more specific.
+
+Only create a new business or derived field if no existing source field reasonably captures the concept.
+
+If reusing an existing field, use the exact existing field label from the provided field catalog.
+
+If creating a new field, explain briefly why no existing source field was a fit.
+
+This is the main fix.
+
+3) Make AI output field decision explicitly
+File
+
+server/ai-engine.ts
+
+Change the output schema for any SOP-generated field references so AI must classify the decision.
+
+For each field it uses, require something like:
+
+type FieldDecision = {
+  requestedConcept: string;
+  action: "reuse_existing_source_field" | "create_new_business_field" | "create_new_derived_field";
+  existingFieldLabel?: string;
+  newFieldLabel?: string;
+  newFieldDescription?: string;
+  reason: string;
+};
+Rules
+if action = reuse_existing_source_field
+existingFieldLabel is required
+it must match one field from catalog exactly
+if action = create_new_business_field or create_new_derived_field
+newFieldLabel required
+newFieldDescription required
+reason required
+
+This gives us transparency and better control.
+
+4) Validate AI reuse decisions against actual catalog
+File
+
+server/routes.ts
+
+When AI says it is reusing an existing source field:
+
+verify the field exists in the catalog
+match by normalized exact label
+if found, use it
+
+If AI references a non-existent existing field label:
+
+fail gracefully
+either rerun with correction or treat as invalid output
+
+Do not silently invent or auto-map another field.
+
+This keeps the system reliable.
+
+5) Keep new field creation behind AI justification
+File
+
+server/routes.ts
+
+When AI creates a new business/derived field, require the reason to be present and save/display it.
+
+Examples:
+
+“No existing source field captured Debt Management Plan status”
+“Existing fields relate to DCA placement, not DMP participation”
+“This concept must be derived from multiple fields rather than taken from one source field”
+
+This gives the human reviewer confidence that new field creation was deliberate.
+
+6) Surface the reuse/create decision in UI
+File
+
+Likely client/src/pages/client-setup.tsx or SOP review UI
+
+When AI proposes a field, show:
+
+whether it reused an existing source field
+or created a new business/derived field
+and the reason
+Example UI text
+Using existing source field: active_dca_placement
+Created new business field: is_on_dmp
+Reason: no existing source field captured Debt Management Plan membership
+
+This can be simple text in the review panel.
+No need for a complex workflow.
+
+7) Pass sample values too, if available
+
+This is a secondary improvement, but valuable.
+
+If source fields have sampleValues, pass them into AI in the field catalog.
+
+That helps AI decide whether an existing field is really a fit.
+
+Example:
+
+- active_dca_placement — A flag indicating the account is placed with an external DCA. Sample values: "true", "false"
+- breathing_space_active — Indicates approved Breathing Space protection. Sample values: "Y", "N"
+
+This makes reuse decisions stronger without building matching logic in backend.
+
+Why this is the right solution
+Simpler technically
+
+No need to build:
+
+candidate scoring
+fuzzy match engine
+semantic resolution service
+review ranking UI
+Better product behavior
+
+AI is forced to think:
+
+“Can I reuse something already there?”
+before
+“Let me create a new field”
+More robust outputs
+
+Because AI must explicitly justify new field creation, it will create fewer unnecessary duplicates.
+
+Acceptance criteria
+Reuse behavior
+AI prefers an existing source field when it is a reasonable fit
+existing reused fields use the exact catalog label
+New field behavior
+AI creates a new business/derived field only when needed
+every new field has a short reason explaining why reuse was not possible
+Backend behavior
+reused field labels are validated against the catalog
+invalid reused labels are not silently accepted
+UX
+SOP review clearly shows whether Beacon reused an existing field or created a new one
+reviewers can understand why
+Important note
+
+We should not expect AI to always make the perfect semantic choice.
+
+But this change is still strong because it moves the system from:
+
+“AI can casually invent new fields”
+
+to:
+
+“AI must first try to reuse existing source fields, and must justify creating new ones”
+
+That is the right level of control for now.

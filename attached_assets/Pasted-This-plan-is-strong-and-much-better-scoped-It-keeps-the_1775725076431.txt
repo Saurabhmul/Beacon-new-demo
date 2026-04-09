@@ -1,0 +1,300 @@
+This plan is strong and much better scoped.
+
+It keeps the solution simple, prompt-driven, and human-reviewable. I would give Replit this plan with 5 small adjustments so it is tighter and more reliable.
+
+What is good
+
+It correctly does these things:
+
+fixes the problem at the AI decision layer, not with a matching engine
+forces reuse-vs-create thinking
+adds justification for new field creation
+stores that justification
+shows it in UI
+avoids over-engineering
+What I would change before sending
+1. Do not make creation_reason optional with default ""
+
+This weakens the whole feature.
+
+Right now the plan says:
+
+creation_reason: coerceToString.optional().default(""),
+
+That means the model can omit it and still pass schema validation.
+
+Change it to be required for new business/derived fields at the prompt level, and at minimum validated post-parse in backend.
+
+Better approach:
+
+keep schema permissive if needed for backward compatibility
+but add backend validation:
+if a new business/derived field is returned and creation_reason is empty or vague, flag it clearly in review state
+
+Otherwise the feature becomes “nice text when present” instead of an actual control.
+
+2. Add one more explicit prompt rule: do not create wrapper fields around source fields
+
+This is the core failure mode.
+
+Add language like:
+
+Do not create a new business or derived field that merely renames, restates, or lightly reformulates an existing source field. If the concept already exists in a source field, use that source field directly in the rule.
+
+That is stronger than just “prefer reuse.”
+
+3. Be careful with the example using active_dca_placement and is_on_dmp
+
+Those are not clearly equivalent.
+
+So in the prompt/examples, do not imply that DCA placement and DMP membership are interchangeable.
+Use that example only to show the expected reasoning style:
+
+if AI thinks they are equivalent, reuse
+if AI thinks they are different, create new field and explain why
+
+That is safer and more correct.
+
+4. UI should show both:
+creation reason for new fields
+reused existing field when reuse happened
+
+Right now the plan only adds creation reason under auto-created fields.
+
+Also show something like:
+
+Using existing source field: breathing_space_active
+
+That helps the user trust the AI decision process, not just the new-field cases.
+
+5. Acceptance criteria should be softened slightly
+
+This line is too absolute:
+
+uploading the Lendable SOP should produce treatments where existing source fields ... are used directly in rules rather than being wrapped in a new business field
+
+I would change it to:
+
+when an existing source field is a reasonable fit, AI should reuse it directly; when it is not a fit, any new business/derived field must include a clear creation_reason.
+
+That is safer, because prompt changes alone cannot guarantee one exact semantic outcome every time.
+
+Recommended final version to give Replit
+
+Use this version:
+
+#37 — Task #37: AI Source Field Reuse — Explicit Justification Before New Field Creation
+
+Problem
+
+In the SOP upload flow, AI sometimes invents new business or derived fields instead of reusing an existing source field that may already capture the same concept. This happens because the prompt currently encourages reuse but does not force an explicit reuse-vs-create decision.
+
+This leads to:
+
+duplicate fields
+unnecessary business/derived fields
+reduced trust in generated output
+harder policy review
+
+Important: we are not solving this with fuzzy matching or backend similarity scoring. We want the AI to make a deliberate decision first, and explain itself when it creates something new.
+
+Goal
+
+Force AI to explicitly decide whether to:
+
+reuse an existing source field, or
+create a new business field, or
+create a new derived field
+
+If AI creates a new field, it must provide a creation_reason explaining why no existing source field was a reasonable fit.
+
+We also want to:
+
+store this reason
+show it in UI
+preserve existing backend field resolution
+avoid building a fuzzy-matching engine
+Not in scope
+
+Do not build:
+
+fuzzy matching
+vector search
+embeddings
+similarity scoring engine
+backend semantic resolution logic
+
+Everything should remain:
+
+prompt-driven
+schema-validated
+stored in existing JSONB draft objects
+visible in review UI
+Implementation
+1) Prompt update — add FIELD REUSE DECISION section
+
+File: server/ai-engine.ts
+
+Add a new instruction block in the IMPORTANT RULES section.
+
+Text to add:
+
+FIELD REUSE DECISION — apply this checklist BEFORE creating any new business or derived field:
+
+STEP 1: Check whether any existing source field in the Beacon field catalog already captures this concept.
+Use the field label, description, and sample values (if provided) to judge fit.
+
+STEP 2: If an existing source field is a reasonable semantic match, reuse that source field directly in the rule.
+Use the exact field label from the catalog.
+Do NOT create a new business or derived field just because a cleaner or more specific label sounds better.
+
+STEP 3: Do NOT create wrapper fields around source fields.
+If a new field would merely rename, restate, or lightly reformulate an existing source field, reuse the source field directly instead.
+
+STEP 4: Only create a new business or derived field if no existing source field is a reasonable fit.
+If you create a new field, you MUST include a creation_reason explaining why no existing source field was sufficient.
+Be specific and name the closest candidate(s) when relevant.
+
+Also add examples of good creation_reason values.
+
+Important: do not imply that active_dca_placement and is_on_dmp are automatically equivalent. Use examples that demonstrate reasoning, not forced equivalence.
+
+2) Prompt update — split field catalog into two sections
+
+File: server/ai-engine.ts
+
+When building fieldCatalogText, split fields into:
+
+EXISTING SOURCE FIELDS (prefer reuse — check these before creating any new field):
+- active_dca_placement (Source Field) — ...
+- breathing_space_active (Source Field) — ...
+
+EXISTING DERIVED & BUSINESS FIELDS (may also be reused; do not recreate):
+- is_vulnerable (Business Field) — ...
+
+If sample values exist, include them inline.
+
+This makes the source-field-first instruction clearer.
+
+3) Prompt format update — require creation_reason in new field objects
+
+File: server/ai-engine.ts
+
+Update the documented output format for both:
+
+derived fields
+business fields
+
+to include:
+
+creation_reason: string
+
+This should be described as required whenever a new field is created.
+
+4) Zod schema — add creation_reason
+
+File: server/ai-engine.ts
+
+Add creation_reason to:
+
+AIDerivedFieldSchema
+AIBusinessFieldSchema
+
+Keep schema flexible if needed, but do not rely on .default("") alone as enforcement.
+
+Recommended:
+
+allow parsing
+then validate after parse that new fields have a non-empty creation_reason
+if missing, flag for review
+5) Shared types — add creationReason
+
+File: shared/schema.ts
+
+Add:
+
+creationReason?: string;
+
+to:
+
+DraftDerivedField
+DraftBusinessField
+
+No DB migration needed because this is stored in JSONB.
+
+6) Route mapping — store creationReason
+
+File: server/routes.ts
+
+When mapping AI output into saved draft fields, store:
+
+creationReason: df.creation_reason || undefined
+creationReason: bf.creation_reason || undefined
+
+for derived/business fields.
+
+7) Route validation — enforce and flag missing reason
+
+File: server/routes.ts
+
+After AI output is parsed but before saving:
+
+for every new business field, check creation_reason
+for every new derived field, check creation_reason
+
+If missing or too weak:
+
+do not fail the draft entirely
+add a warning / unresolved review item
+log clearly for debugging
+
+This is important because prompt-only enforcement is not enough.
+
+Also preserve existing exact field resolution behavior.
+
+8) Backend validation of reused source fields
+
+File: server/routes.ts
+
+If AI indicates reuse of an existing source field, backend should still validate that the referenced field exists in the catalog by normalized exact label.
+
+Do not silently auto-map to something else.
+
+Existing behavior should remain.
+
+9) UI — show new field reason
+
+File: client/src/pages/client-setup.tsx
+
+In the SOP Import Summary panel, under auto-created fields, show creationReason under each field when present.
+
+Example:
+
+is_on_dmp [derived]
+Reason: No source field captures DMP membership; active_dca_placement refers to external agency placement, not DMP participation.
+10) UI — also show reuse decisions
+
+File: client/src/pages/client-setup.tsx
+
+Also surface when AI reused an existing source field.
+
+Example:
+
+Using existing source field: breathing_space_active
+
+This does not need a complex UI. Simple text in the review summary is enough.
+
+This helps users see both:
+
+what Beacon reused
+what Beacon created
+why
+Acceptance criteria
+Existing exact field resolution continues to work
+AI is strongly instructed to reuse existing source fields before creating new fields
+AI does not create wrapper business/derived fields around source fields
+Any new business or derived field includes a non-empty creation_reason, or is flagged for review
+creationReason is stored in draftDerivedFields / draftBusinessFields
+SOP Import Summary shows creation reason for new fields
+SOP Import Summary also shows reused existing source fields where applicable
+No fuzzy matching or semantic scoring engine is added
