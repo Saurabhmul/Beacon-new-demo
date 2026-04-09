@@ -1,0 +1,122 @@
+Goal
+
+I do not want extra fields like confidence, policy class, priority reason, blocker flags, or any other complex metadata.
+
+I only want:
+
+one priority field
+AI to make a best-effort relative ranking of extracted actions/treatments after reading the SOP
+human user can manually adjust priority afterward
+Required changes
+1. Update AI extraction prompt
+
+In server/ai-engine.ts, change the prompt so that after extracting all actions/treatments from the SOP, the model also assigns a simple integer priority.
+
+Prompt requirement:
+
+Rank all extracted actions/treatments relative to each other based on the SOP. Priority 1 = highest priority / most mandatory / most immediate. Use a distinct ranking across the extracted items whenever possible. This is a best-effort judgment, not a guaranteed final answer.
+
+Add these rules:
+
+statutory, legally required, or mandatory actions should rank higher
+actions that clearly override normal process should rank higher
+substantive treatments should usually rank above temporary holding actions
+temporary or fallback actions should usually rank lower unless the SOP clearly indicates otherwise
+avoid giving the same priority to multiple items unless absolutely necessary
+
+Also add:
+
+If the SOP is ambiguous, still provide your best attempt at a unique ranking.
+
+2. Stop using hardcoded category-to-priority mapping
+
+In server/routes.ts and anywhere else this happens, remove the current logic that maps category labels into fixed priority numbers.
+
+Do not derive priority from buckets like:
+
+mandatory override
+blocker
+structured support
+temporary support
+fallback/review
+
+Instead:
+
+use the AI-returned priority directly
+save it directly on the treatment/action record
+3. Add simple normalization after AI response
+
+After AI returns extracted items:
+
+read all returned priorities
+preserve AI’s relative order as much as possible
+normalize them into a clean unique sequence 1..N
+
+Examples:
+
+if AI returns 1, 3, 3, 7, normalize to 1, 2, 3, 4
+if AI returns 2, null, 5, normalize to 1, 2, 3 while preserving relative order
+if AI returns nothing usable, assign priorities by extracted order 1..N
+
+This is just to ensure the UI always gets a usable ranking.
+
+4. Keep the data model simple
+
+Do not add new fields for this feature.
+
+Keep only the existing editable priority field.
+
+Do not add:
+
+confidence
+priority reason
+policy class
+blocker flags
+stacking metadata
+extra AI explanation fields
+5. UI behavior
+
+On the client setup page:
+
+continue showing only the current priority input
+sort actions/treatments by ascending priority
+allow the user to manually change priority
+save manual edits normally
+
+No new UI fields are needed.
+
+6. Add one prompt example
+
+Add a short example in the prompt so the model understands expected behavior.
+
+Example:
+
+For a forbearance SOP, a reasonable ranking might be:
+
+Breathing Space = 1
+DMP = 2
+Payment Plan = 3
+Interest Freeze = 4
+Account Hold = 5
+Payment Deferral = 6
+Promise to Pay = 7
+
+Instruction:
+
+This is only an example. Rank based on the actual SOP being processed.
+
+7. Tests
+
+Please add tests for:
+
+AI priority is stored directly
+duplicate priorities are normalized into unique values
+missing priorities are backfilled
+list is sorted by priority ascending
+manual edits still override AI output
+Desired outcome
+
+I want Beacon to produce a simple first-pass ranking across actions/treatments from the SOP.
+
+It does not need to be perfect.
+It just needs to be a sensible AI attempt that the user can quickly review and adjust.

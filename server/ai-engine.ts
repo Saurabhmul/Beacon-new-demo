@@ -1087,15 +1087,7 @@ export const DraftTreatmentItemSchema = z.object({
   derived_fields: z.array(AIDerivedFieldSchema).default([]),
   business_fields: z.array(AIBusinessFieldSchema).default([]),
   confidence: z.enum(["high", "medium", "low"]).default("medium"),
-  priority_basis: z.enum([
-    "MANDATORY_OVERRIDE",
-    "ELIGIBILITY_BLOCKER",
-    "STRUCTURED_SUPPORT",
-    "TEMPORARY_SUPPORT",
-    "FALLBACK_OR_REVIEW",
-  ]).default("FALLBACK_OR_REVIEW"),
-  priority_rank: z.number().int().min(1).max(5).default(5),
-  priority_reason: coerceToString.default(""),
+  priority: z.number().int().positive().nullable().default(null).catch(null),
 });
 
 const GlobalSourceFieldSchema = z.object({
@@ -1490,45 +1482,30 @@ BUSINESS FIELD FORMAT
  "business_meaning": "why this field exists and how it is used"
 }
 
-TREATMENT PRIORITY INTERPRETATION
+TREATMENT PRIORITY RANKING
 
-For each treatment, determine its policy priority using this exact framework.
-Priority is based on the POLICY MEANING of the treatment, NOT the order it appears in the SOP.
+After extracting all treatments from the SOP, assign each a unique integer priority.
+Priority 1 = highest priority (most mandatory, most immediate, or legally required).
+Use distinct rankings across all extracted treatments whenever possible.
 
-Priority 1 = MANDATORY_OVERRIDE
-  Statutory, legal, or safety handling that supersedes normal treatment selection.
-  Collections or enforcement must stop; a mandatory special pathway is required.
-  Examples: Breathing Space, Red vulnerability specialist handling, mandatory pause in collections.
-  Note: Active insolvency is NOT a mandatory override — see Priority 2.
+Ranking guidance:
+- Statutory, legally required, or mandatory actions should rank higher (lower number)
+- Actions that clearly override the normal collections process should rank higher
+- Substantive forbearance treatments (e.g. Payment Plan, DMP) should usually rank above temporary holding actions
+- Temporary or fallback actions should usually rank lower unless the SOP clearly indicates otherwise
+- Avoid giving the same priority to multiple treatments unless absolutely unavoidable
 
-Priority 2 = ELIGIBILITY_BLOCKER
-  This treatment or status exists mainly to prevent or delay normal treatment selection
-  until a required blocker or prerequisite is resolved. It is a gate, not a mandatory override.
-  Examples: active insolvency, DCA/litigation blocker, missing I&E causing a hold/review before
-  a structured treatment can be applied.
+Example — for a forbearance SOP, a reasonable ranking might be:
+  Breathing Space = 1
+  DMP = 2
+  Payment Plan = 3
+  Interest Freeze = 4
+  Account Hold = 5
+  Payment Deferral = 6
+  Promise to Pay = 7
 
-Priority 3 = STRUCTURED_SUPPORT
-  An ongoing or long-term hardship treatment for sustained financial difficulty.
-  Examples: Payment Plan, DMP, Interest Freeze, token payment as a structured long-term tool.
-
-Priority 4 = TEMPORARY_SUPPORT
-  A short-term arrangement or holding treatment.
-  Examples: Promise to Pay, Payment Deferral, Account Hold.
-
-Priority 5 = FALLBACK_OR_REVIEW
-  Standard collections path, encourage-payment action, or generic manual review.
-  Use this when the treatment does not clearly fit 1–4.
-  This is the default if uncertain.
-
-CRITICAL INSTRUCTIONS:
-- Priority reflects policy MEANING, NOT document order.
-- Return both priority_basis (the enum string) and priority_rank (the matching integer 1–5).
-  They must match — priority_rank is for explainability only.
-- Canonical priority stored in Beacon is derived from priority_basis, not the integer.
-- If uncertain, choose the closest category and explain the uncertainty in priority_reason.
-- priority_reason must cite the SOP wording or policy context that explains the classification.
-- Default to FALLBACK_OR_REVIEW / 5 when no stronger category clearly applies.
-- Every treatment object must include all three fields: priority_basis, priority_rank, priority_reason.
+This is only an example. Rank based on the actual SOP being processed.
+If the SOP is ambiguous, still provide your best-effort unique ranking.
 
 OUTPUT JSON SCHEMA
 {
@@ -1537,9 +1514,7 @@ OUTPUT JSON SCHEMA
    {
      "name": "string",
      "description": "string",
-     "priority_basis": "MANDATORY_OVERRIDE|ELIGIBILITY_BLOCKER|STRUCTURED_SUPPORT|TEMPORARY_SUPPORT|FALLBACK_OR_REVIEW",
-     "priority_rank": 1,
-     "priority_reason": "string — why this treatment belongs in this priority level citing SOP wording",
+     "priority": 1,
      "when_to_offer_logic": "ALL",
      "when_to_offer": [RULE],
      "blocked_if_logic": "ANY",

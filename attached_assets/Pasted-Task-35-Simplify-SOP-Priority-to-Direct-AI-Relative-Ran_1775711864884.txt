@@ -1,0 +1,204 @@
+Task #35 — Simplify SOP Priority to Direct AI Relative Ranking
+What & Why
+
+Task #34 introduced a category-bucketed priority system with extra metadata fields. Replace that with a simpler model:
+
+AI assigns a direct relative integer ranking across all extracted treatments from the SOP
+A normalization step converts AI output into a clean unique 1..N sequence
+Only the existing priority field is used
+Remove the DB columns priority_basis and priority_reason
+Done Looks Like
+SOP upload generates treatments with a unique integer priority where 1 = highest
+No priority_basis, priority_rank, or priority_reason remain in schema, routes, or UI
+Treatments are sorted by priority ascending in the UI
+User can manually edit priority and save normally
+Normalization tests pass for duplicates, nulls, undefined, and all-null fallback
+Normalization is only used during AI draft import, not normal manual edit/save flows
+Out of Scope
+Customer decisioning logic
+Any UI redesign beyond removing Task #34 basis/reason display
+Any new UI fields
+Tasks
+1. Remove priority_basis / priority_reason columns from DB and schema
+
+In shared/schema.ts, remove:
+
+priorityBasis: text("priority_basis"),
+priorityReason: text("priority_reason"),
+
+Run DB migration via executeSql() in code execution:
+
+ALTER TABLE treatments DROP COLUMN IF EXISTS priority_basis;
+ALTER TABLE treatments DROP COLUMN IF EXISTS priority_reason;
+
+Do not use db:push.
+
+2. Add normalizeDraftPriorities() to server/lib/treatment-logic.ts
+
+Add a pure function:
+
+export function normalizeDraftPriorities(
+  rawPriorities: (number | null | undefined)[]
+): string[]
+
+Behavior:
+
+Returns a string array aligned to the original input positions
+Output values are always a unique normalized sequence 1..N
+Ranking is based on AI priority order first
+Ties are broken by original index
+null and undefined go to the end
+If all are null/undefined, assign by original order
+
+Algorithm:
+
+Create indexed pairs of (rawPriority, originalIndex)
+Sort by (rawPriority ?? Infinity, originalIndex)
+Assign normalized ranks 1..N in sorted order
+Map those assigned ranks back to original positions
+Return as string[]
+
+Examples:
+
+[1, 3, 3, 7] → ["1", "2", "3", "4"]
+[2, null, 5] → ["1", "3", "2"]
+[null, null, null] → ["1", "2", "3"]
+[] → []
+
+Note: the returned array is aligned to original positions, so a later item can receive a lower number than an earlier item if AI ranked it higher.
+
+3. Update DraftTreatmentItemSchema in server/ai-engine.ts
+
+Remove:
+
+priority_basis
+priority_rank
+priority_reason
+
+Add:
+
+priority: z.number().int().positive().nullable().default(null),
+
+If current parsing can fail on malformed AI output, add a lightweight fallback so invalid priority values are treated as null rather than crashing extraction.
+
+4. Replace prompt section in server/ai-engine.ts
+
+Remove the category framework section entirely.
+
+Replace with:
+
+TREATMENT PRIORITY RANKING
+After extracting all treatments from the SOP, assign each a unique integer priority.
+Priority 1 = highest priority (most mandatory, most immediate, or legally required).
+Use distinct rankings across all extracted treatments whenever possible.
+
+Ranking guidance:
+- Statutory, legally required, or mandatory actions should rank higher (lower number)
+- Actions that clearly override the normal collections process should rank higher
+- Substantive forbearance treatments (e.g. Payment Plan, DMP) should usually rank above temporary holding actions
+- Temporary or fallback actions should usually rank lower unless the SOP clearly indicates otherwise
+- Avoid giving the same priority to multiple treatments unless absolutely unavoidable
+
+Example — for a forbearance SOP, a reasonable ranking might be:
+Breathing Space = 1
+DMP = 2
+Payment Plan = 3
+Interest Freeze = 4
+Account Hold = 5
+Payment Deferral = 6
+Promise to Pay = 7
+
+This is only an example. Rank based on the actual SOP being processed.
+If the SOP is ambiguous, still provide your best-effort unique ranking.
+
+Also update the output JSON schema to include only:
+
+"priority": 1
+5. Replace priority save logic in server/routes.ts
+
+Remove:
+
+PRIORITY_BASIS_MAP
+normalizePriorityFromBasis()
+
+Before the insert loop over final safeTreatments, compute:
+
+import { normalizeDraftPriorities } from "./lib/treatment-logic";
+
+const rawAiPriorities = safeTreatments.map(t => t.priority ?? null);
+const normalizedPriorities = normalizeDraftPriorities(rawAiPriorities);
+
+Use the final filtered safeTreatments array, not raw AI output.
+
+In the insert block, replace old basis-based logic with:
+
+priority: normalizedPriorities[i],
+
+Remove priorityBasis and priorityReason from inserts entirely.
+
+6. Clean up client/src/pages/client-setup.tsx
+
+Remove from LocalTreatment type:
+
+priorityBasis: string | null;
+priorityReason: string | null;
+
+Remove these fields from:
+
+serverTxToLocal
+extractionToLocal
+makeTemplateLocalBase
+
+Remove the Task #34 basis/reason display block.
+
+Remove the extra P-badge too unless it still adds value without basis/reason context.
+
+7. Add tests in tests/treatment-logic.test.ts
+
+Add tests for normalizeDraftPriorities():
+
+describe("normalizeDraftPriorities", () => {
+  it("produces unique 1..N sequence from distinct priorities", () => {
+    expect(normalizeDraftPriorities([1, 3, 7])).toEqual(["1", "2", "3"]);
+  });
+
+  it("normalizes duplicate priorities using original index as tiebreaker", () => {
+    expect(normalizeDraftPriorities([1, 3, 3, 7])).toEqual(["1", "2", "3", "4"]);
+  });
+
+  it("puts null priorities at end in document order", () => {
+    expect(normalizeDraftPriorities([2, null, 5])).toEqual(["1", "3", "2"]);
+  });
+
+  it("assigns 1..N by document order when all priorities are null", () => {
+    expect(normalizeDraftPriorities([null, null, null])).toEqual(["1", "2", "3"]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(normalizeDraftPriorities([])).toEqual([]);
+  });
+
+  it("handles single item", () => {
+    expect(normalizeDraftPriorities([42])).toEqual(["1"]);
+  });
+
+  it("handles undefined the same as null", () => {
+    expect(normalizeDraftPriorities([undefined, 2])).toEqual(["2", "1"]);
+  });
+
+  it("preserves AI relative order when priorities are already strictly increasing", () => {
+    expect(normalizeDraftPriorities([4, 10, 20])).toEqual(["1", "2", "3"]);
+  });
+});
+Relevant Files
+shared/schema.ts
+server/ai-engine.ts
+server/routes.ts
+server/lib/treatment-logic.ts
+client/src/pages/client-setup.tsx
+tests/treatment-logic.test.ts
+Notes
+DB migration must use executeSql()
+priority remains a text column in the DB, so normalization returns string[]
+insertTreatmentSchema is auto-derived, so schema column removal should flow through
+Run:

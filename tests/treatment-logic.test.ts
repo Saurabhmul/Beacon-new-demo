@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { DraftTreatmentItemSchema } from "../server/ai-engine";
-import { toLogicOperator } from "../server/lib/treatment-logic";
+import { toLogicOperator, normalizeDraftPriorities } from "../server/lib/treatment-logic";
 
 const MINIMAL_ITEM = {
   name: "Test Treatment",
@@ -40,5 +40,39 @@ describe("toLogicOperator — ALL/ANY → AND/OR mapping", () => {
     expect(toLogicOperator("ANY", "OR")).toBe("OR");
     expect(toLogicOperator(undefined, "OR")).toBe("OR");
     expect(toLogicOperator(undefined, "AND")).toBe("AND");
+  });
+});
+
+describe("normalizeDraftPriorities", () => {
+  it("produces unique 1..N sequence from distinct priorities", () => {
+    expect(normalizeDraftPriorities([1, 3, 7])).toEqual(["1", "2", "3"]);
+  });
+
+  it("normalizes duplicate priorities using original index as tiebreaker", () => {
+    expect(normalizeDraftPriorities([1, 3, 3, 7])).toEqual(["1", "2", "3", "4"]);
+  });
+
+  it("puts null priorities at end in document order", () => {
+    expect(normalizeDraftPriorities([2, null, 5])).toEqual(["1", "3", "2"]);
+  });
+
+  it("assigns 1..N by document order when all priorities are null", () => {
+    expect(normalizeDraftPriorities([null, null, null])).toEqual(["1", "2", "3"]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(normalizeDraftPriorities([])).toEqual([]);
+  });
+
+  it("handles single item", () => {
+    expect(normalizeDraftPriorities([42])).toEqual(["1"]);
+  });
+
+  it("handles undefined the same as null", () => {
+    expect(normalizeDraftPriorities([undefined, 2])).toEqual(["2", "1"]);
+  });
+
+  it("preserves AI relative order when priorities are already strictly increasing", () => {
+    expect(normalizeDraftPriorities([4, 10, 20])).toEqual(["1", "2", "3"]);
   });
 });
