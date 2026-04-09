@@ -586,20 +586,20 @@ export async function registerRoutes(
       const existingCategoryData = (existingDataConfig?.categoryData as Record<string, any>) || {};
       const existingEntry = existingCategoryData[category];
       const previousByField = new Map<string, any>(
-        (existingEntry?.fieldAnalysis || []).map((f: any) => [f.fieldName, f])
+        (existingEntry?.fieldAnalysis || []).map((f: any) => [f.fieldName.toLowerCase(), f])
       );
 
       const mergedFieldAnalysis = enrichedFieldAnalysis.map(next => {
-        const prev = previousByField.get(next.fieldName);
+        const prev = previousByField.get(next.fieldName.toLowerCase());
+        const prevSamples = prev?.sampleValues && prev.sampleValues.length > 0
+          ? normalizeSampleValues(prev.sampleValues)
+          : null;
         return {
           fieldName: next.fieldName,
           beaconsUnderstanding: prev?.beaconsUnderstanding || next.beaconsUnderstanding,
           confidence: prev?.confidence || next.confidence,
           ignored: prev?.ignored ?? false,
-          sampleValues:
-            prev?.sampleValues && prev.sampleValues.length > 0
-              ? prev.sampleValues
-              : next.sampleValues,
+          sampleValues: prevSamples ?? next.sampleValues,
         };
       });
 
