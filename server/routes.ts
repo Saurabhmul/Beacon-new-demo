@@ -22,6 +22,21 @@ import { seedDatabase } from "./seed";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 
+function normalizeSampleValues(input: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of input) {
+    const value = String(item ?? "").trim();
+    if (!value) continue;
+    const normalized = value.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(value.slice(0, 50));
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
 const WORD_TO_UI_OPERATOR: Record<string, string> = {
   equals: "=",
   not_equals: "!=",
@@ -444,6 +459,16 @@ export async function registerRoutes(
   app.patch("/api/data-config", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
+      if (req.body.categoryData && typeof req.body.categoryData === "object") {
+        for (const catEntry of Object.values(req.body.categoryData) as any[]) {
+          if (!catEntry || !Array.isArray(catEntry.fieldAnalysis)) continue;
+          for (const field of catEntry.fieldAnalysis) {
+            if (Array.isArray(field.sampleValues)) {
+              field.sampleValues = normalizeSampleValues(field.sampleValues);
+            }
+          }
+        }
+      }
       const config = await storage.updateDataConfig(companyId, req.body);
       res.json(config);
     } catch (error) {
@@ -535,10 +560,42 @@ export async function registerRoutes(
         fieldAnalysis = await analyzeCategoryFields(category, headers, columnEvidence);
       }
 
+      const evidenceMap = new Map(columnEvidence.map(c => [c.fieldName.toLowerCase(), c]));
+      const enrichedFieldAnalysis = fieldAnalysis.map(f => {
+        const ev = evidenceMap.get(f.fieldName.toLowerCase());
+        const rawSamples = ev?.distinctValues ?? ev?.sampleValues ?? [];
+        return {
+          ...f,
+          sampleValues: normalizeSampleValues(rawSamples),
+        };
+      });
+
+      const companyId = getCompanyId(req);
+      const existingDataConfig = companyId ? await storage.getDataConfig(companyId) : undefined;
+      const existingCategoryData = (existingDataConfig?.categoryData as Record<string, any>) || {};
+      const existingEntry = existingCategoryData[category];
+      const previousByField = new Map<string, any>(
+        (existingEntry?.fieldAnalysis || []).map((f: any) => [f.fieldName, f])
+      );
+
+      const mergedFieldAnalysis = enrichedFieldAnalysis.map(next => {
+        const prev = previousByField.get(next.fieldName);
+        return {
+          fieldName: next.fieldName,
+          beaconsUnderstanding: prev?.beaconsUnderstanding || next.beaconsUnderstanding,
+          confidence: prev?.confidence || next.confidence,
+          ignored: prev?.ignored ?? false,
+          sampleValues:
+            prev?.sampleValues && prev.sampleValues.length > 0
+              ? prev.sampleValues
+              : next.sampleValues,
+        };
+      });
+
       res.json({
         categoryId: category,
         docType: isTabular ? "tabular" : "document",
-        fieldAnalysis,
+        fieldAnalysis: mergedFieldAnalysis,
         fileName: file.originalname,
         fileSize: file.size,
       });
@@ -1015,6 +1072,7 @@ export async function registerRoutes(
           label: f.label,
           sourceType: f.sourceType,
           description: f.description?.slice(0, 200) ?? null,
+          sampleValues: f.sourceType === "source_field" ? (f.sampleValues ?? []) : [],
           ...(f.sourceType === "derived_field" ? { derivationSummary: f.derivationSummary?.slice(0, 200) ?? null } : {}),
         }));
 

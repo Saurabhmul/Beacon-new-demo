@@ -2952,6 +2952,8 @@ function DataConfigTab() {
   const [analyzingCategories, setAnalyzingCategories] = useState<Set<string>>(new Set());
   const [editingField, setEditingField] = useState<{ categoryId: string; fieldIndex: number } | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [editingSampleField, setEditingSampleField] = useState<{ categoryId: string; fieldIndex: number } | null>(null);
+  const [editSampleValue, setEditSampleValue] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadingForRef = useRef<string>("");
@@ -3007,8 +3009,7 @@ function DataConfigTab() {
           uploadedAt: new Date().toISOString(),
           fieldAnalysis: (data.fieldAnalysis || []).map((f: FieldReview) => ({
             ...f,
-            userDescription: "",
-            ignored: false,
+            ignored: f.ignored ?? false,
           })),
         },
       }));
@@ -3062,7 +3063,26 @@ function DataConfigTab() {
       const entry = prev[categoryId];
       if (!entry?.fieldAnalysis) return prev;
       const updatedFields = entry.fieldAnalysis.map((f, i) =>
-        i === fieldIndex ? { ...f, userDescription: value } : f
+        i === fieldIndex ? { ...f, beaconsUnderstanding: value } : f
+      );
+      return { ...prev, [categoryId]: { ...entry, fieldAnalysis: updatedFields } };
+    });
+  }
+
+  function updateFieldSampleValues(categoryId: string, fieldIndex: number, raw: string) {
+    const values = raw.split(",")
+      .map(v => v.trim())
+      .filter(Boolean)
+      .reduce((acc: string[], v) => {
+        if (!acc.some(x => x.toLowerCase() === v.toLowerCase())) acc.push(v.slice(0, 50));
+        return acc;
+      }, [])
+      .slice(0, 4);
+    setCategoryData(prev => {
+      const entry = prev[categoryId];
+      if (!entry?.fieldAnalysis) return prev;
+      const updatedFields = entry.fieldAnalysis.map((f, i) =>
+        i === fieldIndex ? { ...f, sampleValues: values } : f
       );
       return { ...prev, [categoryId]: { ...entry, fieldAnalysis: updatedFields } };
     });
@@ -3208,8 +3228,9 @@ function DataConfigTab() {
                               <table className="w-full text-sm">
                                 <thead>
                                   <tr className="bg-muted/50 border-b">
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[175px]">Field Name</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[160px]">Field Name</th>
                                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Beacon's Understanding</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[200px]">Sample Values</th>
                                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[85px]">Confidence</th>
                                     <th className="text-center px-3 py-2 text-xs font-medium text-muted-foreground w-[65px]">Ignore</th>
                                   </tr>
@@ -3245,20 +3266,55 @@ function DataConfigTab() {
                                             onClick={() => {
                                               if (!isReadOnly && !field.ignored) {
                                                 setEditingField({ categoryId: cat.id, fieldIndex: idx });
-                                                setEditValue(field.userDescription || field.beaconsUnderstanding);
+                                                setEditValue(field.beaconsUnderstanding);
                                               }
                                             }}
                                             data-testid={`text-field-desc-${cat.id}-${idx}`}
                                           >
                                             <span className={`text-xs leading-relaxed group-hover:text-primary transition-colors`}>
-                                              {field.userDescription || field.beaconsUnderstanding}
-                                              {field.userDescription && (
-                                                <span className="text-muted-foreground ml-1 text-[10px]">(edited)</span>
-                                              )}
+                                              {field.beaconsUnderstanding}
                                             </span>
                                             {!isReadOnly && !field.ignored && (
                                               <Pencil className="w-3 h-3 text-muted-foreground group-hover:text-primary flex-shrink-0 mt-0.5 transition-colors" />
                                             )}
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        {editingSampleField?.categoryId === cat.id && editingSampleField?.fieldIndex === idx && !isReadOnly ? (
+                                          <input
+                                            autoFocus
+                                            className="w-full text-xs border rounded px-2 py-1 bg-background outline-none focus:ring-1 focus:ring-primary"
+                                            value={editSampleValue}
+                                            onChange={e => setEditSampleValue(e.target.value)}
+                                            onBlur={() => {
+                                              updateFieldSampleValues(cat.id, idx, editSampleValue);
+                                              setEditingSampleField(null);
+                                            }}
+                                            onKeyDown={e => {
+                                              if (e.key === "Enter") { updateFieldSampleValues(cat.id, idx, editSampleValue); setEditingSampleField(null); }
+                                              if (e.key === "Escape") setEditingSampleField(null);
+                                            }}
+                                            placeholder="e.g. PAID, MISSED, PARTIAL"
+                                            data-testid={`input-sample-values-${cat.id}-${idx}`}
+                                          />
+                                        ) : (
+                                          <div
+                                            className={`flex flex-wrap gap-1 min-h-[20px] ${!isReadOnly && !field.ignored ? "cursor-pointer" : ""}`}
+                                            onClick={() => {
+                                              if (!isReadOnly && !field.ignored) {
+                                                setEditingSampleField({ categoryId: cat.id, fieldIndex: idx });
+                                                setEditSampleValue((field.sampleValues || []).join(", "));
+                                              }
+                                            }}
+                                            data-testid={`text-sample-values-${cat.id}-${idx}`}
+                                          >
+                                            {field.sampleValues && field.sampleValues.length > 0
+                                              ? field.sampleValues.map((v, vi) => (
+                                                  <span key={vi} className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-mono">{v}</span>
+                                                ))
+                                              : <span className="text-[10px] text-muted-foreground italic">No samples</span>
+                                            }
                                           </div>
                                         )}
                                       </td>

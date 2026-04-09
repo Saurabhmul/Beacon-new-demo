@@ -37,8 +37,8 @@ export interface FieldReview {
   fieldName: string;
   beaconsUnderstanding: string;
   confidence: 'High' | 'Medium' | 'Low';
-  userDescription: string;
   ignored: boolean;
+  sampleValues?: string[];
 }
 
 export interface CategoryEntry {

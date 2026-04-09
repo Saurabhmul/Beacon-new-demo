@@ -1353,7 +1353,7 @@ function convertBinarySourceRulesToEquality(
 
 export async function generateTreatmentDraft(
   sopBundle: string,
-  fieldCatalog: { label: string; sourceType: string; description: string | null; derivationSummary: string | null }[],
+  fieldCatalog: { label: string; sourceType: string; description: string | null; derivationSummary?: string | null; sampleValues?: string[] }[],
   columnEvidence?: ColumnEvidence[]
 ): Promise<ValidatedDraftResponse> {
   const fieldCatalogText = fieldCatalog.length === 0
@@ -1364,7 +1364,10 @@ export async function generateTreatmentDraft(
           : "Business Field";
         const desc = f.description ? ` — ${f.description}` : "";
         const derived = f.derivationSummary ? ` [Derived from: ${f.derivationSummary}]` : "";
-        return `- ${f.label} (${typeLabel})${desc}${derived}`;
+        const samples = (f.sampleValues && f.sampleValues.length > 0)
+          ? `. Sample values: ${f.sampleValues.map(v => `"${v}"`).join(", ")}`
+          : "";
+        return `- ${f.label} (${typeLabel})${desc}${samples}${derived}`;
       }).join("\n");
 
   const prompt = `You are Beacon's SOP-to-treatment configuration engine.
@@ -1530,6 +1533,11 @@ OUTPUT JSON SCHEMA
  "global_business_fields": [BUSINESS FIELD FORMAT],
  "open_questions": ["field_name: reason why this could not be resolved"]
 }
+
+SAMPLE VALUE GUIDANCE
+When source fields include sample values, use them as hints for the likely real values stored in those fields.
+When creating when_to_offer or blocked_if rules, prefer operators and values that align with these samples instead of inventing booleans or enums.
+Treat sample values as representative examples only, not an exhaustive or exclusive list.
 
 BEACON FIELD CATALOG
 ${fieldCatalogText}

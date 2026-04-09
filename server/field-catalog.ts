@@ -14,6 +14,7 @@ export interface CatalogEntry {
   businessMeaning?: string | null;
   aiGenerated?: boolean | null;
   createdBy?: string | null;
+  sampleValues?: string[] | null;
 }
 
 export function normalizeFieldLabel(label: string): string {
@@ -40,7 +41,7 @@ export async function buildFullFieldCatalog(
     }
 
     const categoryData = dataConfig?.categoryData as
-      | Record<string, { fieldAnalysis?: { fieldName: string; ignored: boolean; beaconsUnderstanding?: string }[] }>
+      | Record<string, { fieldAnalysis?: { fieldName: string; ignored: boolean; beaconsUnderstanding?: string; sampleValues?: string[] }[] }>
       | null
       | undefined;
 
@@ -56,6 +57,7 @@ export async function buildFullFieldCatalog(
               label: f.fieldName,
               sourceType: "source_field",
               description: f.beaconsUnderstanding ?? null,
+              sampleValues: f.sampleValues ?? [],
               derivationSummary: null,
               derivationConfig: null,
             });
