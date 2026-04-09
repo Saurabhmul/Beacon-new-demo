@@ -1,0 +1,323 @@
+Beacon change: editable sample values in Data Configuration + use them in SOP rule drafting
+Objective
+
+Add sampleValues to each field in Data Configuration so Beacon can:
+
+extract up to 4 representative values from uploaded data
+show them in the UI
+let users edit them directly
+pass them into SOP treatment/rule generation so AI creates more accurate offer/block rules
+
+Keep implementation simple.
+Do not over-engineer.
+Optimize for robust outputs.
+
+Final field model
+
+Use this field shape:
+
+type FieldReview = {
+  fieldName: string;
+  beaconsUnderstanding: string;
+  confidence: "High" | "Medium" | "Low";
+  ignored: boolean;
+  sampleValues?: string[]; // max 4 values
+};
+Notes
+sampleValues should be directly editable by the human in the UI
+there should be no separate sampleValuesOverride
+there should be no sampleValuesSource
+there should be no userDescription in this flow
+
+The saved field object itself is the reviewed final version.
+
+Product behavior
+On data upload / analysis
+
+Beacon should:
+
+analyze uploaded tabular data as it does today
+infer field understanding as it does today
+extract up to 4 distinct non-empty sample values per field
+save them into sampleValues
+In Data Configuration UI
+
+For each field show:
+
+fieldName
+beaconsUnderstanding
+confidence
+ignored
+sampleValues
+
+User should be able to edit:
+
+beaconsUnderstanding
+ignored
+sampleValues
+In SOP drafting
+
+When source fields are passed into AI for rule generation:
+
+include sampleValues if available
+AI should use these values as hints for likely real field domains and better operator/value choices
+Technical approach
+Keep it simple
+use the existing fieldAnalysis structure inside data_configs.categoryData
+do not add new tables
+do not add a profiling subsystem
+do not store large distinct-value sets
+store only up to 4 sample values per field
+Make outputs robust
+normalize sampleValues on save
+preserve human-reviewed values during re-analysis
+ignore fields marked ignored
+do not treat sample values as exhaustive truth, only as hints
+Implementation steps
+1) Update schema
+File
+
+shared/schema.ts
+
+Update FieldReview to:
+
+export interface FieldReview {
+  fieldName: string;
+  beaconsUnderstanding: string;
+  confidence: 'High' | 'Medium' | 'Low';
+  ignored: boolean;
+  sampleValues?: string[];
+}
+
+Remove assumptions about:
+
+userDescription
+sampleValuesOverride
+sampleValuesSource
+
+from this flow.
+
+2) Extract sample values during file analysis
+File
+
+server/routes.ts
+
+Wherever category data upload / analysis builds field analysis, extract sampleValues for each field.
+
+Use a helper like this:
+
+function normalizeSampleValues(input: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const item of input) {
+    const value = String(item ?? "").trim();
+    if (!value) continue;
+
+    const normalized = value.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+
+    out.push(value.slice(0, 50));
+
+    if (out.length >= 4) break;
+  }
+
+  return out;
+}
+Rules
+ignore null / empty values
+distinct values only
+max 4 values
+trim whitespace
+truncate to 50 chars
+keep logic simple
+
+Use existing upload analysis pipeline if it already computes column evidence; reuse that instead of building a second extraction path.
+
+3) Save sample values into fieldAnalysis
+File
+
+server/routes.ts
+
+When creating each field entry, store:
+
+{
+  fieldName,
+  beaconsUnderstanding,
+  confidence,
+  ignored: false,
+  sampleValues,
+}
+
+Do not create separate auto/manual sample value fields.
+
+4) Preserve human edits on re-analysis
+File
+
+server/routes.ts
+
+When data is re-uploaded and field analysis is re-generated:
+
+match fields by fieldName
+preserve existing saved human-reviewed values if field already exists
+only use fresh AI-generated values for new fields or missing values
+
+Recommended behavior:
+
+const previousByField = new Map(
+  (existingFieldAnalysis || []).map((f) => [f.fieldName, f])
+);
+
+const nextFieldAnalysis = analyzedFields.map((next) => {
+  const prev = previousByField.get(next.fieldName);
+
+  return {
+    fieldName: next.fieldName,
+    beaconsUnderstanding: prev?.beaconsUnderstanding || next.beaconsUnderstanding,
+    confidence: prev?.confidence || next.confidence,
+    ignored: prev?.ignored ?? false,
+    sampleValues:
+      prev?.sampleValues && prev.sampleValues.length > 0
+        ? prev.sampleValues
+        : next.sampleValues,
+  };
+});
+Why
+
+Because this flow is human-reviewed, existing saved values should win.
+
+5) Normalize sample values on save
+File
+
+server/routes.ts
+
+Whenever Data Configuration is saved, sanitize sampleValues for every field:
+
+array only
+trim values
+remove empties
+dedupe
+cap at 4
+truncate to 50 chars
+
+Use the same normalization helper consistently.
+
+This is important for robust outputs.
+
+6) Update Data Configuration UI
+File
+
+client/src/pages/client-setup.tsx
+
+For each field row/card in Data Configuration:
+
+show sample values
+render them as chips or badges
+if none exist, show muted text like No sample values
+
+Also make sampleValues editable.
+
+Recommended UI
+
+Keep it simple:
+
+one text input per field
+comma-separated values
+
+Example:
+
+CURRENT, 1-30, 31-60, 61-90
+
+On change/save:
+
+split by comma
+trim
+dedupe
+cap at 4
+
+Also ensure beaconsUnderstanding remains editable.
+
+Do not build a fancy chip editor unless it already exists.
+
+7) Pass sample values into SOP drafting
+Files
+server/routes.ts
+server/ai-engine.ts
+
+When building the field catalog that is passed into SOP/treatment generation, include sampleValues for source fields.
+
+Suggested structure:
+
+type DraftFieldCatalogItem = {
+  label: string;
+  sourceType: string;
+  description: string | null;
+  sampleValues?: string[];
+};
+
+For source fields:
+
+label = fieldName
+description = beaconsUnderstanding
+sampleValues = sampleValues
+
+For ignored fields:
+
+exclude them from AI context
+8) Update AI prompt to use sample values
+File
+
+server/ai-engine.ts
+
+When rendering field catalog into prompt text, include sample values inline when present.
+
+Example:
+
+- payment_status (Source Field) — repayment status. Sample values: "PAID", "PARTIAL", "MISSED", "PROMISED"
+- dpd_bucket (Source Field) — delinquency bucket. Sample values: "CURRENT", "1-30", "31-60", "61-90"
+
+Add a small instruction to the prompt:
+
+Use provided sample values as hints for the likely real values stored in source fields.
+When creating offer or blocked rules, prefer operators and values that align with these samples instead of inventing booleans or enums.
+Treat sample values as examples, not a complete exhaustive list.
+
+Keep the prompt change small.
+
+Guardrails
+Do
+keep storage compact
+keep UX simple
+preserve human-reviewed values
+reuse existing analysis pipeline
+sanitize values consistently
+exclude ignored fields from AI context
+Do not
+add sampleValuesOverride
+add sampleValuesSource
+add value frequency stats
+add enum inference engines
+add separate DB tables
+add a profiling dashboard
+treat sample values as strict allowed values
+Acceptance criteria
+Data Configuration
+each uploaded tabular field shows up to 4 sample values
+sample values are distinct, trimmed, compact
+users can edit sample values directly
+users can edit Beacon understanding directly
+users can ignore fields
+saved values persist
+Re-analysis
+if a field already exists, saved reviewed values are preserved by fieldName
+sample values are not silently overwritten
+SOP drafting
+non-ignored source fields include sample values in AI context
+AI uses sample values to generate more realistic rule conditions
+implementation stays within existing config structure
+Final instruction to Replit
+
+Please implement this as a small, focused enhancement using the existing fieldAnalysis / categoryData structure. Keep the code simple, avoid introducing parallel metadata systems, and optimize for reliable downstream AI rule generation rather than elaborate profiling.
+
+If you want, I can turn this into an even tighter “copy-paste into Replit” prompt with direct action wording only.
