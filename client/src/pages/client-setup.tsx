@@ -1482,9 +1482,10 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
   const [openQuestionsExpanded, setOpenQuestionsExpanded] = useState(false);
   const [sopImportSummary, setSopImportSummary] = useState<{
     createdTreatments: { name: string; id: number }[];
-    createdFields: { derived: { label: string; id: string }[]; business: { label: string; id: string }[] };
+    createdFields: { derived: { label: string; id: string; creationReason?: string }[]; business: { label: string; id: string; creationReason?: string }[] };
     unresolvedTreatments: { name: string; reason: string; unresolvedFields: string[] }[];
-    unresolvedFields: { fieldName: string; fieldType: string; reason: string }[];
+    unresolvedFields: { fieldName: string; fieldType: string; reason: string; issueType?: string }[];
+    reusedSourceFields: string[];
   } | null>(null);
   const [sopSummaryExpanded, setSopSummaryExpanded] = useState(false);
   const stageTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -1635,13 +1636,19 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
       queryClient.invalidateQueries({ queryKey: ["/api/policy-fields"] });
       queryClient.invalidateQueries({ queryKey: ["/api/policy-pack"] });
       const newLocals: LocalTreatment[] = generatedTxs.map((tx: TreatmentWithRules) => serverTxToLocal(tx));
+      const reusedSourceFields = Array.from(new Set(
+        newLocals.flatMap(t => t.draftSourceFields)
+          .filter(sf => sf.matchedExistingField)
+          .map(sf => sf.fieldName)
+      )).sort();
       await new Promise(r => setTimeout(r, 900));
       setLocalTreatments(newLocals);
       setAiReviewInfo({ summary: summary || "", openQuestions: openQuestions || [], generatedAt });
-      setSopImportSummary({ createdTreatments, createdFields, unresolvedTreatments, unresolvedFields });
+      setSopImportSummary({ createdTreatments, createdFields, unresolvedTreatments, unresolvedFields, reusedSourceFields });
       setSopSummaryExpanded(
         (unresolvedTreatments.length > 0 || unresolvedFields.length > 0 ||
-         createdFields.derived.length > 0 || createdFields.business.length > 0)
+         createdFields.derived.length > 0 || createdFields.business.length > 0 ||
+         reusedSourceFields.length > 0)
       );
       setShowUploadPanel(false);
       setSopFiles([]);
@@ -1765,17 +1772,38 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                   <div className="space-y-1.5">
                     <p className="text-xs font-semibold text-green-700 dark:text-green-300">Auto-created fields</p>
                     {createdFields.derived.map(f => (
-                      <div key={f.id} className="flex items-center gap-1.5 text-xs text-green-800 dark:text-green-200">
-                        <CheckCircle2 className="w-3 h-3 shrink-0" />
-                        <span className="font-medium">{f.label}</span>
-                        <Badge variant="outline" className="text-[10px] ml-1">derived</Badge>
+                      <div key={f.id} className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 text-xs text-green-800 dark:text-green-200">
+                          <CheckCircle2 className="w-3 h-3 shrink-0" />
+                          <span className="font-medium">{f.label}</span>
+                          <Badge variant="outline" className="text-[10px] ml-1">derived</Badge>
+                        </div>
+                        {f.creationReason && (
+                          <p className="text-[11px] text-green-700 dark:text-green-400 opacity-80 leading-relaxed pl-4">Reason: {f.creationReason}</p>
+                        )}
                       </div>
                     ))}
                     {createdFields.business.map(f => (
-                      <div key={f.id} className="flex items-center gap-1.5 text-xs text-green-800 dark:text-green-200">
+                      <div key={f.id} className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 text-xs text-green-800 dark:text-green-200">
+                          <CheckCircle2 className="w-3 h-3 shrink-0" />
+                          <span className="font-medium">{f.label}</span>
+                          <Badge variant="outline" className="text-[10px] ml-1">business</Badge>
+                        </div>
+                        {f.creationReason && (
+                          <p className="text-[11px] text-green-700 dark:text-green-400 opacity-80 leading-relaxed pl-4">Reason: {f.creationReason}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {sopImportSummary.reusedSourceFields.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold text-green-700 dark:text-green-300">Reused existing source fields</p>
+                    {sopImportSummary.reusedSourceFields.map(fieldName => (
+                      <div key={fieldName} className="flex items-center gap-1.5 text-xs text-green-800 dark:text-green-200">
                         <CheckCircle2 className="w-3 h-3 shrink-0" />
-                        <span className="font-medium">{f.label}</span>
-                        <Badge variant="outline" className="text-[10px] ml-1">business</Badge>
+                        <span>{fieldName}</span>
                       </div>
                     ))}
                   </div>
@@ -1794,10 +1822,21 @@ function PolicyPackSection({ isReadOnly, policyPack, policyFields, knownFields, 
                     ))}
                   </div>
                 )}
-                {unresolvedFields.filter(f => f.fieldType !== "rule_reference").length > 0 && (
+                {unresolvedFields.filter(f => f.issueType === "missing_creation_reason").length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">New fields missing justification</p>
+                    {unresolvedFields.filter(f => f.issueType === "missing_creation_reason").map((f, i) => (
+                      <div key={i} className="text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
+                        <p className="font-medium">{f.fieldName} <span className="opacity-60">({f.fieldType === "derived_field" ? "derived" : "business"})</span></p>
+                        <p className="text-[11px] leading-relaxed opacity-80">{f.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {unresolvedFields.filter(f => f.fieldType !== "rule_reference" && f.issueType !== "missing_creation_reason").length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Fields not auto-created</p>
-                    {unresolvedFields.filter(f => f.fieldType !== "rule_reference").map((f, i) => (
+                    {unresolvedFields.filter(f => f.fieldType !== "rule_reference" && f.issueType !== "missing_creation_reason").map((f, i) => (
                       <div key={i} className="text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
                         <p className="font-medium">{f.fieldName} <span className="opacity-60">({f.fieldType})</span></p>
                         <p className="text-[11px] leading-relaxed opacity-80">{f.reason}</p>

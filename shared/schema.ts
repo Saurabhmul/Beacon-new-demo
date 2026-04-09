@@ -300,6 +300,7 @@ export interface DraftDerivedField {
   derivationSummary?: string;
   dependsOn: string[];
   formulaHint?: string;
+  creationReason?: string;
 }
 
 export interface DraftBusinessField {
@@ -310,6 +311,7 @@ export interface DraftBusinessField {
   allowedValues: string[];
   defaultValue?: string;
   businessMeaning?: string;
+  creationReason?: string;
 }
 
 export interface ArithmeticDerivationConfig {

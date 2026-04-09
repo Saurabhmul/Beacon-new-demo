@@ -1234,7 +1234,7 @@ export async function registerRoutes(
         }
 
         // Phase C: Classify fields — skip existing, validate new, track unresolved
-        const unresolvedFields: Array<{ fieldName: string; fieldType: string; reason: string }> = [];
+        const unresolvedFields: Array<{ fieldName: string; fieldType: string; reason: string; issueType?: string }> = [];
         const fieldsToCreateDerived: AIDerived[] = [];
         const fieldsToCreateBusiness: AIBusiness[] = [];
 
@@ -1242,6 +1242,16 @@ export async function registerRoutes(
         const validatedDerived: AIDerived[] = [];
         for (const [key, df] of allDerivedByKey.entries()) {
           if (fieldByLabelLower.has(key)) continue;
+          // New field being created — flag if creation_reason is missing
+          if (!df.creation_reason || !df.creation_reason.trim()) {
+            console.warn(`[generate-treatment-draft] [${requestId}] derived field "${df.field_name}" created without creation_reason`);
+            unresolvedFields.push({
+              fieldName: df.field_name,
+              fieldType: "derived_field",
+              issueType: "missing_creation_reason",
+              reason: `Derived field "${df.field_name}" was created without a justification — review whether an existing source field could have been used instead`,
+            });
+          }
           if (!df.derivation_config) {
             unresolvedFields.push({
               fieldName: df.field_name,
@@ -1263,6 +1273,16 @@ export async function registerRoutes(
         }
         for (const [key, bf] of allBusinessByKey.entries()) {
           if (fieldByLabelLower.has(key)) continue;
+          // New field being created — flag if creation_reason is missing
+          if (!bf.creation_reason || !bf.creation_reason.trim()) {
+            console.warn(`[generate-treatment-draft] [${requestId}] business field "${bf.field_name}" created without creation_reason`);
+            unresolvedFields.push({
+              fieldName: bf.field_name,
+              fieldType: "business_field",
+              issueType: "missing_creation_reason",
+              reason: `Business field "${bf.field_name}" was created without a justification — review whether an existing source field could have been used instead`,
+            });
+          }
           if (!bf.field_name || !bf.field_name.trim()) {
             unresolvedFields.push({ fieldName: "(unnamed)", fieldType: "business", reason: "Business field has an empty field_name and cannot be created" });
             continue;
@@ -1371,7 +1391,7 @@ export async function registerRoutes(
         console.log(`[generate-treatment-draft] [${requestId}] pipeline: derived=${sortedDerivedFields.length} business=${fieldsToCreateBusiness.length} safe=${safeTreatments.length} unresolvedTx=${unresolvedTreatments.length} unresolvedFields=${unresolvedFields.length}`);
 
         // Phase G: DB Transaction
-        const createdFields: { derived: Array<{ label: string; id: string }>; business: Array<{ label: string; id: string }> } = {
+        const createdFields: { derived: Array<{ label: string; id: string; creationReason?: string }>; business: Array<{ label: string; id: string; creationReason?: string }> } = {
           derived: [], business: [],
         };
         const createdTreatments: Array<{ name: string; id: number }> = [];
@@ -1417,7 +1437,7 @@ export async function registerRoutes(
               id: String(inserted.id), label: inserted.label, sourceType: "business_field",
               description: inserted.description ?? null, derivationConfig: null, derivationSummary: null,
             });
-            createdFields.business.push({ label: inserted.label, id: String(inserted.id) });
+            createdFields.business.push({ label: inserted.label, id: String(inserted.id), creationReason: bf.creation_reason || undefined });
           }
 
           // 3. Insert derived fields in topological order (dependencies first)
@@ -1445,7 +1465,7 @@ export async function registerRoutes(
               derivationConfig: inserted.derivationConfig ?? null,
               derivationSummary: inserted.derivationSummary ?? null,
             });
-            createdFields.derived.push({ label: inserted.label, id: String(inserted.id) });
+            createdFields.derived.push({ label: inserted.label, id: String(inserted.id), creationReason: df.creation_reason || undefined });
           }
 
           // 4. Insert safe treatments with rules
@@ -1484,6 +1504,7 @@ export async function registerRoutes(
                 dataType: df.data_type,
                 derivationSummary: df.derivation_summary || "",
                 dependsOn: df.depends_on,
+                creationReason: df.creation_reason || undefined,
               })),
               draftBusinessFields: t.business_fields.map(bf => ({
                 fieldName: bf.field_name,
@@ -1493,6 +1514,7 @@ export async function registerRoutes(
                 allowedValues: bf.allowed_values,
                 defaultValue: bf.default_value,
                 businessMeaning: bf.business_meaning,
+                creationReason: bf.creation_reason || undefined,
               })),
               aiConfidence: t.confidence,
             }).returning();

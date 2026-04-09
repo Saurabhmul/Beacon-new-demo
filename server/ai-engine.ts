@@ -1060,6 +1060,7 @@ const AIDerivedFieldSchema = z.object({
   derivation_config: LogicalDerivationConfigSchema.nullable().default(null),
   derivation_summary: coerceToString,
   confidence: z.enum(["high", "medium", "low"]).default("medium"),
+  creation_reason: coerceToString.optional().default(""),
 });
 
 const AIBusinessFieldSchema = z.object({
@@ -1070,6 +1071,7 @@ const AIBusinessFieldSchema = z.object({
   allowed_values: z.array(z.string()).default([]),
   default_value: coerceToString,
   business_meaning: coerceToString,
+  creation_reason: coerceToString.optional().default(""),
 });
 
 export const DraftTreatmentItemSchema = z.object({
@@ -1356,19 +1358,31 @@ export async function generateTreatmentDraft(
   fieldCatalog: { label: string; sourceType: string; description: string | null; derivationSummary?: string | null; sampleValues?: string[] }[],
   columnEvidence?: ColumnEvidence[]
 ): Promise<ValidatedDraftResponse> {
-  const fieldCatalogText = fieldCatalog.length === 0
-    ? "No fields configured yet."
-    : fieldCatalog.map(f => {
-        const typeLabel = f.sourceType === "source_field" ? "Source Field"
-          : f.sourceType === "derived_field" ? "Derived Field"
-          : "Business Field";
-        const desc = f.description ? ` — ${f.description}` : "";
-        const derived = f.derivationSummary ? ` [Derived from: ${f.derivationSummary}]` : "";
-        const samples = (f.sampleValues && f.sampleValues.length > 0)
-          ? `. Sample values: ${f.sampleValues.map(v => `"${v}"`).join(", ")}`
-          : "";
-        return `- ${f.label} (${typeLabel})${desc}${samples}${derived}`;
-      }).join("\n");
+  let fieldCatalogText: string;
+  if (fieldCatalog.length === 0) {
+    fieldCatalogText = "No fields configured yet.";
+  } else {
+    const sourceFields = fieldCatalog.filter(f => f.sourceType === "source_field");
+    const otherFields  = fieldCatalog.filter(f => f.sourceType !== "source_field");
+    const renderField = (f: (typeof fieldCatalog)[0]) => {
+      const typeLabel = f.sourceType === "source_field" ? "Source Field"
+        : f.sourceType === "derived_field" ? "Derived Field"
+        : "Business Field";
+      const desc    = f.description      ? ` — ${f.description}` : "";
+      const derived = f.derivationSummary ? ` [Derived from: ${f.derivationSummary}]` : "";
+      const samples = (f.sampleValues && f.sampleValues.length > 0)
+        ? `. Sample values: ${f.sampleValues.map(v => `"${v}"`).join(", ")}`
+        : "";
+      return `- ${f.label} (${typeLabel})${desc}${samples}${derived}`;
+    };
+    const sourceSection = sourceFields.length > 0
+      ? `EXISTING SOURCE FIELDS (prefer reuse — check these before creating any new field):\n${sourceFields.map(renderField).join("\n")}`
+      : "";
+    const otherSection = otherFields.length > 0
+      ? `EXISTING DERIVED & BUSINESS FIELDS (may also be reused; do not recreate):\n${otherFields.map(renderField).join("\n")}`
+      : "";
+    fieldCatalogText = [sourceSection, otherSection].filter(Boolean).join("\n\n");
+  }
 
   const prompt = `You are Beacon's SOP-to-treatment configuration engine.
 
@@ -1393,6 +1407,23 @@ IMPORTANT RULES
   - classify it as a Derived Field if it can be computed from existing fields (must include a derivation_config)
   - classify it as a Business Field if it is user-entered, policy-defined, or judgement-based
 5. Reuse existing business fields or derived fields already in the Beacon field catalog.
+5a. FIELD REUSE DECISION — apply this checklist BEFORE creating any new business or derived field:
+    STEP 1: Check whether any existing source field in the Beacon field catalog already captures this concept.
+      Use the field label, description, and sample values (if provided) to judge fit.
+    STEP 2: If an existing source field is a reasonable semantic match, reuse it directly in the rule.
+      Use the exact field label from the catalog. Do NOT create a new business or derived field just because
+      a cleaner or more specific label sounds better.
+    STEP 3: Do NOT create wrapper fields around source fields. If a new field would merely rename, restate,
+      or lightly reformulate an existing source field, use that source field directly instead.
+    STEP 4: Only create a new business or derived field if no existing source field is a reasonable fit.
+      When creating a new field, you MUST include a "creation_reason" string explaining why no existing
+      source field was sufficient. Be specific — name the closest candidate(s) and explain why they do not
+      cover the concept. creation_reason is required only for newly created fields, NOT for source field reuse.
+    Examples of good creation_reason values:
+      "No source field captures DMP membership. active_dca_placement indicates external DCA placement — a
+       different programme — not internal Debt Management Plan participation. These are operationally distinct."
+      "breathing_space_active covers Breathing Space status but not the sub-type (standard vs mental health);
+       this rule requires sub-type discrimination."
 6. Keep rules structured and implementation-friendly.
 7. If the SOP is ambiguous or you cannot determine the derivation logic with confidence, put the field in open_questions with a clear reason. Do NOT invent logic or guess.
 8. You MUST always generate a complete draft — never leave treatments empty due to ambiguity. Put ambiguities in open_questions.
@@ -1471,7 +1502,8 @@ DERIVED FIELD FORMAT
  "depends_on": ["source_field_a", "source_field_b"],
  "derivation_config": { DERIVATION CONFIG or null if ambiguous },
  "derivation_summary": "plain english description of the logic",
- "confidence": "high|medium|low"
+ "confidence": "high|medium|low",
+ "creation_reason": "REQUIRED — explain why no existing source field was sufficient (name closest candidates)"
 }
 
 BUSINESS FIELD FORMAT
@@ -1482,7 +1514,8 @@ BUSINESS FIELD FORMAT
  "data_type": "boolean|number|string|enum",
  "allowed_values": ["value1", "value2"] or [],
  "default_value": "default if applicable",
- "business_meaning": "why this field exists and how it is used"
+ "business_meaning": "why this field exists and how it is used",
+ "creation_reason": "REQUIRED — explain why no existing source field was sufficient (name closest candidates)"
 }
 
 TREATMENT PRIORITY RANKING
