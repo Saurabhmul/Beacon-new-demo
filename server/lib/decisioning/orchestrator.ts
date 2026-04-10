@@ -20,7 +20,7 @@ import {
   type FinalAIOutput,
   type DecisionValidationResult,
 } from "./decision-validator";
-import type { StageMetrics } from "./types";
+import type { StageMetrics, TreatmentSelectionTraceEntry } from "./types";
 import type { DecisionPacket } from "./decision-packet";
 
 export const ENGINE_VERSION = "decision-layer-v2.1";
@@ -49,15 +49,13 @@ export interface DecisionPipelineResult {
    *   "required tier 1–3 business field …"
    *   "AI output could not be parsed after retry"
    *   "AI call failed"
-   *   "tied preferred treatments — no traceable reason to choose"
    * Null for all normal AI runs, including when AI returns AGENT_REVIEW naturally.
    */
   runFallbackReason: string | null;
 
   /**
-   * Decision persistence status:
-   *   "pending"          — normal; ready for agent review
-   *   "failed_validation" — validation layer blocked; excluded from normal review
+   * "pending"          — normal; ready for agent review
+   * "failed_validation" — validation layer blocked; excluded from normal review
    */
   decisionStatus: "pending" | "failed_validation";
 
@@ -96,7 +94,7 @@ async function callFinalDecisionAI(userPrompt: string): Promise<string> {
   return response.text ?? "";
 }
 
-// ─── Deterministic fallback ───────────────────────────────────────────────────
+// ─── Deterministic fallback output ───────────────────────────────────────────
 
 function buildFallbackOutput(reason: string, customerSituation: string): FinalAIOutput {
   return {
@@ -179,18 +177,23 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
   });
 
   if (!completenessResult.passed) {
+    const reason = "policy completeness check failed";
     const fallbackOutput = buildFallbackOutput(
-      "policy configuration incomplete — not a customer-driven review",
+      reason,
       "SYSTEM_HOLD: policy configuration incomplete — not a customer-driven review"
+    );
+    // Build selection trace annotated with policy completeness failure reason
+    const trace = buildAnnotatedEmptyTrace(
+      treatments,
+      "Policy completeness check failed before customer analysis began"
     );
     return assembleDeterministicFallback({
       runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
-      runFallbackReason: "policy completeness check failed",
+      runFallbackReason: reason,
       fallbackOutput,
       stageMetrics,
       rawCustomerData,
-      treatments,
-      selectionTrace: buildEmptySelectionTrace(treatments),
+      selectionTrace: trace,
       issues: completenessResult.issues,
     });
   }
@@ -213,7 +216,6 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     ...derivedFieldResult.values,
   };
 
-  // ── Stage 4: Field availability (tracked in decision packet later) ───────
   stageMetrics["fieldAvailability"] = endStage(startStage(), { summary: 1 });
 
   // ── Stage 5+6: Business field inference ─────────────────────────────────
@@ -256,7 +258,6 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
       fallbackOutput,
       stageMetrics,
       rawCustomerData,
-      treatments,
       selectionTrace: [],
       issues: [],
       decisionPacket: dp,
@@ -282,17 +283,14 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
 
   // Deterministic fallback: no eligible treatments
   if (ruleEvalResult.rankedEligibleTreatments.length === 0) {
-    const fallbackOutput = buildFallbackOutput(
-      "no eligible treatments",
-      "No eligible treatments found after rule evaluation"
-    );
+    const reason = "no eligible treatments";
+    const fallbackOutput = buildFallbackOutput(reason, "No eligible treatments found after rule evaluation");
     return assembleDeterministicFallback({
       runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
-      runFallbackReason: "no eligible treatments",
+      runFallbackReason: reason,
       fallbackOutput,
       stageMetrics,
       rawCustomerData,
-      treatments,
       selectionTrace: ruleEvalResult.treatmentSelectionTrace,
       issues: [],
       decisionPacket,
@@ -323,7 +321,7 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
       const retryText = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(parseResult.error)}`);
       const retryParse = parseFinalAIOutput(retryText);
       if (!retryParse.ok) {
-        // Still unparseable → deterministic fallback
+        // Still unparseable after retry → deterministic AGENT_REVIEW fallback
         deterministicFallbackReason = "AI output could not be parsed after retry";
         finalAIOutput = buildFallbackOutput(deterministicFallbackReason, "AI response could not be parsed");
       } else {
@@ -334,39 +332,32 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
       finalAIOutput = parseResult.data;
     }
 
-    // ── Stage 10: Validate (only when AI returned a treatment — not AGENT_REVIEW) ──
+    // ── Stage 10: Validate AI output (runs for all recommendations, including AGENT_REVIEW) ──
     if (finalAIOutput && !deterministicFallbackReason) {
-      const outputCode = finalAIOutput.recommended_treatment_code ?? "";
+      validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
 
-      if (outputCode !== "AGENT_REVIEW") {
-        validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
-
-        // ── Stage 11: Retry once on structural failure ──────────────────────
-        if (validationResult.status === "failed" && validationResult.failureType === "structural_failure" && retryCount === 0) {
-          retryCount = 1;
-          const issueList = validationResult.blockingIssues.map(i => i.message).join("; ");
-          const retryRaw = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(issueList)}`);
-          const retryParse = parseFinalAIOutput(retryRaw);
-          if (retryParse.ok) {
-            aiRawText = retryRaw;
-            finalAIOutput = retryParse.data;
-            validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
-          }
-        }
-
-        // ── Tie-ambiguity: convert to deterministic AGENT_REVIEW fallback ──
-        const hasTieAmbiguity = validationResult.blockingIssues.some(i => i._marker === "TIE_AMBIGUITY");
-        if (hasTieAmbiguity) {
-          deterministicFallbackReason = "tied preferred treatments — no traceable reason to choose";
-          finalAIOutput = buildFallbackOutput(
-            deterministicFallbackReason,
-            "Tied preferred treatments with no traceable justification; escalating to agent"
-          );
-          // Clear the validation result since we're now using a deterministic fallback
-          validationResult = null;
+      // ── Stage 11: Retry once on structural failure ──────────────────────
+      if (validationResult.status === "failed" && validationResult.failureType === "structural_failure" && retryCount === 0) {
+        retryCount = 1;
+        const issueList = validationResult.blockingIssues.map(i => i.message).join("; ");
+        const retryRaw = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(issueList)}`);
+        const retryParse = parseFinalAIOutput(retryRaw);
+        if (retryParse.ok) {
+          aiRawText = retryRaw;
+          finalAIOutput = retryParse.data;
+          validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
         }
       }
-      // Note: when AI returns AGENT_REVIEW, no validation is run — it's a natural run-level outcome
+
+      // ── Structural failure unrepaired after retry → deterministic AGENT_REVIEW ──
+      if (validationResult.status === "failed" && validationResult.failureType === "structural_failure") {
+        deterministicFallbackReason = "AI output failed structural validation after retry";
+        finalAIOutput = buildFallbackOutput(
+          deterministicFallbackReason,
+          "AI output failed structural validation and could not be repaired"
+        );
+        validationResult = null;
+      }
     }
   } catch (err) {
     console.error("[orchestrator] Final AI call failed:", err);
@@ -377,11 +368,12 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
   stageMetrics["finalDecision"] = endStage(s9, { retryCount });
 
   // ── Determine decision status ────────────────────────────────────────────
-  // Only failed_validation for non-structural validation failures (after retry attempts)
+  // failed_validation: policy/guardrail/evidence failures that are not structural
+  // (structural failures are now handled as deterministic fallbacks above)
   let decisionStatus: "pending" | "failed_validation" = "pending";
   if (
     validationResult?.status === "failed" &&
-    validationResult.failureType !== undefined &&
+    validationResult.failureType !== "structural_failure" &&
     !deterministicFallbackReason
   ) {
     decisionStatus = "failed_validation";
@@ -465,8 +457,7 @@ interface DeterministicFallbackArgs {
   fallbackOutput: FinalAIOutput;
   stageMetrics: Record<string, StageMetrics>;
   rawCustomerData: Record<string, unknown>;
-  treatments: TreatmentWithRules[];
-  selectionTrace: Array<TreatmentSelectionTraceEntry & { [k: string]: unknown }>;
+  selectionTrace: TreatmentSelectionTraceEntry[];
   issues: string[];
   decisionPacket?: DecisionPacket;
   fieldResolution?: { resolvedValues: Record<string, unknown>; traces: Record<string, unknown> };
@@ -480,8 +471,6 @@ interface DeterministicFallbackArgs {
     stageMetrics: StageMetrics;
   };
 }
-
-import type { TreatmentSelectionTraceEntry } from "./types";
 
 function assembleDeterministicFallback(args: DeterministicFallbackArgs): DecisionPipelineResult {
   const {
@@ -596,13 +585,18 @@ function buildAiRawOutput(args: {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function buildEmptySelectionTrace(treatments: TreatmentWithRules[]) {
+function buildAnnotatedEmptyTrace(
+  treatments: TreatmentWithRules[],
+  selectionReason: string
+): TreatmentSelectionTraceEntry[] {
   return treatments.filter(t => t.enabled).map((t, i) => ({
     treatmentCode: t.name,
-    priority: null as number | null,
+    priority: null,
     prioritySource: "missing" as const,
     rank: i + 1,
     isPreferred: false,
+    selectionMode: "not_selected",
+    selectionReason,
   }));
 }
 

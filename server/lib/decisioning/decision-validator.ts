@@ -15,8 +15,6 @@ export interface ValidationIssue {
   failureType: ValidationFailureType;
   message: string;
   field?: string;
-  /** Internal marker used by orchestrator to trigger deterministic fallback */
-  _marker?: string;
 }
 
 export interface DecisionValidationResult {
@@ -86,12 +84,17 @@ const REQUIRED_TOP_LEVEL_KEYS: Array<keyof FinalAIOutput> = [
   "structured_assessments",
 ];
 
-// Contact-restriction keywords — email must be blocked when these appear in flags
+// Hard outreach-prohibition signals that make email strictly prohibited
 const OUTREACH_PROHIBITED_SIGNALS = [
   "no contact", "do not contact", "no outreach", "do not call",
   "deceased", "legal hold", "legal dispute", "in dispute",
   "ceased contact", "opted out", "unsubscribed",
   "communication ban", "do not email",
+];
+
+// Internal-only action prefixes that must not produce customer-facing email
+const INTERNAL_ONLY_ACTION_SIGNALS = [
+  "system_hold", "escalate_internal", "flag_only", "monitor_only", "internal_only",
 ];
 
 // ─── Validator ────────────────────────────────────────────────────────────────
@@ -226,7 +229,7 @@ export function validateDecision(
 
   // ── Layer 3: Guardrail failure ───────────────────────────────────────────
 
-  // Escalation flags: strongly prefer AGENT_REVIEW
+  // Escalation flags: strongly prefer AGENT_REVIEW (warning when not chosen)
   if (decisionPacket.escalationFlags.length > 0 && !isRunFallback) {
     warnings.push({
       failureType: "guardrail_failure",
@@ -234,7 +237,7 @@ export function validateDecision(
     });
   }
 
-  // Hard guardrails: if any hard-blocker guardrail flag signals no outreach → block email
+  // Hard outreach prohibition: email must be blocked
   const allFlagDescriptions = [
     ...decisionPacket.guardrailFlags.map(f => f.description.toLowerCase()),
     ...decisionPacket.escalationFlags.map(f => f.description.toLowerCase()),
@@ -252,18 +255,30 @@ export function validateDecision(
       });
     }
 
-    // Communication guidelines: check emailWhenNotToUse
+    // Internal-only action must not generate customer-facing email (blocking)
+    const internalActionLower = String(output.internal_action ?? "").toLowerCase();
+    const isInternalOnlyAction = INTERNAL_ONLY_ACTION_SIGNALS.some(s => internalActionLower.includes(s));
+    if (isInternalOnlyAction) {
+      blockingIssues.push({
+        failureType: "guardrail_failure",
+        message: `Email drafted for internal-only action: "${output.internal_action}"`,
+        field: "proposed_email_to_customer",
+      });
+    }
+
+    // emailWhenNotToUse: blocking guardrail_failure when violated
     const emailWhenNotToUse = decisionPacket.communication?.guidelines?.emailWhenNotToUse ?? [];
     if (emailWhenNotToUse.length > 0) {
       const emailLower = emailVal.toLowerCase();
       const explanationLower = String(output.treatment_eligibility_explanation ?? "").toLowerCase();
       for (const rule of emailWhenNotToUse) {
-        const ruleSignals = rule.toLowerCase().split(/[\s,;]+/).filter(t => t.length > 4);
+        const ruleLower = rule.toLowerCase();
+        const ruleSignals = ruleLower.split(/[\s,;]+/).filter(t => t.length > 4);
         const matchesRule = ruleSignals.some(s => emailLower.includes(s) || explanationLower.includes(s));
         if (matchesRule) {
-          warnings.push({
+          blockingIssues.push({
             failureType: "guardrail_failure",
-            message: `Email may violate emailWhenNotToUse guideline: "${rule}"`,
+            message: `Email violates emailWhenNotToUse guideline: "${rule}"`,
             field: "proposed_email_to_customer",
           });
           break;
@@ -271,16 +286,21 @@ export function validateDecision(
       }
     }
 
-    // Internal-only action should not have outbound email
-    const internalActionLower = String(output.internal_action ?? "").toLowerCase();
-    const isInternalOnlyAction = internalActionLower.includes("system_hold") ||
-      internalActionLower.includes("escalate_internal") ||
-      internalActionLower.includes("flag_only") ||
-      internalActionLower.includes("monitor_only");
-    if (isInternalOnlyAction) {
-      blockingIssues.push({
+    // Email treatment-consistency: email body should align with recommended treatment
+    const emailLower = emailVal.toLowerCase();
+    const treatmentLower = recommendedCode.toLowerCase();
+    // Check that email doesn't describe a completely different treatment
+    if (treatmentLower.includes("dca") && (emailLower.includes("payment plan") || emailLower.includes("instalment"))) {
+      warnings.push({
         failureType: "guardrail_failure",
-        message: `Email drafted for internal-only action: "${output.internal_action}"`,
+        message: "Email content describes payment plan/instalment for a DCA treatment",
+        field: "proposed_email_to_customer",
+      });
+    }
+    if (!treatmentLower.includes("hardship") && emailLower.includes("hardship arrangement")) {
+      warnings.push({
+        failureType: "guardrail_failure",
+        message: "Email content mentions hardship arrangement but recommended treatment is not a hardship treatment",
         field: "proposed_email_to_customer",
       });
     }
@@ -303,11 +323,11 @@ export function validateDecision(
     });
   });
 
-  // Blocking: if more than half the used_fields are unrecognised, something is wrong
-  if (usedFields.length > 0 && unknownUsedFields.length > Math.max(3, usedFields.length / 2)) {
+  // Blocking: if >50% of used_fields are unknown — likely hallucinated references
+  if (usedFields.length > 0 && unknownUsedFields.length > Math.max(3, Math.ceil(usedFields.length / 2))) {
     blockingIssues.push({
       failureType: "evidence_failure",
-      message: `used_fields contains ${unknownUsedFields.length}/${usedFields.length} fields not found in decision packet; likely hallucinated field references`,
+      message: `used_fields references ${unknownUsedFields.length}/${usedFields.length} unknown fields — possible hallucinated evidence`,
       field: "used_fields",
     });
   } else if (unknownUsedFields.length > 3) {
@@ -316,6 +336,28 @@ export function validateDecision(
       message: `used_fields references ${unknownUsedFields.length} fields not found in decision packet`,
       field: "used_fields",
     });
+  }
+
+  // Invented-facts check: used_rules must reference rules that exist in the packet
+  if ((output.used_rules ?? []).length > 0) {
+    const knownRuleIds = new Set(
+      decisionPacket.rankedEligibleTreatments
+        .flatMap(t => (t as { reasons?: string[] }).reasons ?? [])
+    );
+    // If knownRuleIds is populated, validate against it; otherwise skip (rules may not be tracked)
+    if (knownRuleIds.size > 0) {
+      const unknownRules = (output.used_rules ?? []).map(String).filter(r => {
+        const rLower = r.trim().toLowerCase();
+        return !Array.from(knownRuleIds).some(k => k.toLowerCase().includes(rLower) || rLower.includes(k.toLowerCase()));
+      });
+      if (unknownRules.length > 3) {
+        warnings.push({
+          failureType: "evidence_failure",
+          message: `used_rules references ${unknownRules.length} unrecognised rules; possible invented evidence`,
+          field: "used_rules",
+        });
+      }
+    }
   }
 
   // ── Priority-deviation & tie-ambiguity checks ────────────────────────────
@@ -334,23 +376,20 @@ export function validateDecision(
         chosenEntry.selectionReason = `Highest-priority eligible treatment (rank ${chosenEntry.rank})`;
       }
     } else if (isTiedPreferred) {
-      // Multiple tied preferred treatments — AI must provide clear justification
+      // Multiple tied preferred treatments — AI chose one; this is a WARNING (not a failure)
       const explanation = String(output.treatment_eligibility_explanation ?? "").trim();
-      const hasExplicitJustification = explanation.length >= 100;
-
-      if (chosenEntry) chosenEntry.selectionMode = "tied_preferred";
-
-      if (!hasExplicitJustification) {
-        // Deterministic fallback required — blocking policy_failure with TIE_AMBIGUITY marker
-        blockingIssues.push({
-          failureType: "policy_failure",
-          message: "Tied preferred treatments selected without sufficient traceable justification (requires ≥100-char explanation)",
-          field: "treatment_eligibility_explanation",
-          _marker: "TIE_AMBIGUITY",
-        });
-        if (chosenEntry) chosenEntry.selectionReason = "Tie-ambiguity fallback triggered — insufficient justification";
-      } else {
-        if (chosenEntry) chosenEntry.selectionReason = explanation.substring(0, 500);
+      if (chosenEntry) {
+        chosenEntry.selectionMode = "tied_preferred";
+        if (!explanation) {
+          warnings.push({
+            failureType: "guardrail_failure",
+            message: "Tied preferred treatment selected without any documented reason",
+            field: "treatment_eligibility_explanation",
+          });
+          chosenEntry.selectionReason = "Tied preferred treatment — no explicit reason documented";
+        } else {
+          chosenEntry.selectionReason = explanation.substring(0, 500);
+        }
       }
     } else if (!isPreferred) {
       // Lower-ranked treatment — check for sufficient justification
@@ -365,7 +404,7 @@ export function validateDecision(
       if (hasReviewTrigger || hasGuardrail || hasMissingInfo || hasExplicitJustification) {
         warnings.push({
           failureType: "policy_failure",
-          message: "Lower-priority treatment chosen; justification found",
+          message: "Lower-priority treatment chosen; contextual justification present",
           field: "recommended_treatment_code",
         });
         if (chosenEntry) chosenEntry.selectionReason = explanation.substring(0, 500);
@@ -376,6 +415,15 @@ export function validateDecision(
           field: "recommended_treatment_code",
         });
         if (chosenEntry) chosenEntry.selectionReason = "no justification found";
+      }
+    }
+  } else if (isRunFallback && recommendedCode === "AGENT_REVIEW") {
+    // AI returned AGENT_REVIEW — annotate the trace at run-level
+    const explanation = String(output.treatment_eligibility_explanation ?? "");
+    for (const entry of updatedTrace) {
+      if (!entry.selectionMode) {
+        entry.selectionMode = "not_selected";
+        entry.selectionReason = explanation ? `AGENT_REVIEW: ${explanation.substring(0, 200)}` : "AGENT_REVIEW selected by AI";
       }
     }
   }
