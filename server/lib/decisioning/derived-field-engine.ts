@@ -440,7 +440,16 @@ export function evaluateDerivedFields(
       traces[entry.label] = trace;
 
       if (status === "computed") {
+        // Index by label for chained derivation dependencies (derivation configs reference by label)
         workingValues[entry.label] = outputValue;
+        // Index by canonical ID (entry.id) so rule evaluator can find via leftFieldId
+        if (entry.id && entry.id !== entry.label) {
+          workingValues[entry.id] = outputValue;
+        }
+        // Output values: primary key is canonical ID; label alias is also included
+        if (entry.id && entry.id !== entry.label) {
+          values[entry.id] = outputValue;
+        }
         values[entry.label] = outputValue;
       }
     } catch (err) {

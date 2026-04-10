@@ -55,9 +55,24 @@ export interface RuleEvaluatedRow {
   reason: string;
 }
 
+/**
+ * Group-level trace entry: carries rule-type context so callers can tell
+ * whether a pass/fail came from eligibility, hard/soft blocker, review trigger, etc.
+ */
+export interface TreatmentRuleGroupTrace {
+  groupId: number;
+  ruleType: string;
+  logicOperator: string;
+  groupPassed: boolean;
+  /** Only present for hard/soft blocker groups */
+  blockerType?: BlockerType;
+  evaluatedRules: RuleEvaluatedRow[];
+}
+
 export interface TreatmentRuleTrace {
   treatmentCode: string;
-  evaluatedRules: RuleEvaluatedRow[];
+  /** Structured by group so blocker/eligibility/review provenance is explicit */
+  evaluatedGroups: TreatmentRuleGroupTrace[];
 }
 
 // ─── Ranked Treatment ─────────────────────────────────────────────────────────

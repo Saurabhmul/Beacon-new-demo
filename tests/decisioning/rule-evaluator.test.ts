@@ -222,7 +222,7 @@ describe("treatment ranking", () => {
     expect(result.preferredTreatments.map(p => p.code)).toContain("plan_b");
   });
 
-  it("missing priority → ranked last, prioritySource = 'missing', warns in trace", () => {
+  it("missing priority → ranked last, prioritySource = 'missing', warns in trace, reasons populated", () => {
     const t1 = makeTreatment("plan_a", [], "1");
     const t2 = makeTreatment("plan_no_priority", [], null);
     const result = evaluateTreatmentRules([t1, t2], {});
@@ -232,6 +232,12 @@ describe("treatment ranking", () => {
     expect(noPriorityEntry!.priority).toBeNull();
     expect(priorityEntry!.rank).toBeLessThan(noPriorityEntry!.rank);
     expect(result.stageMetrics.counts["warnedMissingPriority"]).toBe(1);
+    // reasons must be populated with explicit missing-priority rationale
+    expect(noPriorityEntry!.reasons.length).toBeGreaterThan(0);
+    expect(noPriorityEntry!.reasons[0]).toMatch(/no priority configured/i);
+    // configured treatment also gets a reason
+    expect(priorityEntry!.reasons.length).toBeGreaterThan(0);
+    expect(priorityEntry!.reasons[0]).toMatch(/priority 1/i);
   });
 
   it("all treatments missing priority → all share rank 1 (all preferred), all 'missing'", () => {
@@ -333,6 +339,48 @@ describe("critical missing information", () => {
   });
 });
 
+// ─── Group-level trace structure ────────────────────────────────────────────
+
+describe("treatmentRuleTrace group structure", () => {
+  it("evaluatedGroups carries groupId and ruleType", () => {
+    const group = makeGroup("eligibility", [
+      makeRule({ fieldName: "dpd", operator: ">", value: "0" }),
+    ]);
+    group.id = 999;
+    const t = makeTreatment("plan_a", [group], "1");
+    const result = evaluateTreatmentRules([t], { dpd: 5 });
+    const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
+    expect(trace).toBeDefined();
+    expect(trace!.evaluatedGroups[0].groupId).toBe(999);
+    expect(trace!.evaluatedGroups[0].ruleType).toBe("eligibility");
+    expect(trace!.evaluatedGroups[0].groupPassed).toBe(true);
+    expect(trace!.evaluatedGroups[0].blockerType).toBeUndefined();
+  });
+
+  it("hard_blocker group carries blockerType: hard", () => {
+    const t = makeTreatment("plan_a", [
+      makeGroup("hard_blocker", [
+        makeRule({ fieldName: "flag", operator: "is_true" }),
+      ]),
+    ], "1");
+    const result = evaluateTreatmentRules([t], { flag: true });
+    const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
+    expect(trace!.evaluatedGroups[0].blockerType).toBe("hard");
+    expect(trace!.evaluatedGroups[0].groupPassed).toBe(true);
+  });
+
+  it("soft_blocker group carries blockerType: soft", () => {
+    const t = makeTreatment("plan_a", [
+      makeGroup("soft_blocker", [
+        makeRule({ fieldName: "flag", operator: "is_true" }),
+      ]),
+    ], "1");
+    const result = evaluateTreatmentRules([t], { flag: true });
+    const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
+    expect(trace!.evaluatedGroups[0].blockerType).toBe("soft");
+  });
+});
+
 // ─── Rule integrity – broken field IDs and invalid operators ─────────────────
 
 describe("rule integrity – graceful handling", () => {
@@ -344,7 +392,7 @@ describe("rule integrity – graceful handling", () => {
     ], "1");
     const result = evaluateTreatmentRules([t], {});
     const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
-    const ruleRow = trace?.evaluatedRules[0];
+    const ruleRow = trace?.evaluatedGroups[0]?.evaluatedRules[0];
     expect(ruleRow?.result).toBe("not_evaluable");
   });
 
@@ -356,7 +404,7 @@ describe("rule integrity – graceful handling", () => {
     ], "1");
     const result = evaluateTreatmentRules([t], { dpd: 30 });
     const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
-    const ruleRow = trace?.evaluatedRules[0];
+    const ruleRow = trace?.evaluatedGroups[0]?.evaluatedRules[0];
     expect(ruleRow?.result).toBe("not_evaluable");
     expect(ruleRow?.reason).toMatch(/unknown operator/i);
   });

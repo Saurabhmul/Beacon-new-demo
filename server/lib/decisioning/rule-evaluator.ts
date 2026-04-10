@@ -3,6 +3,7 @@ import type {
   RankedTreatment,
   BlockedTreatment,
   TreatmentRuleTrace,
+  TreatmentRuleGroupTrace,
   TreatmentSelectionTraceEntry,
   RuleEvaluatedRow,
   ReviewTrigger,
@@ -11,6 +12,7 @@ import type {
   MissingCriticalField,
   StageMetrics,
   PrioritySource,
+  BlockerType,
 } from "./types";
 import type { TreatmentWithRules, TreatmentRule, TreatmentRuleGroup } from "@shared/schema";
 
@@ -299,37 +301,50 @@ export function evaluateTreatmentRules(
     if (!treatment.enabled) continue;
 
     const treatmentCode = treatment.name;
-    const allEvaluatedRows: RuleEvaluatedRow[] = [];
+    const evaluatedGroups: TreatmentRuleGroupTrace[] = [];
 
     let isHardBlocked = false;
     let isSoftBlocked = false;
     const blockerReasons: string[] = [];
-    let hardBlockerType = false;
 
     let hasEligibilityGroups = false;
     let passesAllEligibility = true;
     const eligibilityFailReasons: string[] = [];
 
-    // Process each rule group
+    // No rule groups at all → log and allow eligible
     if (!treatment.ruleGroups || treatment.ruleGroups.length === 0) {
-      // No rules at all → check as missing rule group reference (log but allow eligible)
       console.warn(`[rule-evaluator] Treatment "${treatmentCode}" has no rule groups defined`);
     }
 
     for (const group of treatment.ruleGroups || []) {
-      // Validate: if group has no rules, note it but don't crash
+      // Empty group: log and skip (don't crash)
       if (!group.rules || group.rules.length === 0) {
         console.warn(
-          `[rule-evaluator] Rule group ${group.id} (type="${group.ruleType}") for treatment "${treatmentCode}" has no rules — treated as not-evaluable`
+          `[rule-evaluator] Rule group ${group.id} (type="${group.ruleType}") for treatment "${treatmentCode}" has no rules — skipped`
         );
         continue;
       }
 
       const ruleType = (group.ruleType || "eligibility").toLowerCase();
       const result = evaluateRuleGroup(group, resolvedValues);
-      allEvaluatedRows.push(...result.evaluatedRows);
 
-      // Track missing critical fields for specific group types
+      // Determine blockerType for this group
+      let groupBlockerType: BlockerType | undefined;
+      if (HARD_BLOCKER_TYPES.has(ruleType)) groupBlockerType = "hard";
+      else if (SOFT_BLOCKER_TYPES.has(ruleType)) groupBlockerType = "soft";
+
+      // Build group-level trace entry (carries ruleType + groupId context)
+      const groupTrace: TreatmentRuleGroupTrace = {
+        groupId: group.id,
+        ruleType,
+        logicOperator: (group.logicOperator || "AND").toUpperCase(),
+        groupPassed: result.passed,
+        ...(groupBlockerType !== undefined ? { blockerType: groupBlockerType } : {}),
+        evaluatedRules: result.evaluatedRows,
+      };
+      evaluatedGroups.push(groupTrace);
+
+      // Track missing critical fields (only for hard_blocker, eligibility, review_trigger)
       const isCriticalGroupType =
         HARD_BLOCKER_TYPES.has(ruleType) ||
         ELIGIBILITY_TYPES.has(ruleType) ||
@@ -341,7 +356,7 @@ export function evaluateTreatmentRules(
             missingFieldsMap.set(mf.fieldKey, {
               fieldId: mf.fieldKey,
               label: mf.fieldKey,
-              requiredBy: `treatment "${treatmentCode}" group type "${ruleType}" (ruleId ${mf.ruleId})`,
+              requiredBy: `treatment "${treatmentCode}" group ${group.id} type "${ruleType}" (ruleId ${mf.ruleId})`,
             });
           }
         }
@@ -350,7 +365,6 @@ export function evaluateTreatmentRules(
       if (HARD_BLOCKER_TYPES.has(ruleType)) {
         if (result.passed) {
           isHardBlocked = true;
-          hardBlockerType = true;
           blockerReasons.push(
             ...result.evaluatedRows
               .filter(r => r.result === "pass")
@@ -392,19 +406,19 @@ export function evaluateTreatmentRules(
         hasEligibilityGroups = true;
         if (!result.passed) {
           passesAllEligibility = false;
-          const failReasons = result.evaluatedRows
-            .filter(r => r.result === "fail" || r.result === "not_evaluable")
-            .map(r => r.reason);
-          eligibilityFailReasons.push(...failReasons);
+          eligibilityFailReasons.push(
+            ...result.evaluatedRows
+              .filter(r => r.result === "fail" || r.result === "not_evaluable")
+              .map(r => r.reason)
+          );
         }
-      }
-      // Unknown rule types: log but don't crash
-      else {
+      } else {
+        // Unknown rule type: log but don't crash
         console.warn(`[rule-evaluator] Unknown rule type "${group.ruleType}" on treatment "${treatmentCode}" group ${group.id} — skipped`);
       }
     }
 
-    treatmentRuleTrace.push({ treatmentCode, evaluatedRules: allEvaluatedRows });
+    treatmentRuleTrace.push({ treatmentCode, evaluatedGroups });
 
     // Determine outcome
     if (isHardBlocked) {
@@ -422,11 +436,9 @@ export function evaluateTreatmentRules(
         reasons: blockerReasons.length > 0 ? blockerReasons : ["Soft blocker condition met"],
       });
     } else if (hasEligibilityGroups && !passesAllEligibility) {
-      // Not eligible — record in blocked with missing_info blocker type if only not_evaluable failures,
-      // otherwise just don't add to eligibleTreatments (not explicitly blocked)
-      // We don't add to blockedTreatments for eligibility failures — they simply aren't eligible
+      // Failed eligibility: not eligible, not explicitly blocked
     } else {
-      // Treatment is eligible (passes all eligibility groups, or has no eligibility groups)
+      // Eligible: passes all eligibility groups, or has no eligibility groups
       eligibleTreatments.push({ code: treatmentCode, name: treatment.name });
     }
   }
@@ -441,11 +453,15 @@ export function evaluateTreatmentRules(
       treatment?.priority ?? null
     );
 
+    const rankReasons: string[] = [];
     if (prioritySource === "missing") {
       warnedMissingPriority.push(eligible.code);
+      rankReasons.push("No priority configured; treatment ranked last by default");
       console.warn(
         `[rule-evaluator] Treatment "${eligible.code}" has no configured priority — ranked last`
       );
+    } else {
+      rankReasons.push(`Priority ${priorityValue} (configured)`);
     }
 
     rankedList.push({
@@ -454,7 +470,7 @@ export function evaluateTreatmentRules(
       priority: priorityValue,
       prioritySource,
       rank: 0, // assigned below
-      reasons: [],
+      reasons: rankReasons,
       isPreferred: false, // assigned below
     });
   }
