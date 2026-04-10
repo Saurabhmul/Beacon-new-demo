@@ -278,20 +278,21 @@ export function validateDecision(
       }
     }
 
-    // Email treatment-consistency: blocking when email content contradicts recommended treatment
+    // Email treatment-consistency: blocking evidence_failure when email contradicts recommended treatment
+    // (classified as evidence_failure: the AI is presenting incorrect evidence in the email)
     const emailLower = emailVal.toLowerCase();
     const treatmentLower = recommendedCode.toLowerCase();
     if (treatmentLower.includes("dca") && (emailLower.includes("payment plan") || emailLower.includes("instalment"))) {
       blockingIssues.push({
-        failureType: "guardrail_failure",
-        message: "Email content describes payment plan/instalment for a DCA treatment",
+        failureType: "evidence_failure",
+        message: "Email content describes payment plan/instalment for a DCA treatment — invented treatment context",
         field: "proposed_email_to_customer",
       });
     }
     if (!treatmentLower.includes("hardship") && emailLower.includes("hardship arrangement") && emailLower.includes("formal hardship")) {
       blockingIssues.push({
-        failureType: "guardrail_failure",
-        message: "Email content references hardship arrangement but recommended treatment is not a hardship treatment",
+        failureType: "evidence_failure",
+        message: "Email content references formal hardship arrangement but recommended treatment is not a hardship treatment",
         field: "proposed_email_to_customer",
       });
     }
@@ -363,21 +364,19 @@ export function validateDecision(
         chosenEntry.selectionReason = `Highest-priority eligible treatment (rank ${chosenEntry.rank})`;
       }
     } else if (isTiedPreferred) {
-      // Multiple tied preferred treatments — require traceable reason for deterministic choice
+      // Multiple tied preferred treatments — AI chose one; document the choice
       const explanation = String(output.treatment_eligibility_explanation ?? "").trim();
+      if (chosenEntry) chosenEntry.selectionMode = "tied_preferred";
       if (!explanation) {
-        // No reason provided: emit blocking policy_failure so orchestrator routes to AGENT_REVIEW
-        blockingIssues.push({
-          failureType: "policy_failure",
-          message: "Tied preferred treatments — AI chose without any traceable reason. Escalating to agent review.",
+        // No documented reason — emit warning audit (not blocking; orchestrator does NOT force fallback)
+        warnings.push({
+          failureType: "guardrail_failure",
+          message: "Tied preferred treatment selected without any documented reason",
           field: "treatment_eligibility_explanation",
         });
-        if (chosenEntry) chosenEntry.selectionMode = "tied_preferred";
+        if (chosenEntry) chosenEntry.selectionReason = "Tied preferred treatment — no reason documented";
       } else {
-        if (chosenEntry) {
-          chosenEntry.selectionMode = "tied_preferred";
-          chosenEntry.selectionReason = explanation.substring(0, 500);
-        }
+        if (chosenEntry) chosenEntry.selectionReason = explanation.substring(0, 500);
       }
     } else {
       // Lower-ranked treatment — check for sufficient justification

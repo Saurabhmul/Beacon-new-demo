@@ -178,9 +178,10 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
 
   if (!completenessResult.passed) {
     const reason = "policy completeness check failed";
+    // internal_action must use the exact semantic marker to prevent agent misinterpretation
     const fallbackOutput = buildFallbackOutput(
-      reason,
-      "SYSTEM_HOLD: policy configuration incomplete — not a customer-driven review"
+      "policy configuration incomplete — not a customer-driven review",
+      "Policy configuration is incomplete; analysis aborted"
     );
     // Build selection trace annotated with policy completeness failure reason
     const trace = buildAnnotatedEmptyTrace(
@@ -216,7 +217,22 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     ...derivedFieldResult.values,
   };
 
-  stageMetrics["fieldAvailability"] = endStage(startStage(), { summary: 1 });
+  // ── Stage 4: Field availability summary ─────────────────────────────────
+  // Computed from resolved source + derived fields BEFORE business field inference
+  const s4 = startStage();
+  const sourceFieldCount = Object.keys(fieldResolution.resolvedValues).length;
+  const derivedFieldCount = Object.keys(derivedFieldResult.values).length;
+  const totalRawKeys = Object.keys(rawCustomerData).length;
+  const unresolvedCount = fieldResolution.unresolvedRawKeys.length;
+  const derivedComputedCount = Object.values(derivedFieldResult.values).filter(v => v !== null && v !== undefined).length;
+  stageMetrics["fieldAvailability"] = endStage(s4, {
+    sourceResolved: sourceFieldCount,
+    sourceUnresolved: unresolvedCount,
+    derivedComputed: derivedComputedCount,
+    derivedTotal: derivedFieldCount,
+    rawInputKeys: totalRawKeys,
+    combinedAvailable: sourceFieldCount + derivedComputedCount,
+  });
 
   // ── Stage 5+6: Business field inference ─────────────────────────────────
   const s5 = startStage();
@@ -301,6 +317,30 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     });
   }
 
+  // Deterministic fallback: escalation flags present — force human review before AI call
+  if (decisionPacket.escalationFlags.length > 0) {
+    const escalationDescriptions = decisionPacket.escalationFlags.map(f => f.description).join("; ");
+    const reason = `escalation flag triggered — human review required`;
+    const fallbackOutput = buildFallbackOutput(
+      reason,
+      `Escalation condition triggered: ${escalationDescriptions}`
+    );
+    return assembleDeterministicFallback({
+      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
+      runFallbackReason: reason,
+      fallbackOutput,
+      stageMetrics,
+      rawCustomerData,
+      selectionTrace: ruleEvalResult.treatmentSelectionTrace,
+      issues: [`Escalation flags: ${escalationDescriptions}`],
+      decisionPacket,
+      fieldResolution,
+      derivedFieldResult,
+      businessFieldResult,
+      ruleEvalResult,
+    });
+  }
+
   // ── Stage 9: Final AI call ───────────────────────────────────────────────
   const s9 = startStage();
   const userPrompt = buildFinalDecisionUserPrompt(decisionPacket, ruleEvalResult);
@@ -359,25 +399,6 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
         validationResult = null;
       }
 
-      // ── Tied-preferred ambiguity → deterministic AGENT_REVIEW ─────────
-      // When AI chose among tied preferred treatments without any traceable reason,
-      // the validator emits a blocking policy_failure. Convert to deterministic fallback.
-      if (
-        validationResult !== null &&
-        validationResult.status === "failed" &&
-        validationResult.failureType === "policy_failure" &&
-        validationResult.blockingIssues.some(i =>
-          i.field === "treatment_eligibility_explanation" &&
-          i.message.toLowerCase().includes("tied preferred")
-        )
-      ) {
-        deterministicFallbackReason = "tied preferred treatments — no traceable reason to choose";
-        finalAIOutput = buildFallbackOutput(
-          deterministicFallbackReason,
-          "Tied preferred treatments with no documented justification; escalating to agent"
-        );
-        validationResult = null;
-      }
     }
   } catch (err) {
     console.error("[orchestrator] Final AI call failed:", err);
