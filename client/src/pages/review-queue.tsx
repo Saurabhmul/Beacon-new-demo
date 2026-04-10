@@ -155,13 +155,23 @@ function validationBadgeInfo(d: Decision, v2: ReturnType<typeof getV2Data>) {
   }
   const { failed, hasWarnings, passed } = resolveValidationState(d, v2);
   if (failed) {
-    return { label: "Failed", variant: "destructive" as const, icon: XCircle };
+    return { label: "Failed", variant: "destructive" as const, icon: XCircle, className: "" };
   }
   if (hasWarnings) {
-    return { label: "Warnings", variant: "secondary" as const, icon: AlertTriangle };
+    return {
+      label: "Warnings",
+      variant: "outline" as const,
+      icon: AlertTriangle,
+      className: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-700",
+    };
   }
   if (passed) {
-    return { label: "Passed", variant: "default" as const, icon: CheckCircle2 };
+    return {
+      label: "Passed",
+      variant: "outline" as const,
+      icon: CheckCircle2,
+      className: "bg-green-100 text-green-800 border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700",
+    };
   }
   return null;
 }
@@ -585,7 +595,7 @@ export default function ReviewQueuePage() {
                         </TableCell>
                         <TableCell>
                           {badgeInfo ? (
-                            <Badge variant={badgeInfo.variant} className="gap-1 text-xs" data-testid={`badge-validation-${d.id}`}>
+                            <Badge variant={badgeInfo.variant} className={`gap-1 text-xs ${badgeInfo.className || ""}`} data-testid={`badge-validation-${d.id}`}>
                               <badgeInfo.icon className="w-3 h-3" />
                               {badgeInfo.label}
                             </Badge>

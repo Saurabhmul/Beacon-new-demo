@@ -132,6 +132,7 @@ function getV2Raw(raw: Record<string, unknown>) {
     recommendedCode: str(finalAI.recommended_treatment_code) || null,
     recommendedName: str(finalAI.recommended_treatment_name) || null,
     requiresAgentReview: !!(finalAI.requires_agent_review),
+    customerName: str(finalAI.customer_name) || null,
     customerSituation: str(finalAI.customer_situation) || null,
     customerSituationConfidenceScore: num(finalAI.customer_situation_confidence_score),
     confidenceScore: num(finalAI.proposed_next_best_confidence_score),
@@ -975,7 +976,10 @@ function V2TopSummary({
             <div className="flex flex-wrap items-center gap-2 mb-1">
               <p className="text-xs uppercase tracking-wider text-muted-foreground">Customer</p>
             </div>
-            <p className="text-base font-mono font-semibold break-all" data-testid="text-customer-guid">{decision.customerGuid}</p>
+            {v2.customerName && (
+              <p className="text-sm font-semibold break-all mb-0.5" data-testid="text-customer-name">{v2.customerName}</p>
+            )}
+            <p className="text-xs font-mono text-muted-foreground break-all" data-testid="text-customer-guid">{decision.customerGuid}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {sysHold && (
