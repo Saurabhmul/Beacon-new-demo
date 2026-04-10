@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { evaluateTreatmentRules } from "../../server/lib/decisioning/rule-evaluator";
-import type { TreatmentWithRules } from "@shared/schema";
+import type { TreatmentWithRules, TreatmentRuleGroupWithRules, TreatmentRule } from "@shared/schema";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ function makeRule(
     rightFieldId: string | null;
     sortOrder: number;
   }>
-) {
+): TreatmentRule {
   return {
     id: opts.id ?? ruleIdSeq++,
     ruleGroupId: opts.ruleGroupId ?? 1,
@@ -37,10 +37,10 @@ function makeRule(
 
 function makeGroup(
   ruleType: string,
-  rules: ReturnType<typeof makeRule>[],
+  rules: TreatmentRule[],
   logicOperator = "AND",
   treatmentId = 1
-) {
+): TreatmentRuleGroupWithRules {
   return {
     id: groupIdSeq++,
     treatmentId,
@@ -54,7 +54,7 @@ function makeGroup(
 
 function makeTreatment(
   name: string,
-  ruleGroups: ReturnType<typeof makeGroup>[],
+  ruleGroups: TreatmentRuleGroupWithRules[],
   priority: string | null = null,
   enabled = true
 ): TreatmentWithRules {
@@ -71,7 +71,7 @@ function makeTreatment(
     draftDerivedFields: null,
     draftBusinessFields: null,
     aiConfidence: null,
-    ruleGroups: ruleGroups as any,
+    ruleGroups,
   };
 }
 
@@ -250,6 +250,34 @@ describe("treatment ranking", () => {
       expect(t.isPreferred).toBe(true);
     }
     expect(result.preferredTreatments.length).toBe(2);
+  });
+
+  it("defaultPriorityMap → prioritySource = 'defaulted' when treatment has no explicit priority", () => {
+    // Treatment has null priority (missing from policy text field)
+    // but a configured default-priority rule provides a value via defaultPriorityMap
+    const t1 = makeTreatment("plan_with_default", [], null);
+    const t2 = makeTreatment("plan_explicit", [], "1");
+    const defaultPriorityMap = { plan_with_default: 2 };
+    const result = evaluateTreatmentRules([t1, t2], {}, defaultPriorityMap);
+    const defaulted = result.rankedEligibleTreatments.find(r => r.code === "plan_with_default");
+    const explicit = result.rankedEligibleTreatments.find(r => r.code === "plan_explicit");
+    // "defaulted" only when the map provides the value — NOT for "missing"
+    expect(defaulted!.prioritySource).toBe("defaulted");
+    expect(defaulted!.priority).toBe(2);
+    expect(defaulted!.reasons[0]).toMatch(/defaulted/i);
+    // explicit treatment is unchanged
+    expect(explicit!.prioritySource).toBe("configured");
+    // Priority 1 < 2 → plan_explicit ranked higher (lower rank number = better)
+    expect(explicit!.rank).toBeLessThanOrEqual(defaulted!.rank);
+  });
+
+  it("defaultPriorityMap does NOT emit 'defaulted' for treatments absent from the map", () => {
+    const t = makeTreatment("plan_no_default", [], null);
+    // Pass a map that has no entry for this treatment
+    const result = evaluateTreatmentRules([t], {}, { other_plan: 5 });
+    const entry = result.rankedEligibleTreatments.find(r => r.code === "plan_no_default");
+    // Should still be "missing" — not "defaulted"
+    expect(entry!.prioritySource).toBe("missing");
   });
 
   it("empty preferredTreatments when no eligible treatments", () => {
@@ -433,11 +461,8 @@ describe("rule integrity – graceful handling", () => {
     expect(() => evaluateTreatmentRules([t], {})).not.toThrow();
   });
 
-  it("handles treatment with null ruleGroups gracefully", () => {
-    const t: TreatmentWithRules = {
-      ...makeTreatment("plan_no_groups", [], "1"),
-      ruleGroups: null as any,
-    };
+  it("handles treatment with empty ruleGroups gracefully (no-ops)", () => {
+    const t = makeTreatment("plan_no_groups", [], "1");
     expect(() => evaluateTreatmentRules([t], {})).not.toThrow();
     const result = evaluateTreatmentRules([t], {});
     expect(result.eligibleTreatments.map(e => e.code)).toContain("plan_no_groups");

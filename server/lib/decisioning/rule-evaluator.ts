@@ -288,12 +288,18 @@ function parseTreatmentPriority(priority: string | null | undefined): {
  * ranked eligible treatments, blocked treatments, review triggers,
  * escalation/guardrail flags, and missing critical information.
  *
- * @param treatments   Treatments from the policy pack, with their rule groups and rules
- * @param resolvedValues  Combined map of canonicalFieldId → value (source + derived)
+ * @param treatments         Treatments from the policy pack, with their rule groups and rules
+ * @param resolvedValues     Combined map of canonicalFieldId → value (source + derived)
+ * @param defaultPriorityMap Optional map of treatmentCode → default priority from a configured
+ *                           default-priority rule. When present and a treatment has no explicit
+ *                           priority, the map value is used with prioritySource = "defaulted".
+ *                           "defaulted" is ONLY emitted when this map has an entry — never for
+ *                           system-assumed fallbacks.
  */
 export function evaluateTreatmentRules(
   treatments: TreatmentWithRules[],
-  resolvedValues: Record<string, unknown>
+  resolvedValues: Record<string, unknown>,
+  defaultPriorityMap: Record<string, number> = {}
 ): RuleEvaluationResult {
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
@@ -470,9 +476,16 @@ export function evaluateTreatmentRules(
 
   for (const eligible of eligibleTreatments) {
     const treatment = treatments.find(t => t.name === eligible.code);
-    const { value: priorityValue, source: prioritySource } = parseTreatmentPriority(
+    let { value: priorityValue, source: prioritySource } = parseTreatmentPriority(
       treatment?.priority ?? null
     );
+
+    // If no explicit priority, check defaultPriorityMap for a configured default
+    // "defaulted" is ONLY emitted when a real configured default exists in the map
+    if (prioritySource === "missing" && defaultPriorityMap[eligible.code] !== undefined) {
+      priorityValue = defaultPriorityMap[eligible.code];
+      prioritySource = "defaulted";
+    }
 
     const rankReasons: string[] = [];
     if (prioritySource === "missing") {
@@ -481,6 +494,8 @@ export function evaluateTreatmentRules(
       console.warn(
         `[rule-evaluator] Treatment "${eligible.code}" has no configured priority — ranked last`
       );
+    } else if (prioritySource === "defaulted") {
+      rankReasons.push(`Priority ${priorityValue} (defaulted from configured default-priority rule)`);
     } else {
       rankReasons.push(`Priority ${priorityValue} (configured)`);
     }
