@@ -28,7 +28,6 @@ export const ENGINE_VERSION = "decision-layer-v2.1";
 // ─── Pipeline result ──────────────────────────────────────────────────────────
 
 export interface DecisionPipelineResult {
-  /** Unique run identifier for idempotency tracking */
   runId: string;
   engineVersion: string;
   policyVersion: string;
@@ -36,7 +35,6 @@ export interface DecisionPipelineResult {
   companyId: string;
   customerGuid: string | null;
 
-  /** Final recommended treatment code: one of the treatment codes, "AGENT_REVIEW", or "NO_ACTION" */
   recommended_treatment_code: string;
   recommended_treatment_name: string;
   requires_agent_review: boolean;
@@ -44,18 +42,32 @@ export interface DecisionPipelineResult {
   internal_action: string | null;
   customer_situation: string | null;
 
-  /** Run-level fallback reason (null for normal AI treatment selections) */
+  /**
+   * Non-null ONLY for deterministic fallback runs:
+   *   "policy completeness check failed"
+   *   "no eligible treatments"
+   *   "required tier 1–3 business field …"
+   *   "AI output could not be parsed after retry"
+   *   "AI call failed"
+   *   "tied preferred treatments — no traceable reason to choose"
+   * Null for all normal AI runs, including when AI returns AGENT_REVIEW naturally.
+   */
   runFallbackReason: string | null;
 
-  /** Full aiRawOutput stored in the decisions table */
+  /**
+   * Decision persistence status:
+   *   "pending"          — normal; ready for agent review
+   *   "failed_validation" — validation layer blocked; excluded from normal review
+   */
+  decisionStatus: "pending" | "failed_validation";
+
   aiRawOutput: Record<string, unknown>;
 
-  /** Legacy-compat fields for the existing DB columns */
   problemDescription: string | null;
   solutionEvidence: string | null;
 }
 
-// ─── Stage timer helper ───────────────────────────────────────────────────────
+// ─── Stage timer ──────────────────────────────────────────────────────────────
 
 function startStage(): { startedAt: string; startMs: number } {
   return { startedAt: new Date().toISOString(), startMs: Date.now() };
@@ -86,7 +98,7 @@ async function callFinalDecisionAI(userPrompt: string): Promise<string> {
 
 // ─── Deterministic fallback ───────────────────────────────────────────────────
 
-function buildFallbackOutput(reason: string, treatmentEligibilityExplanation: string): FinalAIOutput {
+function buildFallbackOutput(reason: string, customerSituation: string): FinalAIOutput {
   return {
     customer_guid: null,
     customer_name: null,
@@ -98,7 +110,7 @@ function buildFallbackOutput(reason: string, treatmentEligibilityExplanation: st
     additional_customer_context: {},
     recent_payment_history_summary: "Not available",
     conversation_summary: "Not available",
-    customer_situation: treatmentEligibilityExplanation,
+    customer_situation: customerSituation,
     customer_situation_confidence_score: 1,
     customer_situation_evidence: [],
     used_fields: [],
@@ -109,7 +121,7 @@ function buildFallbackOutput(reason: string, treatmentEligibilityExplanation: st
     recommended_treatment_name: "Agent Review",
     recommended_treatment_code: "AGENT_REVIEW",
     proposed_next_best_action: "Escalate to human agent for manual review",
-    treatment_eligibility_explanation: treatmentEligibilityExplanation,
+    treatment_eligibility_explanation: customerSituation,
     blocked_conditions: [],
     proposed_next_best_confidence_score: 1,
     proposed_next_best_evidence: reason,
@@ -119,7 +131,7 @@ function buildFallbackOutput(reason: string, treatmentEligibilityExplanation: st
   };
 }
 
-// ─── Main orchestrator ────────────────────────────────────────────────────────
+// ─── Orchestrator args ────────────────────────────────────────────────────────
 
 export interface RunDecisionPipelineArgs {
   companyId: string;
@@ -138,6 +150,8 @@ export interface RunDecisionPipelineArgs {
   };
 }
 
+// ─── Main orchestrator ────────────────────────────────────────────────────────
+
 export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promise<DecisionPipelineResult> {
   const {
     companyId,
@@ -154,96 +168,55 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
   const runId = randomUUID();
   const timestamp = new Date().toISOString();
   const policyVersion = policyPack?.updatedAt?.toISOString() ?? "unknown";
-  const partialStageMetrics: Record<string, StageMetrics> = {};
+  const stageMetrics: Record<string, StageMetrics> = {};
 
   // ── Stage 1: Policy completeness check ──────────────────────────────────
   const s1 = startStage();
   const completenessResult = checkPolicyCompleteness(treatments, catalog);
-  partialStageMetrics["policyCompleteness"] = endStage(s1, {
+  stageMetrics["policyCompleteness"] = endStage(s1, {
     issues: completenessResult.issues.length,
     passed: completenessResult.passed ? 1 : 0,
   });
 
   if (!completenessResult.passed) {
     const fallbackOutput = buildFallbackOutput(
-      "policy completeness check failed",
+      "policy configuration incomplete — not a customer-driven review",
       "SYSTEM_HOLD: policy configuration incomplete — not a customer-driven review"
     );
-
-    const selectionTrace = treatments.filter(t => t.enabled).map((t, i) => ({
-      treatmentCode: t.name,
-      priority: null as number | null,
-      prioritySource: "missing" as const,
-      rank: i + 1,
-      isPreferred: false,
-    }));
-
-    const aiRawOutput = buildAiRawOutput({
-      runId,
-      policyVersion,
-      stageMetrics: partialStageMetrics,
+    return assembleDeterministicFallback({
+      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
       runFallbackReason: "policy completeness check failed",
-      fieldAvailabilitySummary: {},
-      sourceResolutionTrace: {},
-      derivedFieldTrace: {},
-      businessFieldTrace: {},
-      ruleEvaluation: { notes: "not reached — policy completeness check failed" },
-      treatmentSelectionTrace: selectionTrace,
-      decisionBasisSummary: {},
-      decisionPacket: null,
-      finalAIOutput: fallbackOutput,
-      validation: {
-        status: "passed",
-        notes: "deterministic fallback — no AI validation needed",
-        selectionMode: "fallback_agent_review",
-        selectionReason: "Policy completeness check failed before customer analysis began",
-      },
+      fallbackOutput,
+      stageMetrics,
+      rawCustomerData,
+      treatments,
+      selectionTrace: buildEmptySelectionTrace(treatments),
+      issues: completenessResult.issues,
     });
-
-    return {
-      runId,
-      engineVersion: ENGINE_VERSION,
-      policyVersion,
-      timestamp,
-      companyId,
-      customerGuid: extractCustomerGuid(rawCustomerData),
-      recommended_treatment_code: "AGENT_REVIEW",
-      recommended_treatment_name: "Agent Review",
-      requires_agent_review: true,
-      proposed_email_to_customer: "NO_ACTION",
-      internal_action: "SYSTEM_HOLD: policy configuration incomplete — not a customer-driven review",
-      customer_situation: "Policy completeness check failed before customer analysis began",
-      runFallbackReason: "policy completeness check failed",
-      aiRawOutput,
-      problemDescription: "Policy completeness check failed",
-      solutionEvidence: completenessResult.issues.join("; "),
-    };
   }
 
-  // ── Stage 2: Resolve source field values ─────────────────────────────────
+  // ── Stage 2: Resolve source fields ──────────────────────────────────────
   const s2 = startStage();
   const fieldResolution = resolveSourceFields(rawCustomerData, catalog, aliasMap);
-  partialStageMetrics["fieldResolution"] = endStage(s2, {
+  stageMetrics["fieldResolution"] = endStage(s2, {
     resolved: Object.keys(fieldResolution.resolvedValues).length,
     unresolved: fieldResolution.unresolvedRawKeys.length,
   });
 
-  // ── Stage 3: Compute derived fields ──────────────────────────────────────
+  // ── Stage 3: Compute derived fields ─────────────────────────────────────
   const s3 = startStage();
   const derivedFieldResult = evaluateDerivedFields(catalog, fieldResolution.resolvedValues);
-  partialStageMetrics["derivedFields"] = endStage(s3, derivedFieldResult.stageMetrics.counts);
+  stageMetrics["derivedFields"] = endStage(s3, derivedFieldResult.stageMetrics.counts);
 
-  // Combined resolved values: source + derived
   const combinedResolvedValues: Record<string, unknown> = {
     ...fieldResolution.resolvedValues,
     ...derivedFieldResult.values,
   };
 
-  // ── Stage 4: Field availability summary (pre-business-field) ─────────────
-  // (Computed as part of decision packet later — tracked here for metrics)
-  partialStageMetrics["fieldAvailability"] = endStage(startStage(), { summary: 1 });
+  // ── Stage 4: Field availability (tracked in decision packet later) ───────
+  stageMetrics["fieldAvailability"] = endStage(startStage(), { summary: 1 });
 
-  // ── Stage 5 + 6: Business field inference ────────────────────────────────
+  // ── Stage 5+6: Business field inference ─────────────────────────────────
   const s5 = startStage();
   const businessFieldCatalog = catalog.filter(e => e.sourceType === "business_field");
 
@@ -257,103 +230,76 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
       derivedFieldResult.values,
       inferBusinessFieldConfig
     );
-    partialStageMetrics["businessFields"] = endStage(s5, businessFieldResult.stageMetrics.counts);
+    stageMetrics["businessFields"] = endStage(s5, businessFieldResult.stageMetrics.counts);
 
-    // Merge business field values into combined resolved values
     for (const [k, v] of Object.entries(businessFieldResult.values)) {
       if (v !== null && v !== undefined) combinedResolvedValues[k] = v;
     }
   } catch (err) {
     console.warn("[orchestrator] Business field inference failed:", err);
-    partialStageMetrics["businessFields"] = endStage(s5, { error: 1 });
-    // Continue without business fields
+    stageMetrics["businessFields"] = endStage(s5, { error: 1 });
   }
 
-  // Check if business field stage forces AGENT_REVIEW
+  // Business field cap forces deterministic AGENT_REVIEW
   if (businessFieldResult?.requires_agent_review) {
     const bfFallbackReason = businessFieldResult.runFallbackReason ?? "required business fields could not be inferred";
-
-    const emptyRuleResult = {
-      eligibleTreatments: [],
-      rankedEligibleTreatments: [],
-      preferredTreatments: [],
-      blockedTreatments: [],
-      escalationFlags: [],
-      guardrailFlags: [],
-      reviewTriggers: [],
-      missingCriticalInformation: [],
-      treatmentRuleTrace: [],
-      treatmentSelectionTrace: [],
-      stageMetrics: endStage(startStage()),
-    };
-
+    const emptyRuleResult = buildEmptyRuleResult();
     const dp = buildDecisionPacket({
-      runId,
-      policyPack,
-      rawCustomerData,
-      fieldResolution,
-      derivedFieldResult,
-      businessFieldResult,
-      ruleEvalResult: emptyRuleResult,
-      sopText,
+      runId, policyPack, rawCustomerData, fieldResolution,
+      derivedFieldResult, businessFieldResult,
+      ruleEvalResult: emptyRuleResult, sopText,
     });
-
     const fallbackOutput = buildFallbackOutput(bfFallbackReason, bfFallbackReason);
-
-    return buildPipelineResult({
+    return assembleDeterministicFallback({
       runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
-      fallbackOutput,
       runFallbackReason: bfFallbackReason,
+      fallbackOutput,
+      stageMetrics,
+      rawCustomerData,
+      treatments,
       selectionTrace: [],
-      stageMetrics: partialStageMetrics,
+      issues: [],
       decisionPacket: dp,
       fieldResolution,
       derivedFieldResult,
       businessFieldResult,
       ruleEvalResult: emptyRuleResult,
-      validationResult: null,
-      rawCustomerData,
     });
   }
 
-  // ── Stage 7: Evaluate rules + rank eligible treatments ───────────────────
+  // ── Stage 7: Rule evaluation ─────────────────────────────────────────────
   const s7 = startStage();
   const ruleEvalResult = evaluateTreatmentRules(treatments, combinedResolvedValues, defaultPriorityMap);
-  partialStageMetrics["ruleEvaluation"] = endStage(s7, ruleEvalResult.stageMetrics.counts);
+  stageMetrics["ruleEvaluation"] = endStage(s7, ruleEvalResult.stageMetrics.counts);
 
   // ── Stage 8: Assemble decision packet ────────────────────────────────────
   const s8 = startStage();
   const decisionPacket = buildDecisionPacket({
-    runId,
-    policyPack,
-    rawCustomerData,
-    fieldResolution,
-    derivedFieldResult,
-    businessFieldResult,
-    ruleEvalResult,
-    sopText,
+    runId, policyPack, rawCustomerData, fieldResolution,
+    derivedFieldResult, businessFieldResult, ruleEvalResult, sopText,
   });
-  partialStageMetrics["decisionPacket"] = endStage(s8, { built: 1 });
+  stageMetrics["decisionPacket"] = endStage(s8, { built: 1 });
 
-  // ── Deterministic fallback: no eligible treatments ───────────────────────
+  // Deterministic fallback: no eligible treatments
   if (ruleEvalResult.rankedEligibleTreatments.length === 0) {
     const fallbackOutput = buildFallbackOutput(
       "no eligible treatments",
-      "No eligible treatments found for this customer after rule evaluation"
+      "No eligible treatments found after rule evaluation"
     );
-    return buildPipelineResult({
+    return assembleDeterministicFallback({
       runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
-      fallbackOutput,
       runFallbackReason: "no eligible treatments",
+      fallbackOutput,
+      stageMetrics,
+      rawCustomerData,
+      treatments,
       selectionTrace: ruleEvalResult.treatmentSelectionTrace,
-      stageMetrics: partialStageMetrics,
+      issues: [],
       decisionPacket,
       fieldResolution,
       derivedFieldResult,
       businessFieldResult,
       ruleEvalResult,
-      validationResult: null,
-      rawCustomerData,
     });
   }
 
@@ -361,8 +307,9 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
   const s9 = startStage();
   const userPrompt = buildFinalDecisionUserPrompt(decisionPacket, ruleEvalResult);
 
-  let finalAIOutput: FinalAIOutput;
+  let finalAIOutput: FinalAIOutput | null = null;
   let validationResult: DecisionValidationResult | null = null;
+  let deterministicFallbackReason: string | null = null;
   let aiRawText = "";
   let retryCount = 0;
 
@@ -371,133 +318,84 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     const parseResult = parseFinalAIOutput(aiRawText);
 
     if (!parseResult.ok) {
-      // Structural parse failure — retry once
+      // Parse failure → retry once
       retryCount = 1;
-      const retryPrompt = buildFinalDecisionRetryPrompt(parseResult.error);
-      aiRawText = await callFinalDecisionAI(`${userPrompt}\n\n${retryPrompt}`);
-      const retryParseResult = parseFinalAIOutput(aiRawText);
-      if (!retryParseResult.ok) {
-        finalAIOutput = buildFallbackOutput("AI output could not be parsed after retry", "Structural parse failure after retry");
-        validationResult = null;
+      const retryText = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(parseResult.error)}`);
+      const retryParse = parseFinalAIOutput(retryText);
+      if (!retryParse.ok) {
+        // Still unparseable → deterministic fallback
+        deterministicFallbackReason = "AI output could not be parsed after retry";
+        finalAIOutput = buildFallbackOutput(deterministicFallbackReason, "AI response could not be parsed");
       } else {
-        finalAIOutput = retryParseResult.data;
+        aiRawText = retryText;
+        finalAIOutput = retryParse.data;
       }
     } else {
       finalAIOutput = parseResult.data;
     }
 
-    // ── Stage 10: Validate output ─────────────────────────────────────────
-    if (finalAIOutput && finalAIOutput.recommended_treatment_code !== "AGENT_REVIEW") {
-      validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
+    // ── Stage 10: Validate (only when AI returned a treatment — not AGENT_REVIEW) ──
+    if (finalAIOutput && !deterministicFallbackReason) {
+      const outputCode = finalAIOutput.recommended_treatment_code ?? "";
 
-      // ── Stage 11: Retry once on structural failure ────────────────────
-      if (validationResult.status === "failed" && validationResult.failureType === "structural_failure" && retryCount === 0) {
-        retryCount = 1;
-        const issueList = validationResult.blockingIssues.map(i => i.message).join("; ");
-        const retryPrompt = buildFinalDecisionRetryPrompt(issueList);
-        const retryRaw = await callFinalDecisionAI(`${userPrompt}\n\n${retryPrompt}`);
-        const retryParseResult = parseFinalAIOutput(retryRaw);
-        if (retryParseResult.ok) {
-          aiRawText = retryRaw;
-          finalAIOutput = retryParseResult.data;
-          validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
+      if (outputCode !== "AGENT_REVIEW") {
+        validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
+
+        // ── Stage 11: Retry once on structural failure ──────────────────────
+        if (validationResult.status === "failed" && validationResult.failureType === "structural_failure" && retryCount === 0) {
+          retryCount = 1;
+          const issueList = validationResult.blockingIssues.map(i => i.message).join("; ");
+          const retryRaw = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(issueList)}`);
+          const retryParse = parseFinalAIOutput(retryRaw);
+          if (retryParse.ok) {
+            aiRawText = retryRaw;
+            finalAIOutput = retryParse.data;
+            validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
+          }
+        }
+
+        // ── Tie-ambiguity: convert to deterministic AGENT_REVIEW fallback ──
+        const hasTieAmbiguity = validationResult.blockingIssues.some(i => i._marker === "TIE_AMBIGUITY");
+        if (hasTieAmbiguity) {
+          deterministicFallbackReason = "tied preferred treatments — no traceable reason to choose";
+          finalAIOutput = buildFallbackOutput(
+            deterministicFallbackReason,
+            "Tied preferred treatments with no traceable justification; escalating to agent"
+          );
+          // Clear the validation result since we're now using a deterministic fallback
+          validationResult = null;
         }
       }
-
-      // After validation, if still failed for non-structural reasons → failed_validation record
-      if (validationResult.status === "failed") {
-        // Don't apply deterministic fallback for policy/guardrail/evidence failures
-        // The failed_validation status is surfaced in aiRawOutput
-      }
+      // Note: when AI returns AGENT_REVIEW, no validation is run — it's a natural run-level outcome
     }
-
   } catch (err) {
     console.error("[orchestrator] Final AI call failed:", err);
-    finalAIOutput = buildFallbackOutput(
-      "AI call failed: " + String(err).substring(0, 100),
-      "AI call failed during final decision stage"
-    );
+    deterministicFallbackReason = "AI call failed: " + String(err).substring(0, 100);
+    finalAIOutput = buildFallbackOutput(deterministicFallbackReason, "AI call failed during final decision stage");
   }
 
-  partialStageMetrics["finalDecision"] = endStage(s9, { retryCount });
+  stageMetrics["finalDecision"] = endStage(s9, { retryCount });
 
-  return buildPipelineResult({
-    runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
-    fallbackOutput: null,
-    finalAIOutputOverride: finalAIOutput!,
-    runFallbackReason: validationResult?.runFallbackReason ?? null,
-    selectionTrace: validationResult?.updatedSelectionTrace ?? ruleEvalResult.treatmentSelectionTrace,
-    stageMetrics: partialStageMetrics,
-    decisionPacket,
-    fieldResolution,
-    derivedFieldResult,
-    businessFieldResult,
-    ruleEvalResult,
-    validationResult,
-    rawCustomerData,
-    aiRawText,
-  });
-}
-
-// ─── Result assembler ─────────────────────────────────────────────────────────
-
-interface BuildResultArgs {
-  runId: string;
-  engineVersion: string;
-  policyVersion: string;
-  timestamp: string;
-  companyId: string;
-  fallbackOutput: FinalAIOutput | null;
-  finalAIOutputOverride?: FinalAIOutput;
-  runFallbackReason: string | null;
-  selectionTrace: Array<{
-    treatmentCode: string;
-    priority: number | null;
-    prioritySource: "configured" | "defaulted" | "missing";
-    rank: number;
-    isPreferred: boolean;
-    selectionMode?: string;
-    selectionReason?: string;
-  }>;
-  stageMetrics: Record<string, StageMetrics>;
-  decisionPacket: DecisionPacket;
-  fieldResolution: { resolvedValues: Record<string, unknown>; traces: Record<string, unknown> };
-  derivedFieldResult: { values: Record<string, unknown>; traces: Record<string, unknown>; stageMetrics: StageMetrics };
-  businessFieldResult: { values: Record<string, unknown>; traces: Record<string, unknown>; stageMetrics: StageMetrics } | null;
-  ruleEvalResult: {
-    eligibleTreatments: Array<{ code: string; name: string }>;
-    rankedEligibleTreatments: unknown[];
-    blockedTreatments: unknown[];
-    treatmentRuleTrace: unknown[];
-    stageMetrics: StageMetrics;
-  };
-  validationResult: DecisionValidationResult | null;
-  rawCustomerData: Record<string, unknown>;
-  aiRawText?: string;
-}
-
-function buildPipelineResult(args: BuildResultArgs): DecisionPipelineResult {
-  const {
-    runId, engineVersion, policyVersion, timestamp, companyId,
-    fallbackOutput, finalAIOutputOverride, runFallbackReason, selectionTrace,
-    stageMetrics, decisionPacket, fieldResolution, derivedFieldResult,
-    businessFieldResult, ruleEvalResult, validationResult, rawCustomerData, aiRawText,
-  } = args;
-
-  const output = fallbackOutput ?? finalAIOutputOverride!;
-  const customerGuid = output.customer_guid ?? decisionPacket.customer_guid ?? extractCustomerGuid(rawCustomerData);
-
-  // Determine status for the decisions record
-  let decisionStatus = "pending";
-  if (validationResult?.status === "failed") {
+  // ── Determine decision status ────────────────────────────────────────────
+  // Only failed_validation for non-structural validation failures (after retry attempts)
+  let decisionStatus: "pending" | "failed_validation" = "pending";
+  if (
+    validationResult?.status === "failed" &&
+    validationResult.failureType !== undefined &&
+    !deterministicFallbackReason
+  ) {
     decisionStatus = "failed_validation";
   }
+
+  const output = finalAIOutput!;
+  const customerGuid = output.customer_guid ?? decisionPacket.customer_guid ?? extractCustomerGuid(rawCustomerData);
+  const selectionTrace = validationResult?.updatedSelectionTrace ?? ruleEvalResult.treatmentSelectionTrace;
 
   const aiRawOutput = buildAiRawOutput({
     runId,
     policyVersion,
     stageMetrics,
-    runFallbackReason: runFallbackReason ?? (output.recommended_treatment_code === "AGENT_REVIEW" ? (output.treatment_eligibility_explanation ?? null) : null),
+    runFallbackReason: deterministicFallbackReason,
     fieldAvailabilitySummary: decisionPacket.fieldAvailabilitySummary,
     sourceResolutionTrace: fieldResolution.traces,
     derivedFieldTrace: derivedFieldResult.traces,
@@ -536,7 +434,7 @@ function buildPipelineResult(args: BuildResultArgs): DecisionPipelineResult {
 
   return {
     runId,
-    engineVersion,
+    engineVersion: ENGINE_VERSION,
     policyVersion,
     timestamp,
     companyId,
@@ -547,10 +445,109 @@ function buildPipelineResult(args: BuildResultArgs): DecisionPipelineResult {
     proposed_email_to_customer: output.proposed_email_to_customer ?? "NO_ACTION",
     internal_action: output.internal_action ?? null,
     customer_situation: output.customer_situation ?? null,
-    runFallbackReason: runFallbackReason,
+    runFallbackReason: deterministicFallbackReason,
+    decisionStatus,
     aiRawOutput,
     problemDescription: output.customer_situation ?? null,
     solutionEvidence: output.proposed_next_best_evidence ?? null,
+  };
+}
+
+// ─── Deterministic fallback assembler ────────────────────────────────────────
+
+interface DeterministicFallbackArgs {
+  runId: string;
+  engineVersion: string;
+  policyVersion: string;
+  timestamp: string;
+  companyId: string;
+  runFallbackReason: string;
+  fallbackOutput: FinalAIOutput;
+  stageMetrics: Record<string, StageMetrics>;
+  rawCustomerData: Record<string, unknown>;
+  treatments: TreatmentWithRules[];
+  selectionTrace: Array<TreatmentSelectionTraceEntry & { [k: string]: unknown }>;
+  issues: string[];
+  decisionPacket?: DecisionPacket;
+  fieldResolution?: { resolvedValues: Record<string, unknown>; traces: Record<string, unknown> };
+  derivedFieldResult?: { values: Record<string, unknown>; traces: Record<string, unknown>; stageMetrics: StageMetrics };
+  businessFieldResult?: { values: Record<string, unknown>; traces: Record<string, unknown>; stageMetrics: StageMetrics } | null;
+  ruleEvalResult?: {
+    eligibleTreatments: Array<{ code: string; name: string }>;
+    rankedEligibleTreatments: unknown[];
+    blockedTreatments: unknown[];
+    treatmentRuleTrace: unknown[];
+    stageMetrics: StageMetrics;
+  };
+}
+
+import type { TreatmentSelectionTraceEntry } from "./types";
+
+function assembleDeterministicFallback(args: DeterministicFallbackArgs): DecisionPipelineResult {
+  const {
+    runId, engineVersion, policyVersion, timestamp, companyId,
+    runFallbackReason, fallbackOutput, stageMetrics, rawCustomerData,
+    selectionTrace, issues, decisionPacket, fieldResolution, derivedFieldResult,
+    businessFieldResult, ruleEvalResult,
+  } = args;
+
+  const customerGuid = extractCustomerGuid(rawCustomerData);
+  const dp = decisionPacket;
+
+  const aiRawOutput = buildAiRawOutput({
+    runId,
+    policyVersion,
+    stageMetrics,
+    runFallbackReason,
+    fieldAvailabilitySummary: dp?.fieldAvailabilitySummary ?? {},
+    sourceResolutionTrace: fieldResolution?.traces ?? {},
+    derivedFieldTrace: derivedFieldResult?.traces ?? {},
+    businessFieldTrace: businessFieldResult?.traces ?? {},
+    ruleEvaluation: ruleEvalResult
+      ? {
+          eligibleCount: ruleEvalResult.eligibleTreatments.length,
+          blockedCount: ruleEvalResult.blockedTreatments.length,
+          treatmentRuleTrace: ruleEvalResult.treatmentRuleTrace,
+          stageMetrics: ruleEvalResult.stageMetrics,
+        }
+      : { notes: "not reached — deterministic fallback triggered before rule evaluation", issues },
+    treatmentSelectionTrace: selectionTrace,
+    decisionBasisSummary: dp?.decisionBasisSummary ?? {},
+    decisionPacket: dp ? {
+      runId: dp.runId,
+      engineVersion: dp.engineVersion,
+      policyVersion: dp.policyVersion,
+      customer_guid: dp.customer_guid,
+      rankedEligibleTreatments: dp.rankedEligibleTreatments,
+      preferredTreatments: dp.preferredTreatments,
+      blockedTreatments: dp.blockedTreatments,
+      escalationFlags: dp.escalationFlags,
+      guardrailFlags: dp.guardrailFlags,
+      reviewTriggers: dp.reviewTriggers,
+      missingCriticalInformation: dp.missingCriticalInformation,
+    } : null,
+    finalAIOutput: fallbackOutput,
+    validation: null,
+  });
+
+  return {
+    runId,
+    engineVersion,
+    policyVersion,
+    timestamp,
+    companyId,
+    customerGuid,
+    recommended_treatment_code: "AGENT_REVIEW",
+    recommended_treatment_name: "Agent Review",
+    requires_agent_review: true,
+    proposed_email_to_customer: "NO_ACTION",
+    internal_action: fallbackOutput.internal_action ?? null,
+    customer_situation: fallbackOutput.customer_situation ?? null,
+    runFallbackReason,
+    decisionStatus: "pending",
+    aiRawOutput,
+    problemDescription: fallbackOutput.customer_situation ?? null,
+    solutionEvidence: null,
   };
 }
 
@@ -598,6 +595,32 @@ function buildAiRawOutput(args: {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function buildEmptySelectionTrace(treatments: TreatmentWithRules[]) {
+  return treatments.filter(t => t.enabled).map((t, i) => ({
+    treatmentCode: t.name,
+    priority: null as number | null,
+    prioritySource: "missing" as const,
+    rank: i + 1,
+    isPreferred: false,
+  }));
+}
+
+function buildEmptyRuleResult() {
+  return {
+    eligibleTreatments: [],
+    rankedEligibleTreatments: [],
+    preferredTreatments: [],
+    blockedTreatments: [],
+    escalationFlags: [],
+    guardrailFlags: [],
+    reviewTriggers: [],
+    missingCriticalInformation: [],
+    treatmentRuleTrace: [],
+    treatmentSelectionTrace: [],
+    stageMetrics: endStage(startStage()),
+  };
+}
 
 function extractCustomerGuid(rawData: Record<string, unknown>): string | null {
   const v = rawData["customer / account / loan id"] ?? rawData.customer_id ?? rawData.account_id ?? rawData.customer_guid;

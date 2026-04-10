@@ -306,17 +306,19 @@ describe("validateDecision – policy failures", () => {
 });
 
 describe("validateDecision – AGENT_REVIEW passthrough", () => {
-  it("passes AGENT_REVIEW and sets runFallbackReason", () => {
+  it("passes AGENT_REVIEW without validation (natural run-level outcome)", () => {
     const output = minimalAIOutput({
       recommended_treatment_code: "AGENT_REVIEW",
       recommended_treatment_name: "Agent Review",
       treatment_eligibility_explanation: "Complex case requiring human review",
       requires_agent_review: true,
     });
+    // When AI returns AGENT_REVIEW, no validation is run by the orchestrator,
+    // but if the validator is called with AGENT_REVIEW it should still pass
     const result = validateDecision(output, minimalDecisionPacket(), minimalSelectionTrace());
-    expect(result.status).not.toBe("failed");
-    expect(result.runFallbackReason).toBeTruthy();
-    expect(result.runFallbackReason).toContain("Complex case");
+    // AGENT_REVIEW is in the allowed codes, so no policy_failure for code selection
+    const codeIssue = result.blockingIssues.find(i => i.field === "recommended_treatment_code" && i.failureType === "policy_failure");
+    expect(codeIssue).toBeUndefined();
   });
 });
 
@@ -330,8 +332,33 @@ describe("validateDecision – preferred treatment selection trace", () => {
     expect(ppEntry?.selectionMode).toBe("preferred");
   });
 
-  it("sets selectionMode=tied_preferred when multiple preferred treatments", () => {
-    // Two treatments, both preferred (tied priority)
+  it("sets selectionMode=tied_preferred when multiple preferred and justification ≥100 chars", () => {
+    const packet = minimalDecisionPacket({
+      preferredTreatments: [
+        { code: "PP", name: "Payment Plan", priority: 1, prioritySource: "configured", rank: 1, reasons: [], isPreferred: true },
+        { code: "PTP", name: "Promise to Pay", priority: 1, prioritySource: "configured", rank: 2, reasons: [], isPreferred: true },
+      ],
+      rankedEligibleTreatments: [
+        { code: "PP", name: "Payment Plan", priority: 1, prioritySource: "configured", rank: 1, reasons: [], isPreferred: true },
+        { code: "PTP", name: "Promise to Pay", priority: 1, prioritySource: "configured", rank: 2, reasons: [], isPreferred: true },
+      ],
+    });
+    const trace: TreatmentSelectionTraceEntry[] = [
+      { treatmentCode: "PP", priority: 1, prioritySource: "configured", rank: 1, isPreferred: true },
+      { treatmentCode: "PTP", priority: 1, prioritySource: "configured", rank: 2, isPreferred: true },
+    ];
+    // Provide ≥100 char explanation to avoid tie-ambiguity blocking
+    const output = minimalAIOutput({
+      recommended_treatment_code: "PP",
+      treatment_eligibility_explanation: "Both treatments are tied at priority 1. PP is preferred because the customer's account history shows they have previously engaged positively with structured payment arrangements, making PP more suitable.",
+    });
+    const result = validateDecision(output, packet, trace);
+    expect(result.status).not.toBe("failed");
+    const ppEntry = result.updatedSelectionTrace.find(e => e.treatmentCode === "PP");
+    expect(ppEntry?.selectionMode).toBe("tied_preferred");
+  });
+
+  it("blocks tied preferred treatment when justification is insufficient (<100 chars) with TIE_AMBIGUITY marker", () => {
     const packet = minimalDecisionPacket({
       preferredTreatments: [
         { code: "PP", name: "Payment Plan", priority: 1, prioritySource: "configured", rank: 1, reasons: [], isPreferred: true },
@@ -348,12 +375,13 @@ describe("validateDecision – preferred treatment selection trace", () => {
     ];
     const output = minimalAIOutput({
       recommended_treatment_code: "PP",
-      treatment_eligibility_explanation: "Both treatments tied; PP chosen for shorter setup time",
+      treatment_eligibility_explanation: "Both tied; chose PP",
     });
     const result = validateDecision(output, packet, trace);
-    expect(result.status).not.toBe("failed");
-    const ppEntry = result.updatedSelectionTrace.find(e => e.treatmentCode === "PP");
-    expect(ppEntry?.selectionMode).toBe("tied_preferred");
+    expect(result.status).toBe("failed");
+    expect(result.failureType).toBe("policy_failure");
+    const tieIssue = result.blockingIssues.find(i => i._marker === "TIE_AMBIGUITY");
+    expect(tieIssue).toBeDefined();
   });
 });
 

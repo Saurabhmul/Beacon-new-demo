@@ -2340,7 +2340,7 @@ export async function registerRoutes(
                 noOfLatestPaymentsFailed: null,
                 proposedEmailToCustomer: result.proposed_email_to_customer,
                 aiRawOutput: result.aiRawOutput,
-                status: "pending",
+                status: result.decisionStatus,
               });
 
               completed++;
