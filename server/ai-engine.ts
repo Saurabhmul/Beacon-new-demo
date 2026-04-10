@@ -10,6 +10,9 @@ const ai = new GoogleGenAI({
   },
 });
 
+/** Shared Gemini AI client — import this rather than constructing a new instance. */
+export const geminiClient = ai;
+
 export interface AIDecisionOutput {
   customer_guid: string;
   payment_history: string;

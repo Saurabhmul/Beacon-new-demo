@@ -188,6 +188,57 @@ export interface RuleEvaluationResult {
   stageMetrics: StageMetrics;
 }
 
+// ─── Business Field Inference ─────────────────────────────────────────────────
+
+/**
+ * Tier classification for business field inference ordering:
+ *   1 = referenced by hard_blocker rules (most critical)
+ *   2 = referenced by escalation / review_trigger rules
+ *   3 = referenced by eligibility rules
+ *   4 = optional / enrichment (only inferred when inferTier4Fields is enabled
+ *       or when required by another inferred field)
+ */
+export type BusinessFieldTier = 1 | 2 | 3 | 4;
+
+export interface BusinessFieldTrace {
+  fieldId: string;
+  fieldLabel: string;
+  tier: BusinessFieldTier;
+  /** Position within the final ordered inference list (0-indexed). */
+  dependencyPosition: number;
+  value: unknown;
+  confidence: number | null;
+  rationale: string | null;
+  nullReason: string | null;
+  evidence: string[];
+  retryCount: number;
+  /** True if any prior-inferred business field values were included in the prompt context. */
+  priorBusinessFieldsReferenced: boolean;
+  /** Raw JSON string returned by the model (for audit). */
+  rawAiResponse: string | null;
+  durationMs: number;
+  /** Set when payment or conversation history was truncated before prompting. */
+  truncationWarning?: string;
+  /** Flagged when confidence > 0.8 but only a single weak evidence item was present. */
+  highConfidenceSingleEvidenceWarning?: boolean;
+}
+
+export interface BusinessFieldResult {
+  /** Inferred field values keyed by canonical field ID. */
+  values: Record<string, unknown>;
+  /** Per-field trace records. */
+  traces: Record<string, BusinessFieldTrace>;
+  /** True when the engine determined the run must be routed to AGENT_REVIEW. */
+  requires_agent_review: boolean;
+  /** Human-readable reason for agent review routing (only set when requires_agent_review = true). */
+  agentReviewReason?: string;
+  /** True when tier-4 fields were skipped because the cap would have been exceeded. */
+  tier4Skipped: boolean;
+  /** Set when tier-4 or other non-critical fields were omitted due to the cap. */
+  capWarning?: string;
+  stageMetrics: StageMetrics;
+}
+
 // ─── Validation ───────────────────────────────────────────────────────────────
 
 export type ValidationStatus = "valid" | "failed_validation" | "agent_review";
@@ -241,6 +292,7 @@ export interface DecisionPacket {
   // Pipeline traces
   sourceResolution: Record<string, SourceResolutionTrace>;
   derivedFields: DerivedFieldResult;
+  businessFields: BusinessFieldResult | null;
   ruleEvaluation: RuleEvaluationResult;
   validation: ValidationResult | null;
 

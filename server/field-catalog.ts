@@ -15,6 +15,12 @@ export interface CatalogEntry {
   aiGenerated?: boolean | null;
   createdBy?: string | null;
   sampleValues?: string[] | null;
+  /**
+   * IDs of other business fields this field depends on.
+   * Used to determine inference order within a tier.
+   * Optional: when absent, no ordering constraint is applied.
+   */
+  dependsOnBusinessFields?: string[] | null;
 }
 
 export function normalizeFieldLabel(label: string): string {
