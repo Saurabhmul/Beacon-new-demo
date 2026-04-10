@@ -150,7 +150,40 @@ export interface RunDecisionPipelineArgs {
 
 // ─── Main orchestrator ────────────────────────────────────────────────────────
 
+/**
+ * Public entry point. Wraps the main pipeline with a partial-failure catcher:
+ * if any pre-AI stage throws unexpectedly, a deterministic AGENT_REVIEW artifact
+ * is returned with the completed stage metrics rather than propagating the error.
+ */
 export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promise<DecisionPipelineResult> {
+  const stageMetricsRef: { current: Record<string, StageMetrics> } = { current: {} };
+  try {
+    return await _runDecisionPipelineInternal(args, stageMetricsRef);
+  } catch (unexpectedErr) {
+    console.error("[orchestrator] Unexpected pipeline error:", unexpectedErr);
+    const runId = randomUUID();
+    const policyVersion = args.policyPack?.updatedAt?.toISOString() ?? "unknown";
+    const reason = `unexpected pipeline error: ${String(unexpectedErr).substring(0, 200)}`;
+    const fallbackOutput = buildFallbackOutput(reason, "Unexpected internal pipeline error");
+    const emptyRuleResult = buildEmptyRuleResult();
+    return assembleDeterministicFallback({
+      runId, engineVersion: ENGINE_VERSION, policyVersion,
+      timestamp: new Date().toISOString(), companyId: args.companyId,
+      runFallbackReason: reason,
+      fallbackOutput,
+      stageMetrics: stageMetricsRef.current,
+      rawCustomerData: args.rawCustomerData,
+      selectionTrace: [],
+      issues: [String(unexpectedErr)],
+      ruleEvalResult: emptyRuleResult,
+    });
+  }
+}
+
+async function _runDecisionPipelineInternal(
+  args: RunDecisionPipelineArgs,
+  stageMetricsRef: { current: Record<string, StageMetrics> }
+): Promise<DecisionPipelineResult> {
   const {
     companyId,
     rawCustomerData,
@@ -167,6 +200,8 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
   const timestamp = new Date().toISOString();
   const policyVersion = policyPack?.updatedAt?.toISOString() ?? "unknown";
   const stageMetrics: Record<string, StageMetrics> = {};
+  // Sync to outer ref so the partial-failure wrapper can access partial metrics
+  stageMetricsRef.current = stageMetrics;
 
   // ── Stage 1: Policy completeness check ──────────────────────────────────
   const s1 = startStage();
@@ -265,7 +300,7 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     const dp = buildDecisionPacket({
       runId, policyPack, rawCustomerData, fieldResolution,
       derivedFieldResult, businessFieldResult,
-      ruleEvalResult: emptyRuleResult, sopText,
+      ruleEvalResult: emptyRuleResult, sopText, treatments,
     });
     const fallbackOutput = buildFallbackOutput(bfFallbackReason, bfFallbackReason);
     return assembleDeterministicFallback({
@@ -293,7 +328,7 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
   const s8 = startStage();
   const decisionPacket = buildDecisionPacket({
     runId, policyPack, rawCustomerData, fieldResolution,
-    derivedFieldResult, businessFieldResult, ruleEvalResult, sopText,
+    derivedFieldResult, businessFieldResult, ruleEvalResult, sopText, treatments,
   });
   stageMetrics["decisionPacket"] = endStage(s8, { built: 1 });
 
@@ -309,55 +344,6 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
       rawCustomerData,
       selectionTrace: ruleEvalResult.treatmentSelectionTrace,
       issues: [],
-      decisionPacket,
-      fieldResolution,
-      derivedFieldResult,
-      businessFieldResult,
-      ruleEvalResult,
-    });
-  }
-
-  // Deterministic fallback: escalation flags present — requires human review before AI
-  // Per spec: escalation flags are a defined deterministic fallback trigger.
-  if (decisionPacket.escalationFlags.length > 0) {
-    const escalationDescriptions = decisionPacket.escalationFlags.map(f => f.description).join("; ");
-    const reason = "escalation flag triggered — human review required";
-    const fallbackOutput = buildFallbackOutput(
-      reason,
-      `Escalation condition(s) triggered: ${escalationDescriptions}`
-    );
-    return assembleDeterministicFallback({
-      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
-      runFallbackReason: reason,
-      fallbackOutput,
-      stageMetrics,
-      rawCustomerData,
-      selectionTrace: ruleEvalResult.treatmentSelectionTrace,
-      issues: [`Escalation flags: ${escalationDescriptions}`],
-      decisionPacket,
-      fieldResolution,
-      derivedFieldResult,
-      businessFieldResult,
-      ruleEvalResult,
-    });
-  }
-
-  // Deterministic fallback: critical missing information — AI cannot make reliable decision
-  if (decisionPacket.missingCriticalInformation.length > 0) {
-    const missingDescriptions = decisionPacket.missingCriticalInformation.map(m => m.fieldId).join(", ");
-    const reason = "critical information missing — AI decision unreliable";
-    const fallbackOutput = buildFallbackOutput(
-      reason,
-      `Critical fields missing: ${missingDescriptions}`
-    );
-    return assembleDeterministicFallback({
-      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
-      runFallbackReason: reason,
-      fallbackOutput,
-      stageMetrics,
-      rawCustomerData,
-      selectionTrace: ruleEvalResult.treatmentSelectionTrace,
-      issues: [`Missing critical fields: ${missingDescriptions}`],
       decisionPacket,
       fieldResolution,
       derivedFieldResult,
@@ -444,6 +430,29 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     }
   }
   stageMetrics["validationRetry"] = endStage(s11, { retried: validationRetryCount });
+
+  // ── Stage 12: Tie-ambiguity deterministic fallback ───────────────────────
+  // If the AI chose among tied preferred treatments without any traceable reason,
+  // the validator emits a blocking policy_failure. Convert to deterministic AGENT_REVIEW.
+  if (
+    validationResult !== null &&
+    validationResult.status === "failed" &&
+    validationResult.failureType === "policy_failure" &&
+    validationResult.blockingIssues.some(i =>
+      i.field === "treatment_eligibility_explanation" &&
+      i.message.toLowerCase().includes("tied preferred")
+    )
+  ) {
+    deterministicFallbackReason = "tied preferred treatments — no traceable reason to choose";
+    finalAIOutput = buildFallbackOutput(
+      deterministicFallbackReason,
+      "Tied preferred treatments with no documented justification; escalating to agent"
+    );
+    validationResult = null;
+  }
+  stageMetrics["tieAmbiguity"] = endStage(startStage(), {
+    tieFallback: deterministicFallbackReason?.includes("tied preferred") ? 1 : 0,
+  });
 
   // ── Determine decision status ────────────────────────────────────────────
   // failed_validation: policy/guardrail/evidence failures that are not structural

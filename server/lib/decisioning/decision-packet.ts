@@ -9,7 +9,7 @@ import type {
   TreatmentSelectionTraceEntry,
   RankedTreatment,
 } from "./types";
-import type { PolicyPack } from "@shared/schema";
+import type { PolicyPack, TreatmentWithRules } from "@shared/schema";
 
 // ─── Communication types ───────────────────────────────────────────────────────
 
@@ -111,6 +111,8 @@ interface BuildDecisionPacketArgs {
   businessFieldResult: BusinessFieldResult | null;
   ruleEvalResult: RuleEvaluationResult;
   sopText?: string | null;
+  /** Treatment records with full config (used for policy-config-backed communication compilation) */
+  treatments?: TreatmentWithRules[];
 }
 
 /** Extract a numeric value from resolved source fields by multiple possible key aliases */
@@ -135,67 +137,74 @@ function extractString(values: Record<string, unknown>, ...keys: string[]): stri
 }
 
 /**
- * Compile communication guidelines from SOP text.
- * Parses out sections if present; otherwise returns structured defaults.
+ * Compile communication guidelines from policy configuration.
+ *
+ * Primary source: structured treatment `tone` fields and policy pack metadata.
+ * Secondary source: SOP text structured-section parsing (bullet lists only).
+ *
+ * `communicationSource` is "policy_config" when structured data drives the output,
+ * "default_empty" only when neither source yields any content.
  */
-function compileCommunicationFromSop(sopText: string | null | undefined): CommunicationSection {
-  if (!sopText || !sopText.trim()) {
-    return {
-      guidelines: {
-        communicationGuidelines: [],
-        emailGuidelines: [],
-        emailWhenToUse: [],
-        emailWhenNotToUse: [],
-        toneGuidance: [],
-      },
-      communicationSource: "default_empty",
-    };
-  }
-
-  // Extract any explicit communication sections from SOP text
+function compileCommunicationFromPolicy(
+  sopText: string | null | undefined,
+  treatments?: TreatmentWithRules[]
+): CommunicationSection {
   const communicationGuidelines: string[] = [];
   const emailGuidelines: string[] = [];
   const emailWhenToUse: string[] = [];
   const emailWhenNotToUse: string[] = [];
   const toneGuidance: string[] = [];
 
-  const lines = sopText.split("\n");
-  let currentSection: string | null = null;
+  // ── Primary: policy-config treatment tone fields (structured DB data) ──────
+  if (treatments && treatments.length > 0) {
+    const tones = treatments
+      .map(t => t.tone)
+      .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+    const uniqueTones = [...new Set(tones.map(t => t.trim()))];
+    for (const tone of uniqueTones) {
+      toneGuidance.push(`Treatment tone: ${tone}`);
+    }
+  }
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
+  // ── Secondary: SOP text structured-section parsing (bullet-list sections) ─
+  if (sopText && sopText.trim()) {
+    const lines = sopText.split("\n");
+    let currentSection: string | null = null;
 
-    const lower = line.toLowerCase();
-    if (lower.includes("communication guideline") || lower.includes("outreach rule")) {
-      currentSection = "comm";
-      continue;
-    }
-    if (lower.includes("email guideline") || lower.includes("email rule")) {
-      currentSection = "email";
-      continue;
-    }
-    if (lower.includes("when to send email") || lower.includes("send email when") || lower.includes("email when to use")) {
-      currentSection = "emailWhen";
-      continue;
-    }
-    if (lower.includes("do not send email") || lower.includes("email when not") || lower.includes("no email when")) {
-      currentSection = "emailWhenNot";
-      continue;
-    }
-    if (lower.includes("tone") || lower.includes("communication tone")) {
-      currentSection = "tone";
-      continue;
-    }
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
 
-    const bulletContent = line.replace(/^[-•*]\s*/, "").replace(/^\d+\.\s*/, "");
-    if (bulletContent && (line.startsWith("-") || line.startsWith("•") || line.startsWith("*") || /^\d+\./.test(line))) {
-      switch (currentSection) {
-        case "comm": communicationGuidelines.push(bulletContent); break;
-        case "email": emailGuidelines.push(bulletContent); break;
-        case "emailWhen": emailWhenToUse.push(bulletContent); break;
-        case "emailWhenNot": emailWhenNotToUse.push(bulletContent); break;
-        case "tone": toneGuidance.push(bulletContent); break;
+      const lower = line.toLowerCase();
+      // Section header detection (only for explicit structural headings)
+      if (/^#+\s/.test(line) || (line.endsWith(":") && line.length < 80)) {
+        if (lower.includes("communication guideline") || lower.includes("outreach rule")) {
+          currentSection = "comm";
+        } else if (lower.includes("email guideline") || lower.includes("email rule")) {
+          currentSection = "email";
+        } else if (lower.includes("when to send email") || lower.includes("email when to use")) {
+          currentSection = "emailWhen";
+        } else if (lower.includes("do not send email") || lower.includes("email when not") || lower.includes("no email when")) {
+          currentSection = "emailWhenNot";
+        } else if (lower.includes("tone") || lower.includes("communication tone")) {
+          currentSection = "tone";
+        }
+        continue;
+      }
+
+      const bulletContent = line.replace(/^[-•*]\s*/, "").replace(/^\d+\.\s*/, "");
+      if (
+        bulletContent &&
+        currentSection &&
+        (line.startsWith("-") || line.startsWith("•") || line.startsWith("*") || /^\d+\./.test(line))
+      ) {
+        switch (currentSection) {
+          case "comm": communicationGuidelines.push(bulletContent); break;
+          case "email": emailGuidelines.push(bulletContent); break;
+          case "emailWhen": emailWhenToUse.push(bulletContent); break;
+          case "emailWhenNot": emailWhenNotToUse.push(bulletContent); break;
+          case "tone": toneGuidance.push(bulletContent); break;
+        }
       }
     }
   }
@@ -270,6 +279,7 @@ export function buildDecisionPacket(args: BuildDecisionPacketArgs): DecisionPack
     businessFieldResult,
     ruleEvalResult,
     sopText,
+    treatments,
   } = args;
 
   const rv = fieldResolution.resolvedValues;
@@ -335,7 +345,7 @@ export function buildDecisionPacket(args: BuildDecisionPacketArgs): DecisionPack
   }
 
   // ── Communication ────────────────────────────────────────────────────────
-  const communication = compileCommunicationFromSop(sopText);
+  const communication = compileCommunicationFromPolicy(sopText, treatments);
 
   // ── Derived / business field values (non-null) ───────────────────────────
   const derivedFields: Record<string, unknown> = {};

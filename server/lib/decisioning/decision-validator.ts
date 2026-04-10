@@ -69,21 +69,34 @@ const FALLBACK_CODES = new Set(["AGENT_REVIEW", "NO_ACTION"]);
 
 /**
  * All keys required by the full output schema — absence of any is a structural_failure.
+ * These match every field in the JSON template from the system prompt.
  */
 const REQUIRED_ALL_KEYS: Array<keyof FinalAIOutput> = [
+  // Narrative summaries
+  "recent_payment_history_summary",
+  "conversation_summary",
+  // Customer situation
+  "customer_situation",
+  "customer_situation_confidence_score",
+  "customer_situation_evidence",
+  // Reasoning
+  "used_fields",
+  "used_rules",
+  "missing_information",
+  "key_factors_considered",
+  "structured_assessments",
+  // Recommendation
   "recommended_treatment_name",
   "recommended_treatment_code",
   "proposed_next_best_action",
   "treatment_eligibility_explanation",
+  "blocked_conditions",
+  "proposed_next_best_confidence_score",
+  "proposed_next_best_evidence",
+  // Decision
   "requires_agent_review",
   "internal_action",
   "proposed_email_to_customer",
-  "customer_situation",
-  "customer_situation_confidence_score",
-  "proposed_next_best_confidence_score",
-  "used_fields",
-  "used_rules",
-  "structured_assessments",
 ];
 
 const OUTREACH_PROHIBITED_SIGNALS = [
@@ -108,10 +121,9 @@ export function validateDecision(
   const warnings: ValidationIssue[] = [];
 
   // ── Layer 1: Structural failure ──────────────────────────────────────────
-  // All required keys must be present — absence is always structural_failure
+  // All required keys must be present in the JSON object (not undefined).
   for (const key of REQUIRED_ALL_KEYS) {
-    const val = output[key];
-    if (val === undefined || val === null) {
+    if (output[key] === undefined) {
       blockingIssues.push({
         failureType: "structural_failure",
         message: `Missing required field: "${key}"`,
@@ -120,14 +132,44 @@ export function validateDecision(
     }
   }
 
-  if (output.used_fields !== undefined && !Array.isArray(output.used_fields)) {
-    blockingIssues.push({ failureType: "structural_failure", message: '"used_fields" must be an array', field: "used_fields" });
+  // Core decision-outcome fields must also be non-null (not just present)
+  const REQUIRED_NON_NULL: Array<keyof FinalAIOutput> = [
+    "recommended_treatment_name",
+    "recommended_treatment_code",
+    "requires_agent_review",
+    "internal_action",
+    "proposed_email_to_customer",
+    "customer_situation",
+    "customer_situation_confidence_score",
+    "proposed_next_best_confidence_score",
+    "proposed_next_best_action",
+    "treatment_eligibility_explanation",
+  ];
+  for (const key of REQUIRED_NON_NULL) {
+    if (output[key] === null) {
+      blockingIssues.push({
+        failureType: "structural_failure",
+        message: `Required field "${key}" must not be null`,
+        field: key,
+      });
+    }
   }
-  if (output.used_rules !== undefined && !Array.isArray(output.used_rules)) {
-    blockingIssues.push({ failureType: "structural_failure", message: '"used_rules" must be an array', field: "used_rules" });
-  }
-  if (output.structured_assessments !== undefined && !Array.isArray(output.structured_assessments)) {
-    blockingIssues.push({ failureType: "structural_failure", message: '"structured_assessments" must be an array', field: "structured_assessments" });
+
+  // Array fields: must be arrays (not strings or other types)
+  const REQUIRED_ARRAY_KEYS: Array<keyof FinalAIOutput> = [
+    "used_fields",
+    "used_rules",
+    "structured_assessments",
+    "customer_situation_evidence",
+    "missing_information",
+    "key_factors_considered",
+    "blocked_conditions",
+  ];
+  for (const key of REQUIRED_ARRAY_KEYS) {
+    const val = output[key];
+    if (val !== undefined && val !== null && !Array.isArray(val)) {
+      blockingIssues.push({ failureType: "structural_failure", message: `"${key}" must be an array`, field: key });
+    }
   }
 
   for (const scoreKey of ["customer_situation_confidence_score", "proposed_next_best_confidence_score"] as const) {
@@ -376,17 +418,18 @@ export function validateDecision(
       }
     } else if (isTiedPreferred) {
       // Tied preferred: AI chose one from multiple equally-ranked preferred treatments.
-      // Document the choice; emit a guardrail_failure WARNING if no reason given.
-      // Per spec: this is WARNING-only — orchestrator does NOT force fallback.
+      // If the AI provides a traceable reason, accept the choice.
+      // If no reason given: emit a blocking policy_failure so the orchestrator
+      // converts it into a deterministic AGENT_REVIEW fallback with runFallbackReason.
       const explanation = String(output.treatment_eligibility_explanation ?? "").trim();
       if (chosenEntry) chosenEntry.selectionMode = "tied_preferred";
       if (!explanation) {
-        warnings.push({
-          failureType: "guardrail_failure",
-          message: "Tied preferred treatment selected without documented selection reason — audit recommended",
+        blockingIssues.push({
+          failureType: "policy_failure",
+          message: "Tied preferred treatments — no documented reason to choose; deterministic AGENT_REVIEW required",
           field: "treatment_eligibility_explanation",
         });
-        if (chosenEntry) chosenEntry.selectionReason = "Tied preferred treatment — no reason documented";
+        if (chosenEntry) chosenEntry.selectionReason = "Tie-ambiguity: no reason provided";
       } else {
         if (chosenEntry) chosenEntry.selectionReason = explanation.substring(0, 500);
       }
