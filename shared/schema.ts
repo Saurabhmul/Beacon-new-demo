@@ -371,7 +371,6 @@ export const policyFields = pgTable("policy_fields", {
   aiGenerated: boolean("ai_generated").default(false),
   createdBy: text("created_by"),
   sourceDocumentId: text("source_document_id"),
-  dependsOnBusinessFields: jsonb("depends_on_business_fields").$type<string[]>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

@@ -6,17 +6,9 @@ import { useAnalysis } from "@/hooks/use-analysis";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Link } from "wouter";
 import {
   Table,
@@ -36,154 +28,13 @@ import {
   ChevronRight,
   Trash2,
   Building2,
-  AlertTriangle,
-  CheckCircle2,
-  XCircle,
-  ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import type { Decision } from "@shared/schema";
 
 type TabType = "pending" | "completed";
-type ValidationFilter = "all" | "passed" | "warnings" | "failed" | "system_hold";
-type ReviewFilter = "all" | "needs_review";
 
 const PAGE_SIZE = 25;
-
-// ── V2 data helpers ────────────────────────────────────────────────────────────
-
-// Patterns in runFallbackReason that indicate a system hold (not an agent-review choice)
-const SYSTEM_HOLD_PATTERNS = [
-  "policy completeness",
-  "business field",
-  "critical information",
-  "hard guardrail",
-  "unexpected pipeline",
-  "timed out",
-  "required tier",
-  "cap reached",
-  "stage budget exhausted",
-];
-
-function extractCustomerName(d: Decision): string | null {
-  const data = ((d.customerData || {}) as Record<string, unknown>);
-  const NAME_KEYS = [
-    "customer name", "customer_name", "name", "full name", "full_name",
-    "first name", "first_name", "client name", "client_name",
-    "borrower name", "borrower_name", "account name", "account_name",
-  ];
-  for (const key of NAME_KEYS) {
-    for (const [k, v] of Object.entries(data)) {
-      if (k.toLowerCase().trim() === key && v != null && String(v).trim()) {
-        return String(v).trim();
-      }
-    }
-  }
-  return null;
-}
-
-function getV2Data(d: Decision) {
-  const raw = ((d.aiRawOutput || {}) as Record<string, unknown>);
-  const engineVersion = raw.engineVersion as string | undefined;
-  const isV2 = typeof engineVersion === "string" && engineVersion.startsWith("decision-layer-v2");
-  const finalAI = ((raw.finalAIOutput || {}) as Record<string, unknown>);
-  const validation = ((raw.validation || {}) as Record<string, unknown>);
-  const decisionPacket = ((raw.decisionPacket || {}) as Record<string, unknown>);
-  const trace = ((raw.treatmentSelectionTrace || []) as Array<Record<string, unknown>>);
-
-  return {
-    isV2,
-    engineVersion,
-    // v2 payload internal_action (authoritative for v2 system hold)
-    v2InternalAction: (finalAI.internal_action as string) || null,
-    recommendedTreatmentCode: (finalAI.recommended_treatment_code as string) || null,
-    recommendedTreatmentName: (finalAI.recommended_treatment_name as string) || null,
-    treatmentRationale: (finalAI.treatment_eligibility_explanation as string) || null,
-    confidenceScore: (finalAI.proposed_next_best_confidence_score as number) ?? null,
-    requiresAgentReview: !!(finalAI.requires_agent_review),
-    validationStatus: (validation.status as string) || null,
-    validationFailureType: (validation.failureType as string) || null,
-    warnings: ((validation.warnings || []) as Array<Record<string, unknown>>),
-    blockingIssues: ((validation.blockingIssues || []) as Array<Record<string, unknown>>),
-    preferredTreatments: ((decisionPacket.preferredTreatments || []) as Array<Record<string, unknown>>),
-    runFallbackReason: (raw.runFallbackReason as string) || null,
-    trace,
-  };
-}
-
-function isSystemHold(d: Decision, v2: ReturnType<typeof getV2Data>): boolean {
-  // Check DB-persisted internalAction column (covers all versions)
-  if (d.internalAction?.startsWith("SYSTEM_HOLD:")) return true;
-  // For v2 decisions check the authoritative payload field
-  if (v2.isV2 && v2.v2InternalAction?.startsWith("SYSTEM_HOLD:")) return true;
-  // DB status set to failed_validation = system decided not to proceed
-  if (d.status === "failed_validation") return true;
-  // runFallbackReason patterns (from orchestrator spec)
-  if (v2.runFallbackReason) {
-    const r = v2.runFallbackReason.toLowerCase();
-    if (SYSTEM_HOLD_PATTERNS.some((p) => r.includes(p))) return true;
-  }
-  return false;
-}
-
-function hasPriorityDeviation(v2: ReturnType<typeof getV2Data>): boolean {
-  if (!v2.isV2 || !v2.recommendedTreatmentCode) return false;
-  if (v2.recommendedTreatmentCode === "AGENT_REVIEW") return false;
-  if (!v2.preferredTreatments || v2.preferredTreatments.length === 0) return false;
-  const topCode = (v2.preferredTreatments[0].code as string) || null;
-  if (!topCode) return false;
-  return topCode !== v2.recommendedTreatmentCode;
-}
-
-// Normalise validation state across v2 payload and legacy DB status field
-function resolveValidationState(d: Decision, v2: ReturnType<typeof getV2Data>) {
-  const failed =
-    v2.validationStatus === "failed" ||
-    d.status === "failed_validation";
-  const hasWarnings = v2.warnings.length > 0;
-  const passed = !failed && (v2.validationStatus === "passed" || (v2.isV2 && !hasWarnings));
-  return { failed, hasWarnings, passed };
-}
-
-function validationBadgeInfo(d: Decision, v2: ReturnType<typeof getV2Data>) {
-  if (isSystemHold(d, v2)) {
-    return { label: "System hold", variant: "destructive" as const, icon: ShieldAlert };
-  }
-  if (!v2.isV2 && d.status !== "failed_validation") {
-    // Legacy decision without v2 payload — no badge
-    return null;
-  }
-  const { failed, hasWarnings, passed } = resolveValidationState(d, v2);
-  if (failed) {
-    return { label: "Failed", variant: "destructive" as const, icon: XCircle, className: "" };
-  }
-  if (hasWarnings) {
-    return {
-      label: "Warnings",
-      variant: "outline" as const,
-      icon: AlertTriangle,
-      className: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-700",
-    };
-  }
-  if (passed) {
-    return {
-      label: "Passed",
-      variant: "outline" as const,
-      icon: CheckCircle2,
-      className: "bg-green-100 text-green-800 border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700",
-    };
-  }
-  return null;
-}
-
-function getFilterCategory(d: Decision, v2: ReturnType<typeof getV2Data>): ValidationFilter {
-  if (isSystemHold(d, v2)) return "system_hold";
-  if (!v2.isV2 && d.status !== "failed_validation") return "passed"; // legacy: skip filter
-  const { failed, hasWarnings } = resolveValidationState(d, v2);
-  if (failed) return "failed";
-  if (hasWarnings) return "warnings";
-  return "passed";
-}
 
 export default function ReviewQueuePage() {
   const { user } = useAuth();
@@ -192,9 +43,6 @@ export default function ReviewQueuePage() {
 
   const [activeTab, setActiveTab] = useState<TabType>("pending");
   const [searchQuery, setSearchQuery] = useState("");
-  const [validationFilter, setValidationFilter] = useState<ValidationFilter>("all");
-  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
-  const [treatmentFilter, setTreatmentFilter] = useState("");
   const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
@@ -218,33 +66,12 @@ export default function ReviewQueuePage() {
   const currentDecisions = activeTab === "pending" ? pendingDecisions : completedDecisions;
 
   const filteredDecisions = currentDecisions.filter((d) => {
-    const v2 = getV2Data(d);
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const matchesId = d.customerGuid.toLowerCase().includes(q);
-      const matchesSolution = d.proposedSolution?.toLowerCase().includes(q);
-      const matchesTreatment =
-        v2.recommendedTreatmentName?.toLowerCase().includes(q) ||
-        v2.recommendedTreatmentCode?.toLowerCase().includes(q);
-      if (!matchesId && !matchesSolution && !matchesTreatment) return false;
-    }
-    if (validationFilter !== "all") {
-      const cat = getFilterCategory(d, v2);
-      if (cat !== validationFilter) return false;
-    }
-    if (reviewFilter === "needs_review") {
-      // System holds are NOT the same as requires-agent-review;
-      // show only rows explicitly flagged by the model for human review.
-      if (!v2.requiresAgentReview) return false;
-    }
-    if (treatmentFilter) {
-      const tf = treatmentFilter.toLowerCase();
-      const matchesCode = v2.recommendedTreatmentCode?.toLowerCase().includes(tf);
-      const matchesName = v2.recommendedTreatmentName?.toLowerCase().includes(tf);
-      const matchesSolution = d.proposedSolution?.toLowerCase().includes(tf);
-      if (!matchesCode && !matchesName && !matchesSolution) return false;
-    }
-    return true;
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      d.customerGuid.toLowerCase().includes(q) ||
+      d.proposedSolution?.toLowerCase().includes(q)
+    );
   });
 
   const totalPages = Math.max(1, Math.ceil(filteredDecisions.length / PAGE_SIZE));
@@ -271,8 +98,11 @@ export default function ReviewQueuePage() {
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   };
@@ -293,7 +123,9 @@ export default function ReviewQueuePage() {
     onError: () => {
       toast({ title: "Delete failed", description: "Something went wrong.", variant: "destructive" });
     },
-    onSettled: () => setDeleting(false),
+    onSettled: () => {
+      setDeleting(false);
+    },
   });
 
   const handleBulkDelete = () => {
@@ -301,15 +133,6 @@ export default function ReviewQueuePage() {
     if (count === 0) return;
     if (!window.confirm(`Are you sure you want to delete ${count} selected decision${count > 1 ? "s" : ""}? This cannot be undone.`)) return;
     deleteMutation.mutate(Array.from(selectedIds));
-  };
-
-  const resetFilters = () => {
-    setSearchQuery("");
-    setValidationFilter("all");
-    setReviewFilter("all");
-    setTreatmentFilter("");
-    setPage(1);
-    clearSelection();
   };
 
   if (noCompanySelected) {
@@ -340,7 +163,11 @@ export default function ReviewQueuePage() {
           </p>
         </div>
         {!isSuperAdmin && (
-          <Button onClick={startAnalysis} disabled={analyzing} data-testid="button-start-analyzing">
+          <Button
+            onClick={startAnalysis}
+            disabled={analyzing}
+            data-testid="button-start-analyzing"
+          >
             {analyzing ? (
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Analyzing...</>
             ) : (
@@ -398,59 +225,17 @@ export default function ReviewQueuePage() {
 
       <Card>
         <CardContent className="p-4 pb-0">
-          {/* ── Filter bar ────────────────────────────────────────────── */}
-          <div className="flex flex-wrap items-center gap-2 mb-4" data-testid="filter-bar">
-            <div className="relative flex-1 min-w-[180px]">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
-                placeholder="Search by ID or treatment..."
+                placeholder="Search by Customer ID or Proposed Action..."
                 value={searchQuery}
                 onChange={(e) => { setSearchQuery(e.target.value); setPage(1); clearSelection(); }}
                 className="pl-9"
                 data-testid="input-search-decisions"
               />
             </div>
-            <Select
-              value={validationFilter}
-              onValueChange={(v) => { setValidationFilter(v as ValidationFilter); setPage(1); clearSelection(); }}
-              data-testid="select-validation-filter"
-            >
-              <SelectTrigger className="w-[150px]" data-testid="trigger-validation-filter">
-                <SelectValue placeholder="Validation" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="passed">Passed</SelectItem>
-                <SelectItem value="warnings">Warnings</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="system_hold">System hold</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select
-              value={reviewFilter}
-              onValueChange={(v) => { setReviewFilter(v as ReviewFilter); setPage(1); clearSelection(); }}
-              data-testid="select-review-filter"
-            >
-              <SelectTrigger className="w-[150px]" data-testid="trigger-review-filter">
-                <SelectValue placeholder="Review flag" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All decisions</SelectItem>
-                <SelectItem value="needs_review">Needs review only</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input
-              placeholder="Filter by treatment..."
-              value={treatmentFilter}
-              onChange={(e) => { setTreatmentFilter(e.target.value); setPage(1); clearSelection(); }}
-              className="w-[160px]"
-              data-testid="input-treatment-filter"
-            />
-            {(searchQuery || validationFilter !== "all" || reviewFilter !== "all" || treatmentFilter) && (
-              <Button variant="ghost" size="sm" onClick={resetFilters} data-testid="button-clear-filters">
-                Clear filters
-              </Button>
-            )}
             {selectedIds.size > 0 && !isSuperAdmin && (
               <Button
                 variant="destructive"
@@ -462,7 +247,7 @@ export default function ReviewQueuePage() {
                 {deleting ? (
                   <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Deleting...</>
                 ) : (
-                  <><Trash2 className="w-4 h-4 mr-1" /> Delete ({selectedIds.size})</>
+                  <><Trash2 className="w-4 h-4 mr-1" /> Delete Selected ({selectedIds.size})</>
                 )}
               </Button>
             )}
@@ -471,7 +256,7 @@ export default function ReviewQueuePage() {
           {isLoading ? (
             <div className="space-y-3 pb-4">
               {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-14 w-full" />
+                <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
           ) : filteredDecisions.length > 0 ? (
@@ -490,133 +275,58 @@ export default function ReviewQueuePage() {
                       </TableHead>
                     )}
                     <TableHead>Customer ID</TableHead>
-                    <TableHead>Run Date</TableHead>
-                    <TableHead>Recommended Treatment</TableHead>
-                    <TableHead className="whitespace-nowrap">Confidence</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>Last AI Run Date</TableHead>
+                    <TableHead>Proposed Action</TableHead>
                     <TableHead className="text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pageDecisions.map((d) => {
-                    const v2 = getV2Data(d);
-                    const sysHold = isSystemHold(d, v2);
-                    const deviation = hasPriorityDeviation(v2);
-                    const badgeInfo = validationBadgeInfo(d, v2);
-                    const treatmentName = v2.recommendedTreatmentName || v2.recommendedTreatmentCode || d.proposedSolution || "—";
-                    const rationale = v2.treatmentRationale;
-                    const customerName = extractCustomerName(d);
-
-                    return (
-                      <TableRow key={d.id} className={selectedIds.has(d.id) ? "bg-muted/50" : ""}>
-                        {!isSuperAdmin && (
-                          <TableCell>
-                            <Checkbox
-                              checked={selectedIds.has(d.id)}
-                              onCheckedChange={() => toggleSelect(d.id)}
-                              aria-label={`Select ${d.customerGuid}`}
-                              data-testid={`checkbox-select-${d.id}`}
-                            />
-                          </TableCell>
-                        )}
+                  {pageDecisions.map((d) => (
+                    <TableRow key={d.id} className={selectedIds.has(d.id) ? "bg-muted/50" : ""}>
+                      {!isSuperAdmin && (
                         <TableCell>
-                          <div className="space-y-0.5">
-                            {customerName && (
-                              <p className="text-sm font-medium" data-testid={`text-customer-name-${d.id}`}>{customerName}</p>
-                            )}
-                            <span className={`font-mono ${customerName ? "text-xs text-muted-foreground" : "font-medium text-sm"}`} data-testid={`text-customer-id-${d.id}`}>
-                              {d.customerGuid}
-                            </span>
-                          </div>
+                          <Checkbox
+                            checked={selectedIds.has(d.id)}
+                            onCheckedChange={() => toggleSelect(d.id)}
+                            aria-label={`Select ${d.customerGuid}`}
+                            data-testid={`checkbox-select-${d.id}`}
+                          />
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap" data-testid={`text-run-date-${d.id}`}>
-                          {new Date(d.createdAt).toLocaleDateString("en-US", {
-                            year: "numeric",
-                            month: "short",
-                            day: "numeric",
-                          })}
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="text-sm font-medium" data-testid={`text-treatment-name-${d.id}`}>
-                                {treatmentName.length > 40 ? treatmentName.substring(0, 40) + "…" : treatmentName}
-                              </span>
-                              {deviation && (
-                                <Badge
-                                  variant="secondary"
-                                  className="text-[10px] px-1.5 py-0 border-amber-400 text-amber-700 bg-amber-50 dark:bg-amber-950 dark:text-amber-300"
-                                  data-testid={`badge-priority-deviation-${d.id}`}
-                                >
-                                  Priority deviation
-                                </Badge>
-                              )}
-                              {sysHold && (
-                                <Badge
-                                  variant="destructive"
-                                  className="text-[10px] px-1.5 py-0"
-                                  data-testid={`badge-system-hold-${d.id}`}
-                                >
-                                  System hold
-                                </Badge>
-                              )}
-                              {v2.requiresAgentReview && !sysHold && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-[10px] px-1.5 py-0 border-orange-400 text-orange-700 bg-orange-50 dark:bg-orange-950 dark:text-orange-300"
-                                  data-testid={`badge-needs-review-${d.id}`}
-                                >
-                                  Needs review
-                                </Badge>
-                              )}
-                            </div>
-                            {rationale && (
-                              <p className="text-xs text-muted-foreground line-clamp-1" data-testid={`text-rationale-${d.id}`}>
-                                {rationale}
-                              </p>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap" data-testid={`text-confidence-${d.id}`}>
-                          {v2.confidenceScore != null ? (
-                            <div className="flex items-center gap-1.5">
-                              {/* Backend scores are 1–10 integers — fill bar proportionally */}
-                              <div className="h-1.5 w-14 rounded-full bg-muted overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${v2.confidenceScore >= 7 ? "bg-green-500" : v2.confidenceScore >= 4 ? "bg-amber-400" : "bg-red-400"}`}
-                                  style={{ width: `${Math.round((Math.max(0, Math.min(10, v2.confidenceScore)) / 10) * 100)}%` }}
-                                />
-                              </div>
-                              <span className="text-xs text-muted-foreground">{Math.max(0, Math.min(10, v2.confidenceScore))}/10</span>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {badgeInfo ? (
-                            <Badge variant={badgeInfo.variant} className={`gap-1 text-xs ${badgeInfo.className || ""}`} data-testid={`badge-validation-${d.id}`}>
-                              <badgeInfo.icon className="w-3 h-3" />
-                              {badgeInfo.label}
-                            </Badge>
-                          ) : (
-                            <span className="text-xs text-muted-foreground" data-testid={`badge-validation-${d.id}`}>—</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Link href={`/review/${d.id}`}>
-                            <Button
-                              variant={activeTab === "pending" ? "default" : "outline"}
-                              size="sm"
-                              data-testid={`button-review-${d.id}`}
-                            >
-                              Review <ArrowRight className="w-3.5 h-3.5 ml-1" />
-                            </Button>
-                          </Link>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
+                      )}
+                      <TableCell>
+                        <span className="font-medium text-sm font-mono" data-testid={`text-customer-id-${d.id}`}>
+                          {d.customerGuid}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground" data-testid={`text-run-date-${d.id}`}>
+                        {new Date(d.createdAt).toLocaleDateString("en-US", {
+                          year: "numeric",
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm line-clamp-1" data-testid={`text-proposed-action-${d.id}`}>
+                          {d.proposedSolution
+                            ? d.proposedSolution.length > 80
+                              ? d.proposedSolution.substring(0, 80) + "..."
+                              : d.proposedSolution
+                            : "Pending"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Link href={`/review/${d.id}`}>
+                          <Button
+                            variant={activeTab === "pending" ? "default" : "outline"}
+                            size="sm"
+                            data-testid={`button-review-${d.id}`}
+                          >
+                            Review <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                          </Button>
+                        </Link>
+                      </TableCell>
+                    </TableRow>
+                  ))}
                 </TableBody>
               </Table>
 
@@ -650,8 +360,8 @@ export default function ReviewQueuePage() {
             <div className="py-12 text-center">
               <ClipboardList className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
               <p className="text-sm text-muted-foreground">
-                {searchQuery || validationFilter !== "all" || reviewFilter !== "all" || treatmentFilter
-                  ? "No cases match the current filters."
+                {searchQuery
+                  ? "No cases found matching your search."
                   : activeTab === "pending"
                   ? "No pending decisions. Click 'Start Analyzing' to generate recommendations."
                   : "No completed reviews yet."}

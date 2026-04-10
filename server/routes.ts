@@ -14,8 +14,6 @@ import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import { normalizeFieldLabel, buildFullFieldCatalog } from "./field-catalog";
-import { runDecisionPipeline } from "./lib/decisioning/orchestrator";
-import { checkPolicyCompletenessStrict, PolicyCompletenessError } from "./lib/decisioning/policy-completeness";
 import { toLogicOperator, normalizeDraftPriorities } from "./lib/treatment-logic";
 import { LogicalDerivationConfigSchema, topologicalSort, generateLogicalDerivationSummary } from "./lib/derivation-config";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
@@ -705,43 +703,6 @@ export async function registerRoutes(
       const companyId = getCompanyId(req);
       const { policyName, sourceType, sourceFileName, status, id } = req.body;
       if (!policyName?.trim()) return res.status(400).json({ error: "policyName is required" });
-
-      // When activating a policy, run the strict completeness check before persisting.
-      // Validate the pack that is being activated: use the ID from the request if provided
-      // (this is the pack whose treatments we need to check), otherwise fall back to the
-      // company's existing pack. This ensures we validate the to-be-activated state.
-      if (status === "active") {
-        // Determine which pack ID to validate against
-        // Resolve the pack ID we need to validate:
-        // (a) use the ID from the request body when updating an existing pack, or
-        // (b) fall back to the company's current pack when toggling status in-place.
-        // A truly first-time activation with no existing pack and no id must be rejected
-        // because there is no configuration to validate.
-        let packIdToValidate: string | undefined = id || undefined;
-        if (!packIdToValidate) {
-          const existingPack = await storage.getPolicyPack(companyId);
-          packIdToValidate = existingPack?.id;
-        }
-        if (!packIdToValidate) {
-          return res.status(400).json({
-            error: "Policy cannot be activated — no existing policy configuration found to validate",
-          });
-        }
-        const activationTreatments = await storage.getTreatmentsWithRules(packIdToValidate);
-        const activationCatalog = await buildFullFieldCatalog(companyId, storage);
-        try {
-          checkPolicyCompletenessStrict(activationTreatments, activationCatalog);
-        } catch (completenessErr) {
-          if (completenessErr instanceof PolicyCompletenessError) {
-            return res.status(400).json({
-              error: "Policy cannot be activated — completeness check failed",
-              issues: completenessErr.issues,
-            });
-          }
-          throw completenessErr;
-        }
-      }
-
       const pack = await storage.upsertPolicyPack({
         id: id || undefined,
         companyId,
@@ -2328,16 +2289,17 @@ export async function registerRoutes(
           let completed = 0;
           let failed = 0;
 
-          // ── v2.1 pipeline setup ─────────────────────────────────────────
-          const policyPack = await storage.getPolicyPack(companyId) ?? null;
-          const treatments = policyPack
-            ? await storage.getTreatmentsWithRules(policyPack.id)
-            : [];
-          const catalog = await buildFullFieldCatalog(companyId, storage);
-
-          // SOP text from the first available rulebook
-          const rulebooks = await storage.getRulebooks(companyId);
-          const sopText = rulebooks.find(rb => rb.sopText)?.sopText ?? null;
+          clearTemplateCache();
+          const dpdStagesData = await storage.getDpdStages(companyId);
+          const compiled = compilePolicyPrompt({
+            dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
+            vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
+            affordabilityRules: policyConfig?.affordabilityRules,
+            treatments: policyConfig?.availableTreatments,
+            decisionRules: policyConfig?.decisionRules,
+            escalationRules: policyConfig?.escalationRules,
+          });
+          const compiledPolicy = compiled as unknown as Record<string, string>;
 
           for (const [custId, data] of customers) {
             try {
@@ -2349,43 +2311,45 @@ export async function registerRoutes(
                 _conversation_count: data.conversations.length,
               };
 
-              const result = await runDecisionPipeline({
-                companyId,
-                rawCustomerData: combinedData,
-                treatments,
-                catalog,
-                policyPack,
-                sopText,
-              });
+              const assembledPrompt = assemblePrompt(
+                compiledPolicy,
+                combinedData,
+                dataConfig?.outputFormat || undefined
+              );
+
+              const result = await analyzeCustomer(
+                combinedData,
+                assembledPrompt
+              );
 
               await storage.createDecision({
                 clientConfigId: clientConfig?.id ?? null,
                 dataUploadId: loanUpload.id,
                 userId,
                 companyId,
-                customerGuid: result.customerGuid || custId,
+                customerGuid: result.customer_guid || custId,
                 customerData: combinedData,
-                combinedCmd: null,
-                problemDescription: result.problemDescription,
-                problemConfidenceScore: null,
-                problemEvidence: null,
-                proposedSolution: result.recommended_treatment_name,
-                solutionConfidenceScore: null,
-                solutionEvidence: result.solutionEvidence,
+                combinedCmd: result.combined_cmd,
+                problemDescription: result.problem_description,
+                problemConfidenceScore: result.problem_confidence_score,
+                problemEvidence: result.problem_evidence,
+                proposedSolution: result.proposed_solution,
+                solutionConfidenceScore: result.solution_confidence_score,
+                solutionEvidence: result.solution_evidence,
                 internalAction: result.internal_action,
-                abilityToPay: null,
-                reasonForAbilityToPay: null,
-                noOfLatestPaymentsFailed: null,
+                abilityToPay: result.ability_to_pay,
+                reasonForAbilityToPay: result.reason_for_ability_to_pay,
+                noOfLatestPaymentsFailed: result.no_of_latest_payments_failed,
                 proposedEmailToCustomer: result.proposed_email_to_customer,
-                aiRawOutput: result.aiRawOutput,
-                status: result.decisionStatus,
+                aiRawOutput: result as unknown as Record<string, unknown>,
+                status: "pending",
               });
 
               completed++;
               emitEvent({ type: "progress", completed, failed, total: customers.length, customerGuid: custId });
             } catch (err) {
               failed++;
-              console.error(`Decision pipeline failed for customer ${custId}:`, err);
+              console.error(`AI analysis failed for customer ${custId}:`, err);
               emitEvent({ type: "error", completed, failed, total: customers.length, customerGuid: custId, error: String(err) });
             }
           }
