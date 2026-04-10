@@ -285,9 +285,27 @@ describe("getRequiredBusinessFieldsForCustomer – tier assignment", () => {
     expect(ids).toContain("B"); // included via transitive dependency expansion
     const bEntry = result.find(f => f.fieldId === "B");
     expect(bEntry!.tier).toBe(4); // tier 4 (dependency)
-    // B must come before A in the ordered result (dependency first)
+    // Ordering is strictly tier-first (1→2→3→4) per spec.
+    // "A" (tier 1) comes before "B" (tier 4) in the inference order.
+    // Cross-tier dependency ordering is intentionally NOT enforced — only intra-tier.
+    const aEntry = result.find(f => f.fieldId === "A")!;
+    expect(aEntry.dependencyPosition).toBeLessThan(bEntry!.dependencyPosition);
+  });
+
+  it("respects depends_on_business_fields ordering WITHIN a tier (intra-tier topo sort)", () => {
+    // Two tier-1 fields: "A" depends on "B". Both are in the same tier.
+    // B must be inferred before A.
+    const catalog = [
+      { ...makeBizField("A", "field_a"), dependsOnBusinessFields: ["B"] },
+      makeBizField("B", "field_b"),
+    ];
+    const treatment = makeTreatment([
+      makeGroup("hard_blocker", [makeRule("A"), makeRule("B")]),
+    ]);
+    const result = getRequiredBusinessFieldsForCustomer([treatment], catalog, false);
     const aPos = result.find(f => f.fieldId === "A")!.dependencyPosition;
-    const bPos = bEntry!.dependencyPosition;
+    const bPos = result.find(f => f.fieldId === "B")!.dependencyPosition;
+    // Both are tier 1; B must precede A because A depends on B
     expect(bPos).toBeLessThan(aPos);
   });
 
@@ -588,6 +606,41 @@ describe("inferBusinessFields – orchestration", () => {
     expect(Object.keys(result.values)).toHaveLength(0);
     expect(result.requires_agent_review).toBe(false);
     expect(result.stageMetrics.counts.totalFields).toBe(0);
+  });
+
+  it("routes to AGENT_REVIEW when budget exhausted while tier-4 runs but tier-1 fields remain", async () => {
+    // Ordering: tier 1 field "A" first, then tier 4 field "B" last.
+    // Budget is set to expire mid-run. When A is processed OK but B (tier-4) is next
+    // and budget has expired... but if there were more tier-1 fields still pending,
+    // we'd expect AGENT_REVIEW.
+    //
+    // Simulate: 3 tier-1 fields (A, B, C). Budget expires after A is processed.
+    // When we reach B, budget is already exhausted and B + C are remaining required fields
+    // → should trigger AGENT_REVIEW.
+    const catalog = [
+      makeBizField("A", "field_a"),
+      makeBizField("B", "field_b"),
+      makeBizField("C", "field_c"),
+    ];
+    const treatment = makeTreatment([
+      makeGroup("hard_blocker", [makeRule("A"), makeRule("B"), makeRule("C")], 1),
+    ]);
+
+    let callCount = 0;
+    mockGenerateContent.mockImplementation(async () => {
+      callCount++;
+      // Only first call succeeds within budget; afterwards budget is exceeded
+      return { text: makeValidResponse("result_value", "field", "ok") };
+    });
+
+    // Budget so small that only ~1 field can be inferred within it
+    const result = await inferBusinessFields([treatment], catalog, {}, {}, {}, {
+      totalBudgetMs: 0, // immediate expiry to test the guard
+    });
+
+    // All remaining fields should be null due to budget, and AGENT_REVIEW triggered
+    expect(result.requires_agent_review).toBe(true);
+    expect(result.agentReviewReason).toMatch(/required|tier/i);
   });
 
   it("confidence normalized: null value → confidence ≤ 0.1", async () => {

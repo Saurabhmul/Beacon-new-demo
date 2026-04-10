@@ -161,34 +161,46 @@ export function getRequiredBusinessFieldsForCustomer(
 
   if (fieldBestTier.size === 0) return [];
 
-  // Global topological sort across all tiers.
+  // Strict tier-first ordering (1→2→3→4) with per-tier topological sort.
   //
-  // Tier determines AGENT_REVIEW routing (not inference position). Dependencies take
-  // precedence over tier ordering — a tier-4 dependency of a tier-1 field MUST be
-  // inferred before the tier-1 field so its value is available in priorBusinessFields.
-  //
-  // Tie-breaking within the same dependency level: lower tier number first (most critical),
-  // then alphabetical by fieldId for deterministic output.
-  const allFieldIds = Array.from(fieldBestTier.keys());
-  const globallyOrdered = globalTopologicalSort(allFieldIds, catalogById, fieldBestTier);
+  // Tier determines both inference priority and AGENT_REVIEW routing.
+  // depends_on_business_fields ordering is respected WITHIN each tier only, per spec.
+  // A tier-4 dependency of a tier-1 field is included at tier 4 (after all required tiers).
+  const tierBuckets: Map<BusinessFieldTier, string[]> = new Map([
+    [1, []],
+    [2, []],
+    [3, []],
+    [4, []],
+  ]);
 
-  return globallyOrdered.map((fieldId, index) => ({
-    fieldId,
-    catalogEntry: catalogById.get(fieldId)!,
-    tier: fieldBestTier.get(fieldId)!,
-    dependencyPosition: index,
-  }));
+  for (const [fieldId, tier] of Array.from(fieldBestTier.entries())) {
+    tierBuckets.get(tier)!.push(fieldId);
+  }
+
+  const result: OrderedBusinessField[] = [];
+  let position = 0;
+
+  for (const tier of [1, 2, 3, 4] as BusinessFieldTier[]) {
+    const tierFields = tierBuckets.get(tier)!;
+    if (tierFields.length === 0) continue;
+    const sorted = perTierTopologicalSort(tierFields, catalogById);
+    for (const fieldId of sorted) {
+      const entry = catalogById.get(fieldId);
+      if (!entry) continue;
+      result.push({ fieldId, catalogEntry: entry, tier, dependencyPosition: position++ });
+    }
+  }
+
+  return result;
 }
 
 /**
- * Global topological sort respecting `depends_on_business_fields` across all tiers.
- * Tie-breaking: lower tier number → earlier in output; then alphabetical by fieldId.
+ * Topological sort of business field IDs within a single tier.
+ * Respects depends_on_business_fields among fields in the same tier only.
+ * Falls back to alphabetical order when no dependency info is available
+ * or when dependencies span tiers (cross-tier deps are not intra-tier constraints).
  */
-function globalTopologicalSort(
-  fieldIds: string[],
-  catalog: Map<string, CatalogEntry>,
-  tierMap: Map<string, BusinessFieldTier>
-): string[] {
+function perTierTopologicalSort(fieldIds: string[], catalog: Map<string, CatalogEntry>): string[] {
   const idSet = new Set(fieldIds);
   const visited = new Set<string>();
   const visiting = new Set<string>(); // cycle detection
@@ -204,6 +216,7 @@ function globalTopologicalSort(
     const entry = catalog.get(id);
     const deps = entry?.dependsOnBusinessFields ?? [];
     for (const depId of deps) {
+      // Only follow deps that are also in this tier's bucket
       if (idSet.has(depId)) visit(depId);
     }
     visiting.delete(id);
@@ -211,14 +224,8 @@ function globalTopologicalSort(
     ordered.push(id);
   }
 
-  // Sort initial order by (tier asc, fieldId asc) so tie-breaking is stable before topo traversal
-  const sortedIds = [...fieldIds].sort((a, b) => {
-    const ta = tierMap.get(a) ?? 4;
-    const tb = tierMap.get(b) ?? 4;
-    if (ta !== tb) return ta - tb;
-    return a.localeCompare(b);
-  });
-
+  // Alphabetical for deterministic output
+  const sortedIds = [...fieldIds].sort();
   for (const id of sortedIds) {
     visit(id);
   }
@@ -676,18 +683,24 @@ export async function inferBusinessFields(
     // Check total budget
     const elapsed = Date.now() - startMs;
     if (elapsed >= cfg.totalBudgetMs) {
-      const isCritical = tier <= 3;
+      const remainingFields = fieldsToInfer.slice(fieldsToInfer.indexOf(orderedField));
+      // Escalate if ANY remaining uninferred field is required (tier 1–3),
+      // not just the current field. Covers the case where budget is exhausted
+      // mid-tier-4 while tier-1/2/3 fields are still pending.
+      const hasRemainingRequired = remainingFields.some(f => f.tier <= 3);
       const timeoutMsg =
         `Total business field stage budget (${cfg.totalBudgetMs}ms) exhausted ` +
         `after ${elapsed}ms. Remaining fields stored as null.`;
       console.warn(`[business-field-engine] ${timeoutMsg}`);
-      if (isCritical && !requires_agent_review) {
+      if (hasRemainingRequired && !requires_agent_review) {
         requires_agent_review = true;
-        agentReviewReason = `Stage budget exhausted before required tier ${tier} field "${fieldId}" could be inferred: ${timeoutMsg}`;
+        const remainingRequiredIds = remainingFields.filter(f => f.tier <= 3).map(f => f.fieldId).join(", ");
+        agentReviewReason = `Stage budget exhausted before all required tier 1–3 fields could be inferred. ` +
+          `Remaining required fields: [${remainingRequiredIds}]. ${timeoutMsg}`;
       }
 
       // Store null for all remaining fields
-      for (const remaining of fieldsToInfer.slice(fieldsToInfer.indexOf(orderedField))) {
+      for (const remaining of remainingFields) {
         traces[remaining.fieldId] = {
           fieldId: remaining.fieldId,
           fieldLabel: remaining.catalogEntry.label,
