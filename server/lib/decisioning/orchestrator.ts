@@ -317,30 +317,6 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     });
   }
 
-  // Deterministic fallback: escalation flags present — force human review before AI call
-  if (decisionPacket.escalationFlags.length > 0) {
-    const escalationDescriptions = decisionPacket.escalationFlags.map(f => f.description).join("; ");
-    const reason = `escalation flag triggered — human review required`;
-    const fallbackOutput = buildFallbackOutput(
-      reason,
-      `Escalation condition triggered: ${escalationDescriptions}`
-    );
-    return assembleDeterministicFallback({
-      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
-      runFallbackReason: reason,
-      fallbackOutput,
-      stageMetrics,
-      rawCustomerData,
-      selectionTrace: ruleEvalResult.treatmentSelectionTrace,
-      issues: [`Escalation flags: ${escalationDescriptions}`],
-      decisionPacket,
-      fieldResolution,
-      derivedFieldResult,
-      businessFieldResult,
-      ruleEvalResult,
-    });
-  }
-
   // ── Stage 9: Final AI call ───────────────────────────────────────────────
   const s9 = startStage();
   const userPrompt = buildFinalDecisionUserPrompt(decisionPacket, ruleEvalResult);
@@ -395,6 +371,26 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
         finalAIOutput = buildFallbackOutput(
           deterministicFallbackReason,
           "AI output failed structural validation and could not be repaired"
+        );
+        validationResult = null;
+      }
+
+      // ── Tie-ambiguity → deterministic AGENT_REVIEW ──────────────────────
+      // When the validator emits a blocking policy_failure for tied preferred
+      // without a traceable reason, convert to deterministic fallback.
+      if (
+        validationResult !== null &&
+        validationResult.status === "failed" &&
+        validationResult.failureType === "policy_failure" &&
+        validationResult.blockingIssues.some(i =>
+          i.field === "treatment_eligibility_explanation" &&
+          i.message.toLowerCase().includes("tied preferred")
+        )
+      ) {
+        deterministicFallbackReason = "tied preferred treatments — no traceable reason to choose";
+        finalAIOutput = buildFallbackOutput(
+          deterministicFallbackReason,
+          "Tied preferred treatments with no documented justification; escalating to agent"
         );
         validationResult = null;
       }

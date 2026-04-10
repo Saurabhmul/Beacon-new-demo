@@ -706,11 +706,19 @@ export async function registerRoutes(
       const { policyName, sourceType, sourceFileName, status, id } = req.body;
       if (!policyName?.trim()) return res.status(400).json({ error: "policyName is required" });
 
-      // When activating a policy, run the strict completeness check before persisting
+      // When activating a policy, run the strict completeness check before persisting.
+      // Validate the pack that is being activated: use the ID from the request if provided
+      // (this is the pack whose treatments we need to check), otherwise fall back to the
+      // company's existing pack. This ensures we validate the to-be-activated state.
       if (status === "active") {
-        const existingPack = await storage.getPolicyPack(companyId);
-        if (existingPack) {
-          const activationTreatments = await storage.getTreatmentsWithRules(existingPack.id);
+        // Determine which pack ID to validate against
+        let packIdToValidate: string | undefined = id || undefined;
+        if (!packIdToValidate) {
+          const existingPack = await storage.getPolicyPack(companyId);
+          packIdToValidate = existingPack?.id;
+        }
+        if (packIdToValidate) {
+          const activationTreatments = await storage.getTreatmentsWithRules(packIdToValidate);
           const activationCatalog = await buildFullFieldCatalog(companyId, storage);
           try {
             checkPolicyCompletenessStrict(activationTreatments, activationCatalog);
