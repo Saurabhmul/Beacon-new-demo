@@ -712,25 +712,33 @@ export async function registerRoutes(
       // company's existing pack. This ensures we validate the to-be-activated state.
       if (status === "active") {
         // Determine which pack ID to validate against
+        // Resolve the pack ID we need to validate:
+        // (a) use the ID from the request body when updating an existing pack, or
+        // (b) fall back to the company's current pack when toggling status in-place.
+        // A truly first-time activation with no existing pack and no id must be rejected
+        // because there is no configuration to validate.
         let packIdToValidate: string | undefined = id || undefined;
         if (!packIdToValidate) {
           const existingPack = await storage.getPolicyPack(companyId);
           packIdToValidate = existingPack?.id;
         }
-        if (packIdToValidate) {
-          const activationTreatments = await storage.getTreatmentsWithRules(packIdToValidate);
-          const activationCatalog = await buildFullFieldCatalog(companyId, storage);
-          try {
-            checkPolicyCompletenessStrict(activationTreatments, activationCatalog);
-          } catch (completenessErr) {
-            if (completenessErr instanceof PolicyCompletenessError) {
-              return res.status(400).json({
-                error: "Policy cannot be activated — completeness check failed",
-                issues: completenessErr.issues,
-              });
-            }
-            throw completenessErr;
+        if (!packIdToValidate) {
+          return res.status(400).json({
+            error: "Policy cannot be activated — no existing policy configuration found to validate",
+          });
+        }
+        const activationTreatments = await storage.getTreatmentsWithRules(packIdToValidate);
+        const activationCatalog = await buildFullFieldCatalog(companyId, storage);
+        try {
+          checkPolicyCompletenessStrict(activationTreatments, activationCatalog);
+        } catch (completenessErr) {
+          if (completenessErr instanceof PolicyCompletenessError) {
+            return res.status(400).json({
+              error: "Policy cannot be activated — completeness check failed",
+              issues: completenessErr.issues,
+            });
           }
+          throw completenessErr;
         }
       }
 
