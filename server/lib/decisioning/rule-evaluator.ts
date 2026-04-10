@@ -92,15 +92,18 @@ const VALID_OPERATORS = new Set([
   "is_true", "is_false",
 ]);
 
+// Internal type: row without group context — group context added by evaluateRuleGroup
+type RuleEvaluatedRowBase = Omit<RuleEvaluatedRow, "groupId" | "ruleType" | "blockerType">;
+
 function evaluateSingleRule(
   rule: TreatmentRule,
   resolvedValues: Record<string, unknown>
-): RuleEvaluatedRow {
+): RuleEvaluatedRowBase {
   const [fieldKey, actual] = lookupFieldValue(rule, resolvedValues);
   const expected = getRuleExpectedValue(rule);
   const op = rule.operator;
 
-  const base: Omit<RuleEvaluatedRow, "result" | "reason"> = {
+  const base: Omit<RuleEvaluatedRowBase, "result" | "reason"> = {
     ruleId: rule.id,
     field: fieldKey,
     operator: op,
@@ -226,14 +229,23 @@ interface GroupEvalResult {
 
 function evaluateRuleGroup(
   group: TreatmentRuleGroup & { rules: TreatmentRule[] },
-  resolvedValues: Record<string, unknown>
+  resolvedValues: Record<string, unknown>,
+  ruleType: string,
+  blockerType?: BlockerType
 ): GroupEvalResult {
   const logic = (group.logicOperator || "AND").toUpperCase();
   const rows: RuleEvaluatedRow[] = [];
   const missingFields: Array<{ fieldKey: string; ruleId: number }> = [];
 
   for (const rule of group.rules) {
-    const row = evaluateSingleRule(rule, resolvedValues);
+    const baseRow = evaluateSingleRule(rule, resolvedValues);
+    // Enrich each row with group provenance so the flat evaluatedRules view is self-explanatory
+    const row: RuleEvaluatedRow = {
+      ...baseRow,
+      groupId: group.id,
+      ruleType,
+      ...(blockerType !== undefined ? { blockerType } : {}),
+    };
     rows.push(row);
     if (row.result === "not_evaluable" && row.reason.includes("not found")) {
       const fieldKey = rule.leftFieldId || rule.fieldName || "_unknown_";
@@ -245,10 +257,9 @@ function evaluateRuleGroup(
   let passed: boolean;
 
   if (logic === "OR") {
-    // Any pass → passed; all not_evaluable or fail → not passed
     passed = rows.some(r => r.result === "pass");
   } else {
-    // AND: all must pass; any fail → not passed; any not_evaluable with no fail → not passed (conservative)
+    // AND: all must pass; any fail → not passed; not_evaluable without fail → not passed (conservative)
     passed = rows.length > 0 && rows.every(r => r.result === "pass");
   }
 
@@ -302,6 +313,7 @@ export function evaluateTreatmentRules(
 
     const treatmentCode = treatment.name;
     const evaluatedGroups: TreatmentRuleGroupTrace[] = [];
+    const allEvaluatedRows: RuleEvaluatedRow[] = []; // flat view (per task contract)
 
     let isHardBlocked = false;
     let isSoftBlocked = false;
@@ -326,14 +338,19 @@ export function evaluateTreatmentRules(
       }
 
       const ruleType = (group.ruleType || "eligibility").toLowerCase();
-      const result = evaluateRuleGroup(group, resolvedValues);
 
       // Determine blockerType for this group
       let groupBlockerType: BlockerType | undefined;
       if (HARD_BLOCKER_TYPES.has(ruleType)) groupBlockerType = "hard";
       else if (SOFT_BLOCKER_TYPES.has(ruleType)) groupBlockerType = "soft";
 
-      // Build group-level trace entry (carries ruleType + groupId context)
+      // Evaluate the group — rows are enriched with groupId, ruleType, blockerType?
+      const result = evaluateRuleGroup(group, resolvedValues, ruleType, groupBlockerType);
+
+      // Accumulate into flat evaluatedRules (per contract)
+      allEvaluatedRows.push(...result.evaluatedRows);
+
+      // Build group-level trace entry (structured view)
       const groupTrace: TreatmentRuleGroupTrace = {
         groupId: group.id,
         ruleType,
@@ -418,7 +435,11 @@ export function evaluateTreatmentRules(
       }
     }
 
-    treatmentRuleTrace.push({ treatmentCode, evaluatedGroups });
+    treatmentRuleTrace.push({
+      treatmentCode,
+      evaluatedRules: allEvaluatedRows,
+      evaluatedGroups,
+    });
 
     // Determine outcome
     if (isHardBlocked) {

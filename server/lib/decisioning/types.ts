@@ -45,6 +45,11 @@ export type BlockerType = "hard" | "soft" | "missing_info";
 
 // ─── Treatment Rule Trace ─────────────────────────────────────────────────────
 
+/**
+ * Row-level rule evaluation result.
+ * Includes group provenance fields (groupId, ruleType, blockerType?) so
+ * the flat view is self-explanatory without needing the grouped view.
+ */
 export interface RuleEvaluatedRow {
   ruleId: number;
   field: string;
@@ -53,11 +58,17 @@ export interface RuleEvaluatedRow {
   actual: unknown;
   result: "pass" | "fail" | "not_evaluable";
   reason: string;
+  /** Which rule group this row came from */
+  groupId: number;
+  /** Rule type of the group (eligibility, hard_blocker, soft_blocker, etc.) */
+  ruleType: string;
+  /** Only present for hard/soft blocker groups */
+  blockerType?: BlockerType;
 }
 
 /**
- * Group-level trace entry: carries rule-type context so callers can tell
- * whether a pass/fail came from eligibility, hard/soft blocker, review trigger, etc.
+ * Group-level trace entry: organises rows by group and carries group metadata.
+ * Useful for quickly identifying which group passed/failed and why.
  */
 export interface TreatmentRuleGroupTrace {
   groupId: number;
@@ -71,7 +82,15 @@ export interface TreatmentRuleGroupTrace {
 
 export interface TreatmentRuleTrace {
   treatmentCode: string;
-  /** Structured by group so blocker/eligibility/review provenance is explicit */
+  /**
+   * Flat list of all evaluated rules across all groups (per task contract).
+   * Each row includes groupId, ruleType, and optional blockerType for provenance.
+   */
+  evaluatedRules: RuleEvaluatedRow[];
+  /**
+   * Same rows organised by group (additional explainability layer).
+   * Groups carry their own metadata: ruleType, logicOperator, groupPassed, blockerType?.
+   */
   evaluatedGroups: TreatmentRuleGroupTrace[];
 }
 

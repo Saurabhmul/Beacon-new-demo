@@ -342,7 +342,7 @@ describe("critical missing information", () => {
 // ─── Group-level trace structure ────────────────────────────────────────────
 
 describe("treatmentRuleTrace group structure", () => {
-  it("evaluatedGroups carries groupId and ruleType", () => {
+  it("evaluatedRules (flat) includes all rows with groupId and ruleType", () => {
     const group = makeGroup("eligibility", [
       makeRule({ fieldName: "dpd", operator: ">", value: "0" }),
     ]);
@@ -351,13 +351,27 @@ describe("treatmentRuleTrace group structure", () => {
     const result = evaluateTreatmentRules([t], { dpd: 5 });
     const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
     expect(trace).toBeDefined();
+    const flatRow = trace!.evaluatedRules[0];
+    expect(flatRow.groupId).toBe(999);
+    expect(flatRow.ruleType).toBe("eligibility");
+    expect(flatRow.blockerType).toBeUndefined();
+  });
+
+  it("evaluatedGroups carries groupId, ruleType, groupPassed", () => {
+    const group = makeGroup("eligibility", [
+      makeRule({ fieldName: "dpd", operator: ">", value: "0" }),
+    ]);
+    group.id = 999;
+    const t = makeTreatment("plan_a", [group], "1");
+    const result = evaluateTreatmentRules([t], { dpd: 5 });
+    const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
     expect(trace!.evaluatedGroups[0].groupId).toBe(999);
     expect(trace!.evaluatedGroups[0].ruleType).toBe("eligibility");
     expect(trace!.evaluatedGroups[0].groupPassed).toBe(true);
     expect(trace!.evaluatedGroups[0].blockerType).toBeUndefined();
   });
 
-  it("hard_blocker group carries blockerType: hard", () => {
+  it("hard_blocker rows carry blockerType: hard in both evaluatedRules and evaluatedGroups", () => {
     const t = makeTreatment("plan_a", [
       makeGroup("hard_blocker", [
         makeRule({ fieldName: "flag", operator: "is_true" }),
@@ -365,11 +379,12 @@ describe("treatmentRuleTrace group structure", () => {
     ], "1");
     const result = evaluateTreatmentRules([t], { flag: true });
     const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
+    expect(trace!.evaluatedRules[0].blockerType).toBe("hard");
     expect(trace!.evaluatedGroups[0].blockerType).toBe("hard");
     expect(trace!.evaluatedGroups[0].groupPassed).toBe(true);
   });
 
-  it("soft_blocker group carries blockerType: soft", () => {
+  it("soft_blocker rows carry blockerType: soft", () => {
     const t = makeTreatment("plan_a", [
       makeGroup("soft_blocker", [
         makeRule({ fieldName: "flag", operator: "is_true" }),
@@ -377,6 +392,7 @@ describe("treatmentRuleTrace group structure", () => {
     ], "1");
     const result = evaluateTreatmentRules([t], { flag: true });
     const trace = result.treatmentRuleTrace.find(r => r.treatmentCode === "plan_a");
+    expect(trace!.evaluatedRules[0].blockerType).toBe("soft");
     expect(trace!.evaluatedGroups[0].blockerType).toBe("soft");
   });
 });

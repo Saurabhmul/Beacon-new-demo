@@ -4,7 +4,7 @@ import type { SourceResolutionTrace, SourceResolutionMethod } from "./types";
 /**
  * Normalize a field key to lowercase snake_case for comparison.
  * Trims, lowercases, collapses whitespace/hyphens/dots to underscores,
- * removes any remaining non-alphanumeric-underscore characters.
+ * removes remaining non-alphanumeric-underscore characters.
  */
 export function normalizeKey(k: string): string {
   return k
@@ -30,28 +30,33 @@ function canonicalId(entry: CatalogEntry): string {
 export interface FieldResolutionResult {
   /** canonicalFieldId → resolved value (may be null if field present but value is null) */
   resolvedValues: Record<string, unknown>;
-  /** canonicalFieldId → resolution trace */
+  /** canonicalFieldId → winner trace; "_unresolved:<rawKey>" → unresolved trace */
   traces: Record<string, SourceResolutionTrace>;
-  /** raw keys that could not be matched to any catalog entry */
+  /** raw keys that could not be matched (no catalog entry) OR lost to a higher-priority match */
   unresolvedRawKeys: string[];
 }
 
 /**
  * Resolve raw source data keys to catalog field entries.
  *
- * Priority (strict, no fuzzy guessing beyond these three steps):
- *   1. Exact match    — rawKey === entry.label  (or rawKey matches the id suffix for source: entries)
+ * Resolution is FIELD-CENTRIC, not raw-key-centric. For each canonical catalog
+ * field, all competing raw keys are evaluated and the highest-priority match wins:
+ *
+ *   1. Exact match    — rawKey === entry.label  (or short form of source: id)
  *   2. Normalized     — normalizeKey(rawKey) === normalizeKey(entry.label)
  *   3. Alias map      — aliasMap[rawKey] === canonicalFieldId
- *   4. Unresolved     — explicitly marked, never silently dropped
+ *   4. Unresolved     — no match found
  *
- * Only source_field catalog entries are matched against raw data.
- * Derived and business fields are computed later by other engines.
+ * This ordering is enforced regardless of the order keys appear in rawData,
+ * so an alias key arriving before an exact key never wins.
+ *
+ * Every "losing" raw key (lower-priority match for an already-won field) AND
+ * every truly-unmatched raw key gets an explicit `_unresolved:<rawKey>` trace
+ * entry — nothing is silently dropped.
  *
  * @param rawData     Raw customer data row
  * @param catalog     Full field catalog (source + derived + business entries)
  * @param aliasMap    Optional mapping: rawKey → canonicalFieldId
- * @returns           Resolved values, traces per field, and unresolved raw keys
  */
 export function resolveSourceFields(
   rawData: Record<string, unknown>,
@@ -60,119 +65,162 @@ export function resolveSourceFields(
 ): FieldResolutionResult {
   const sourceCatalog = catalog.filter(e => e.sourceType === "source_field");
 
-  // Pre-build lookup structures
-  const byExact = new Map<string, CatalogEntry>(); // label → entry
-  const byNormalized = new Map<string, CatalogEntry>(); // normalizeKey(label) → entry (first wins)
+  // Build lookup structures
+  const byExact = new Map<string, CatalogEntry>();       // label (and short source: suffix) → entry
+  const byNormalized = new Map<string, CatalogEntry>();  // normalizeKey(label) → first entry
   const byCanonicalId = new Map<string, CatalogEntry>(); // canonicalId → entry
 
   for (const entry of sourceCatalog) {
     byExact.set(entry.label, entry);
     const nk = normalizeKey(entry.label);
     if (!byNormalized.has(nk)) byNormalized.set(nk, entry);
-    byCanonicalId.set(canonicalId(entry), entry);
-
-    // Also index by the suffix of "source:<name>" ids
     const cid = canonicalId(entry);
-    if (cid.startsWith("source:")) {
-      const shortKey = cid.slice(7);
-      byExact.set(shortKey, entry);
-    }
+    byCanonicalId.set(cid, entry);
+    if (entry.id && entry.id !== cid) byCanonicalId.set(entry.id, entry);
+    // Also index by the short-form of source: ids so "DPD" matches "source:DPD"
+    if (cid.startsWith("source:")) byExact.set(cid.slice(7), entry);
   }
 
-  const resolvedValues: Record<string, unknown> = {};
-  const traces: Record<string, SourceResolutionTrace> = {};
-  const unresolvedRawKeys: string[] = [];
+  const METHOD_PRIORITY: Record<SourceResolutionMethod, number> = {
+    exact: 0,
+    normalized: 1,
+    alias: 2,
+    unresolved: 99,
+  };
 
-  // Track which catalog entries have already been matched to avoid double-assignment
-  const matchedCanonicalIds = new Set<string>();
+  interface Candidate {
+    rawKey: string;
+    entry: CatalogEntry;
+    method: SourceResolutionMethod;
+    aliasUsed?: string;
+  }
+
+  // ── Pass 1: for each raw key, find its best single match ──────────────────
+  //
+  // Each raw key is evaluated independently: we identify which catalog entry
+  // it matches (if any) and at what method level. Multiple raw keys may
+  // resolve to the SAME canonical field — we handle conflicts in Pass 2.
+
+  const fieldCandidates = new Map<string, Candidate[]>(); // cid → competing candidates
+  const noMatchRawKeys: string[] = [];
 
   for (const rawKey of Object.keys(rawData)) {
-    const rawValue = rawData[rawKey];
-    let matchedEntry: CatalogEntry | undefined;
+    let entry: CatalogEntry | undefined;
     let method: SourceResolutionMethod = "unresolved";
     let aliasUsed: string | undefined;
 
-    // Step 1: Exact match
+    // Step 1: exact
     if (byExact.has(rawKey)) {
-      matchedEntry = byExact.get(rawKey)!;
+      entry = byExact.get(rawKey)!;
       method = "exact";
     }
 
-    // Step 2: Normalized match
-    if (!matchedEntry) {
+    // Step 2: normalized (only if exact failed)
+    if (!entry) {
       const nk = normalizeKey(rawKey);
       if (byNormalized.has(nk)) {
-        matchedEntry = byNormalized.get(nk)!;
+        entry = byNormalized.get(nk)!;
         method = "normalized";
-        console.warn(
-          `[field-value-resolver] Normalized match used: rawKey="${rawKey}" → "${matchedEntry.label}". ` +
-          `Consider adding an alias for deterministic resolution.`
-        );
       }
     }
 
-    // Step 3: Alias map match
-    if (!matchedEntry) {
+    // Step 3: alias map (only if exact and normalized both failed)
+    if (!entry) {
       const aliasTarget = aliasMap[rawKey];
       if (aliasTarget) {
-        const fromId = byCanonicalId.get(aliasTarget);
-        if (fromId) {
-          matchedEntry = fromId;
+        const fromAlias = byCanonicalId.get(aliasTarget);
+        if (fromAlias) {
+          entry = fromAlias;
           method = "alias";
           aliasUsed = aliasTarget;
-          console.warn(
-            `[field-value-resolver] Alias match used: rawKey="${rawKey}" → alias="${aliasTarget}" → "${matchedEntry.label}". `
-          );
         }
       }
     }
 
-    if (matchedEntry) {
-      const cid = canonicalId(matchedEntry);
-
-      // If this canonical ID was already resolved by a higher-priority match, skip
-      if (matchedCanonicalIds.has(cid)) {
-        // Lower-priority match for an already-resolved field — treat raw key as unresolved
-        unresolvedRawKeys.push(rawKey);
-        continue;
-      }
-
-      matchedCanonicalIds.add(cid);
-
-      const normalizedValue =
-        rawValue === null || rawValue === undefined
-          ? null
-          : String(rawValue);
-
-      const trace: SourceResolutionTrace = {
-        rawKey,
-        canonicalFieldId: cid,
-        method,
-        rawValue,
-        normalizedValue,
-        ...(aliasUsed !== undefined ? { aliasUsed } : {}),
-      };
-
-      resolvedValues[cid] = rawValue;
-      traces[cid] = trace;
+    if (entry) {
+      const cid = canonicalId(entry);
+      if (!fieldCandidates.has(cid)) fieldCandidates.set(cid, []);
+      fieldCandidates.get(cid)!.push({ rawKey, entry, method, aliasUsed });
     } else {
-      // Unresolved: explicitly track it
-      const trace: SourceResolutionTrace = {
-        rawKey,
-        canonicalFieldId: rawKey,
-        method: "unresolved",
-        rawValue,
-        normalizedValue: rawValue === null || rawValue === undefined ? null : String(rawValue),
-      };
-      traces[`_unresolved:${rawKey}`] = trace;
-      unresolvedRawKeys.push(rawKey);
+      // No match at all for this raw key
+      noMatchRawKeys.push(rawKey);
     }
   }
 
-  // Also mark catalog entries for which no raw key was found as unresolved
+  // ── Pass 2: for each canonical field, pick the best candidate ─────────────
+  //
+  // Candidates for the same field are sorted by method priority so exact
+  // always wins over normalized, which always wins over alias — regardless
+  // of the order keys appeared in rawData.
+
+  const resolvedValues: Record<string, unknown> = {};
+  const traces: Record<string, SourceResolutionTrace> = {};
+  const unresolvedRawKeys: string[] = [...noMatchRawKeys];
+
+  for (const [cid, candidates] of fieldCandidates) {
+    // Sort ascending by method priority so the best match is candidates[0]
+    candidates.sort((a, b) => METHOD_PRIORITY[a.method] - METHOD_PRIORITY[b.method]);
+
+    const winner = candidates[0];
+    const rawValue = rawData[winner.rawKey];
+    const normalizedValue = rawValue === null || rawValue === undefined ? null : String(rawValue);
+
+    // Log non-exact matches so consumers know resolution fell back
+    if (winner.method === "normalized") {
+      console.warn(
+        `[field-value-resolver] Normalized match used: rawKey="${winner.rawKey}" → "${winner.entry.label}". ` +
+        `Consider adding an alias for deterministic resolution.`
+      );
+    } else if (winner.method === "alias") {
+      console.warn(
+        `[field-value-resolver] Alias match used: rawKey="${winner.rawKey}" → alias="${winner.aliasUsed}" → "${winner.entry.label}".`
+      );
+    }
+
+    resolvedValues[cid] = rawValue;
+    traces[cid] = {
+      rawKey: winner.rawKey,
+      canonicalFieldId: cid,
+      method: winner.method,
+      rawValue,
+      normalizedValue,
+      ...(winner.aliasUsed !== undefined ? { aliasUsed: winner.aliasUsed } : {}),
+    };
+
+    // Every losing candidate becomes explicitly unresolved — never silently dropped
+    for (const loser of candidates.slice(1)) {
+      const loserRawValue = rawData[loser.rawKey];
+      const traceKey = `_unresolved:${loser.rawKey}`;
+      traces[traceKey] = {
+        rawKey: loser.rawKey,
+        canonicalFieldId: cid, // the field it would have mapped to
+        method: "unresolved",
+        rawValue: loserRawValue,
+        normalizedValue: loserRawValue === null || loserRawValue === undefined ? null : String(loserRawValue),
+      };
+      unresolvedRawKeys.push(loser.rawKey);
+    }
+  }
+
+  // ── Unmatched raw keys (no catalog entry found at all) ────────────────────
+  for (const rawKey of noMatchRawKeys) {
+    const rawValue = rawData[rawKey];
+    traces[`_unresolved:${rawKey}`] = {
+      rawKey,
+      canonicalFieldId: rawKey, // placeholder — no canonical target
+      method: "unresolved",
+      rawValue,
+      normalizedValue: rawValue === null || rawValue === undefined ? null : String(rawValue),
+    };
+  }
+
+  // ── Catalog entries with no raw data match → mark unresolved in traces ────
+  //
+  // This lets callers distinguish "absent from data" (no key in resolvedValues)
+  // from "present but null" (key present, value === null).
   for (const entry of sourceCatalog) {
     const cid = canonicalId(entry);
-    if (!matchedCanonicalIds.has(cid)) {
+    if (!traces[cid]) {
       traces[cid] = {
         rawKey: "",
         canonicalFieldId: cid,
@@ -180,9 +228,6 @@ export function resolveSourceFields(
         rawValue: undefined,
         normalizedValue: null,
       };
-      // resolvedValues does NOT get an entry — callers distinguish
-      // "field absent from data" (no key in resolvedValues) from
-      // "field present but value is null" (key present, value === null)
     }
   }
 

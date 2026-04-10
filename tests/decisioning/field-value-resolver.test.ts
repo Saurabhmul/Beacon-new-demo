@@ -143,7 +143,7 @@ describe("resolveSourceFields – unresolved", () => {
   });
 });
 
-describe("resolveSourceFields – no double-assignment", () => {
+describe("resolveSourceFields – priority enforcement and duplicate tracking", () => {
   it("second match of the same field is tracked as unresolved raw key", () => {
     const catalog = [makeSrcEntry("days_past_due")];
     // Two raw keys both normalize to the same field; exact match wins
@@ -152,7 +152,51 @@ describe("resolveSourceFields – no double-assignment", () => {
     // Exact match wins
     expect(resolvedValues["source:days_past_due"]).toBe(10);
     expect(traces["source:days_past_due"].method).toBe("exact");
-    // The second key (which would also normalize) is unresolved
+    // The second key is in unresolvedRawKeys
     expect(unresolvedRawKeys.some(k => k === "DAYS_PAST_DUE")).toBe(true);
+  });
+
+  it("exact key wins even when alias key appears first in raw data (priority is field-centric)", () => {
+    // This tests the critical fix: priority is enforced per FIELD, not per raw key iteration order.
+    // If we iterate raw keys and alias key comes first, it should NOT win over the exact key.
+    const catalog = [makeSrcEntry("customer_guid")];
+    // Both cust_id (alias) and customer_guid (exact) map to the same field
+    // Object key order: cust_id first, customer_guid second
+    const raw: Record<string, unknown> = {};
+    raw["cust_id"] = "via-alias";
+    raw["customer_guid"] = "exact-match";
+    const aliasMap = { cust_id: "source:customer_guid" };
+    const { resolvedValues, traces, unresolvedRawKeys } = resolveSourceFields(raw, catalog, aliasMap);
+    // Exact always wins regardless of iteration order
+    expect(resolvedValues["source:customer_guid"]).toBe("exact-match");
+    expect(traces["source:customer_guid"].method).toBe("exact");
+    // cust_id becomes explicitly unresolved
+    expect(unresolvedRawKeys).toContain("cust_id");
+    expect(traces["_unresolved:cust_id"]).toBeDefined();
+    expect(traces["_unresolved:cust_id"].method).toBe("unresolved");
+  });
+
+  it("normalized key wins even when alias key appears first (normalized > alias)", () => {
+    const catalog = [makeSrcEntry("customer_guid")];
+    const raw: Record<string, unknown> = {};
+    raw["cust_id"] = "via-alias";
+    raw["Customer GUID"] = "normalized-match"; // normalizes to "customer_guid"
+    const aliasMap = { cust_id: "source:customer_guid" };
+    const { resolvedValues, traces } = resolveSourceFields(raw, catalog, aliasMap);
+    // Normalized wins over alias
+    expect(resolvedValues["source:customer_guid"]).toBe("normalized-match");
+    expect(traces["source:customer_guid"].method).toBe("normalized");
+  });
+
+  it("every losing raw key gets an explicit unresolved trace entry", () => {
+    const catalog = [makeSrcEntry("days_past_due")];
+    // Three keys all mapping to the same field: exact wins, other two must have trace entries
+    const raw = { days_past_due: 10, "Days Past Due": 20, "DAYS_PAST_DUE": 30 };
+    const { traces } = resolveSourceFields(raw, catalog);
+    // Exact wins
+    expect(traces["source:days_past_due"].method).toBe("exact");
+    // Both other keys should have _unresolved trace entries
+    const unresolvedTraces = Object.keys(traces).filter(k => k.startsWith("_unresolved:"));
+    expect(unresolvedTraces.length).toBeGreaterThanOrEqual(2);
   });
 });
