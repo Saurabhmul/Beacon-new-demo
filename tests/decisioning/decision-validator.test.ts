@@ -358,7 +358,7 @@ describe("validateDecision – preferred treatment selection trace", () => {
     expect(ppEntry?.selectionMode).toBe("tied_preferred");
   });
 
-  it("emits blocking policy_failure when tied preferred chosen without any reason", () => {
+  it("emits guardrail_failure WARNING (not blocking) when tied preferred chosen without any reason", () => {
     const packet = minimalDecisionPacket({
       preferredTreatments: [
         { code: "PP", name: "Payment Plan", priority: 1, prioritySource: "configured", rank: 1, reasons: [], isPreferred: true },
@@ -378,16 +378,13 @@ describe("validateDecision – preferred treatment selection trace", () => {
       treatment_eligibility_explanation: "",
     });
     const result = validateDecision(output, packet, trace);
-    // Tie-ambiguity without reason must be a blocking policy_failure
-    // The orchestrator converts this to a deterministic AGENT_REVIEW fallback.
-    expect(result.status).toBe("failed");
-    expect(result.failureType).toBe("policy_failure");
-    const issue = result.blockingIssues.find(i =>
-      i.failureType === "policy_failure" &&
-      i.field === "treatment_eligibility_explanation" &&
-      i.message.toLowerCase().includes("tied preferred")
+    // Per spec: tied preferred without reason = warning audit path; NOT blocking
+    expect(result.status).not.toBe("failed");
+    const warning = result.warnings.find(w =>
+      w.failureType === "guardrail_failure" &&
+      w.field === "treatment_eligibility_explanation"
     );
-    expect(issue).toBeDefined();
+    expect(warning).toBeDefined();
     const ppEntry = result.updatedSelectionTrace.find(e => e.treatmentCode === "PP");
     expect(ppEntry?.selectionMode).toBe("tied_preferred");
   });

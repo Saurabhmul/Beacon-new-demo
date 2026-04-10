@@ -293,38 +293,37 @@ export function validateDecision(
       });
     }
 
-    // Email invented-facts check: verify key facts referenced in email match decision packet data
+    // Email invented-facts check: blocking evidence_failure when email references facts
+    // that are inconsistent with or absent from the decision packet customer data.
     const sourceFields = decisionPacket.sourceFields ?? {};
-    // Check customer name consistency
+    // Check customer name: if email addresses a named individual not in the record
     const dpName = String(sourceFields["customer_name"] ?? sourceFields["full_name"] ?? sourceFields["name"] ?? "").toLowerCase().trim();
     if (dpName && dpName.length > 2) {
-      // Extract name-like words from email Body section
       const bodyMatch = emailLower.match(/body:([\s\S]*?)(?:subject:|$)/i);
       const emailBody = bodyMatch ? bodyMatch[1] : emailLower;
       const nameWords = dpName.split(/\s+/).filter(w => w.length > 2);
       const mentionsWrongName = nameWords.every(w => !emailBody.includes(w));
       const mentionsAnyProperNoun = /dear\s+[a-z]+/.test(emailBody);
       if (mentionsAnyProperNoun && mentionsWrongName) {
-        warnings.push({
+        blockingIssues.push({
           failureType: "evidence_failure",
-          message: "Email salutation may reference a name not found in customer record",
+          message: "Email salutation references a name that does not match the customer record — invented personal detail",
           field: "proposed_email_to_customer",
         });
       }
     }
-    // Check amount consistency
+    // Check amount: if email states a numerical amount wildly inconsistent with decision packet
     const dpAmount = parseFloat(String(sourceFields["amount_due"] ?? sourceFields["outstanding_balance"] ?? ""));
     if (!isNaN(dpAmount) && dpAmount > 0) {
-      // Look for a significantly different amount in the email
       const amountMatches = emailLower.match(/[\$£€]?\s*(\d[\d,.]+)/g) ?? [];
       const emailAmounts = amountMatches
         .map(s => parseFloat(s.replace(/[^0-9.]/g, "")))
         .filter(n => !isNaN(n) && n > 10);
-      const hasWildlyDifferentAmount = emailAmounts.some(a => Math.abs(a - dpAmount) / dpAmount > 0.5 && Math.abs(a - dpAmount) > 50);
-      if (hasWildlyDifferentAmount) {
-        warnings.push({
+      const hasInventedAmount = emailAmounts.some(a => Math.abs(a - dpAmount) / dpAmount > 0.5 && Math.abs(a - dpAmount) > 50);
+      if (hasInventedAmount) {
+        blockingIssues.push({
           failureType: "evidence_failure",
-          message: "Email contains an amount significantly different from the outstanding balance in the decision packet",
+          message: "Email states a monetary amount significantly different from the outstanding balance in the decision packet — invented financial fact",
           field: "proposed_email_to_customer",
         });
       }
@@ -376,17 +375,18 @@ export function validateDecision(
         chosenEntry.selectionReason = `Highest-priority eligible treatment (rank ${chosenEntry.rank})`;
       }
     } else if (isTiedPreferred) {
-      // Tied preferred: require traceable reason; if absent → blocking policy_failure
-      // The orchestrator converts this blocking issue into a deterministic AGENT_REVIEW fallback.
+      // Tied preferred: AI chose one from multiple equally-ranked preferred treatments.
+      // Document the choice; emit a guardrail_failure WARNING if no reason given.
+      // Per spec: this is WARNING-only — orchestrator does NOT force fallback.
       const explanation = String(output.treatment_eligibility_explanation ?? "").trim();
       if (chosenEntry) chosenEntry.selectionMode = "tied_preferred";
       if (!explanation) {
-        blockingIssues.push({
-          failureType: "policy_failure",
-          message: "Tied preferred treatments chosen without any documented reason — deterministic AGENT_REVIEW required",
+        warnings.push({
+          failureType: "guardrail_failure",
+          message: "Tied preferred treatment selected without documented selection reason — audit recommended",
           field: "treatment_eligibility_explanation",
         });
-        if (chosenEntry) chosenEntry.selectionReason = "Tie-ambiguity: no reason provided";
+        if (chosenEntry) chosenEntry.selectionReason = "Tied preferred treatment — no reason documented";
       } else {
         if (chosenEntry) chosenEntry.selectionReason = explanation.substring(0, 500);
       }

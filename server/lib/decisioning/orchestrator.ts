@@ -317,27 +317,73 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     });
   }
 
-  // ── Stage 9: Final AI call ───────────────────────────────────────────────
-  const s9 = startStage();
-  const userPrompt = buildFinalDecisionUserPrompt(decisionPacket, ruleEvalResult);
+  // Deterministic fallback: escalation flags present — requires human review before AI
+  // Per spec: escalation flags are a defined deterministic fallback trigger.
+  if (decisionPacket.escalationFlags.length > 0) {
+    const escalationDescriptions = decisionPacket.escalationFlags.map(f => f.description).join("; ");
+    const reason = "escalation flag triggered — human review required";
+    const fallbackOutput = buildFallbackOutput(
+      reason,
+      `Escalation condition(s) triggered: ${escalationDescriptions}`
+    );
+    return assembleDeterministicFallback({
+      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
+      runFallbackReason: reason,
+      fallbackOutput,
+      stageMetrics,
+      rawCustomerData,
+      selectionTrace: ruleEvalResult.treatmentSelectionTrace,
+      issues: [`Escalation flags: ${escalationDescriptions}`],
+      decisionPacket,
+      fieldResolution,
+      derivedFieldResult,
+      businessFieldResult,
+      ruleEvalResult,
+    });
+  }
 
+  // Deterministic fallback: critical missing information — AI cannot make reliable decision
+  if (decisionPacket.missingCriticalInformation.length > 0) {
+    const missingDescriptions = decisionPacket.missingCriticalInformation.map(m => m.fieldId).join(", ");
+    const reason = "critical information missing — AI decision unreliable";
+    const fallbackOutput = buildFallbackOutput(
+      reason,
+      `Critical fields missing: ${missingDescriptions}`
+    );
+    return assembleDeterministicFallback({
+      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
+      runFallbackReason: reason,
+      fallbackOutput,
+      stageMetrics,
+      rawCustomerData,
+      selectionTrace: ruleEvalResult.treatmentSelectionTrace,
+      issues: [`Missing critical fields: ${missingDescriptions}`],
+      decisionPacket,
+      fieldResolution,
+      derivedFieldResult,
+      businessFieldResult,
+      ruleEvalResult,
+    });
+  }
+
+  // ── Stage 9: Final AI call ───────────────────────────────────────────────
   let finalAIOutput: FinalAIOutput | null = null;
   let validationResult: DecisionValidationResult | null = null;
   let deterministicFallbackReason: string | null = null;
   let aiRawText = "";
   let retryCount = 0;
 
+  const s9 = startStage();
+  const userPrompt = buildFinalDecisionUserPrompt(decisionPacket, ruleEvalResult);
   try {
     aiRawText = await callFinalDecisionAI(userPrompt);
     const parseResult = parseFinalAIOutput(aiRawText);
-
     if (!parseResult.ok) {
       // Parse failure → retry once
       retryCount = 1;
       const retryText = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(parseResult.error)}`);
       const retryParse = parseFinalAIOutput(retryText);
       if (!retryParse.ok) {
-        // Still unparseable after retry → deterministic AGENT_REVIEW fallback
         deterministicFallbackReason = "AI output could not be parsed after retry";
         finalAIOutput = buildFallbackOutput(deterministicFallbackReason, "AI response could not be parsed");
       } else {
@@ -347,62 +393,57 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
     } else {
       finalAIOutput = parseResult.data;
     }
-
-    // ── Stage 10: Validate AI output (runs for all recommendations, including AGENT_REVIEW) ──
-    if (finalAIOutput && !deterministicFallbackReason) {
-      validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
-
-      // ── Stage 11: Retry once on structural failure ──────────────────────
-      if (validationResult.status === "failed" && validationResult.failureType === "structural_failure" && retryCount === 0) {
-        retryCount = 1;
-        const issueList = validationResult.blockingIssues.map(i => i.message).join("; ");
-        const retryRaw = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(issueList)}`);
-        const retryParse = parseFinalAIOutput(retryRaw);
-        if (retryParse.ok) {
-          aiRawText = retryRaw;
-          finalAIOutput = retryParse.data;
-          validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
-        }
-      }
-
-      // ── Structural failure unrepaired after retry → deterministic AGENT_REVIEW ──
-      if (validationResult.status === "failed" && validationResult.failureType === "structural_failure") {
-        deterministicFallbackReason = "AI output failed structural validation after retry";
-        finalAIOutput = buildFallbackOutput(
-          deterministicFallbackReason,
-          "AI output failed structural validation and could not be repaired"
-        );
-        validationResult = null;
-      }
-
-      // ── Tie-ambiguity → deterministic AGENT_REVIEW ──────────────────────
-      // When the validator emits a blocking policy_failure for tied preferred
-      // without a traceable reason, convert to deterministic fallback.
-      if (
-        validationResult !== null &&
-        validationResult.status === "failed" &&
-        validationResult.failureType === "policy_failure" &&
-        validationResult.blockingIssues.some(i =>
-          i.field === "treatment_eligibility_explanation" &&
-          i.message.toLowerCase().includes("tied preferred")
-        )
-      ) {
-        deterministicFallbackReason = "tied preferred treatments — no traceable reason to choose";
-        finalAIOutput = buildFallbackOutput(
-          deterministicFallbackReason,
-          "Tied preferred treatments with no documented justification; escalating to agent"
-        );
-        validationResult = null;
-      }
-
-    }
   } catch (err) {
     console.error("[orchestrator] Final AI call failed:", err);
     deterministicFallbackReason = "AI call failed: " + String(err).substring(0, 100);
     finalAIOutput = buildFallbackOutput(deterministicFallbackReason, "AI call failed during final decision stage");
   }
+  stageMetrics["aiCall"] = endStage(s9, { retryCount: 0 });
 
-  stageMetrics["finalDecision"] = endStage(s9, { retryCount });
+  // ── Stage 10: Validate AI output ────────────────────────────────────────
+  const s10 = startStage();
+  let validationRetryCount = 0;
+  if (finalAIOutput && !deterministicFallbackReason) {
+    validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
+  }
+  stageMetrics["outputValidation"] = endStage(s10, {
+    blocking: validationResult?.blockingIssues.length ?? 0,
+    warnings: validationResult?.warnings.length ?? 0,
+  });
+
+  // ── Stage 11: Retry on structural failure (once) ─────────────────────────
+  const s11 = startStage();
+  if (
+    validationResult?.status === "failed" &&
+    validationResult.failureType === "structural_failure" &&
+    retryCount === 0 &&
+    finalAIOutput &&
+    !deterministicFallbackReason
+  ) {
+    validationRetryCount = 1;
+    const issueList = validationResult.blockingIssues.map(i => i.message).join("; ");
+    try {
+      const retryRaw = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(issueList)}`);
+      const retryParse = parseFinalAIOutput(retryRaw);
+      if (retryParse.ok) {
+        aiRawText = retryRaw;
+        finalAIOutput = retryParse.data;
+        validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
+      }
+    } catch (retryErr) {
+      console.error("[orchestrator] Retry AI call failed:", retryErr);
+    }
+    // Structural failure unrepaired after retry → deterministic AGENT_REVIEW
+    if (validationResult.status === "failed" && validationResult.failureType === "structural_failure") {
+      deterministicFallbackReason = "AI output failed structural validation after retry";
+      finalAIOutput = buildFallbackOutput(
+        deterministicFallbackReason,
+        "AI output failed structural validation and could not be repaired"
+      );
+      validationResult = null;
+    }
+  }
+  stageMetrics["validationRetry"] = endStage(s11, { retried: validationRetryCount });
 
   // ── Determine decision status ────────────────────────────────────────────
   // failed_validation: policy/guardrail/evidence failures that are not structural
