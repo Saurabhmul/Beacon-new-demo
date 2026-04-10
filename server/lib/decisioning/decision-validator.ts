@@ -197,11 +197,19 @@ export function validateDecision(
 
   const emailVal = output.proposed_email_to_customer;
   if (emailVal && emailVal !== "NO_ACTION") {
-    if (!emailVal.includes("Subject:")) {
-      blockingIssues.push({ failureType: "structural_failure", message: "Email draft missing Subject:", field: "proposed_email_to_customer" });
+    // Subject must be present and non-empty
+    const subjectMatch = emailVal.match(/Subject:\s*(.+)/i);
+    if (!subjectMatch) {
+      blockingIssues.push({ failureType: "structural_failure", message: "Email draft missing Subject: line", field: "proposed_email_to_customer" });
+    } else if (!subjectMatch[1].trim()) {
+      blockingIssues.push({ failureType: "structural_failure", message: "Email Subject: is present but has no content", field: "proposed_email_to_customer" });
     }
-    if (!emailVal.includes("Body:")) {
-      blockingIssues.push({ failureType: "structural_failure", message: "Email draft missing Body:", field: "proposed_email_to_customer" });
+    // Body must be present and non-empty
+    const bodyMatch = emailVal.match(/Body:\s*([\s\S]*?)(?:$)/i);
+    if (!bodyMatch) {
+      blockingIssues.push({ failureType: "structural_failure", message: "Email draft missing Body: section", field: "proposed_email_to_customer" });
+    } else if (!bodyMatch[1].trim()) {
+      blockingIssues.push({ failureType: "structural_failure", message: "Email Body: is present but has no content", field: "proposed_email_to_customer" });
     }
     const lineCount = emailVal.split("\n").filter(l => l.trim()).length;
     if (lineCount > 10) {
@@ -300,7 +308,7 @@ export function validateDecision(
     }
 
     // emailWhenNotToUse: blocking guardrail_failure
-    const emailWhenNotToUse = decisionPacket.communication?.guidelines?.emailWhenNotToUse ?? [];
+    const emailWhenNotToUse = decisionPacket.communication?.emailWhenNotToUse ?? [];
     if (emailWhenNotToUse.length > 0) {
       const emailLower = emailVal.toLowerCase();
       const explanationLower = String(output.treatment_eligibility_explanation ?? "").toLowerCase();
@@ -418,18 +426,17 @@ export function validateDecision(
       }
     } else if (isTiedPreferred) {
       // Tied preferred: AI chose one from multiple equally-ranked preferred treatments.
-      // If the AI provides a traceable reason, accept the choice.
-      // If no reason given: emit a blocking policy_failure so the orchestrator
-      // converts it into a deterministic AGENT_REVIEW fallback with runFallbackReason.
+      // Per spec: this is a WARNING-only outcome. The validator emits a guardrail_failure
+      // WARNING when no reason is documented, but does NOT block — result stays "passed".
       const explanation = String(output.treatment_eligibility_explanation ?? "").trim();
       if (chosenEntry) chosenEntry.selectionMode = "tied_preferred";
       if (!explanation) {
-        blockingIssues.push({
-          failureType: "policy_failure",
-          message: "Tied preferred treatments — no documented reason to choose; deterministic AGENT_REVIEW required",
+        warnings.push({
+          failureType: "guardrail_failure",
+          message: "Tied preferred treatment selected without documented selection reason — audit recommended",
           field: "treatment_eligibility_explanation",
         });
-        if (chosenEntry) chosenEntry.selectionReason = "Tie-ambiguity: no reason provided";
+        if (chosenEntry) chosenEntry.selectionReason = "Tied preferred treatment — no reason documented";
       } else {
         if (chosenEntry) chosenEntry.selectionReason = explanation.substring(0, 500);
       }

@@ -126,7 +126,7 @@ export function buildFinalDecisionUserPrompt(
 
   // ── Communication Guidelines ─────────────────────────────────────────────
   sections.push("\n=== COMMUNICATION GUIDELINES ===");
-  const cg = dp.communication.guidelines;
+  const cg = dp.communication;
   const hasCommGuidelines =
     cg.communicationGuidelines.length > 0 ||
     cg.emailGuidelines.length > 0 ||
@@ -142,23 +142,23 @@ export function buildFinalDecisionUserPrompt(
   } else {
     if (cg.communicationGuidelines.length > 0) {
       sections.push("General guidelines:");
-      cg.communicationGuidelines.forEach(g => sections.push(`  - ${g}`));
+      cg.communicationGuidelines.forEach((g: string) => sections.push(`  - ${g}`));
     }
     if (cg.emailGuidelines.length > 0) {
       sections.push("Email guidelines:");
-      cg.emailGuidelines.forEach(g => sections.push(`  - ${g}`));
+      cg.emailGuidelines.forEach((g: string) => sections.push(`  - ${g}`));
     }
     if (cg.emailWhenToUse.length > 0) {
       sections.push("emailWhenToUse:");
-      cg.emailWhenToUse.forEach(g => sections.push(`  - ${g}`));
+      cg.emailWhenToUse.forEach((g: string) => sections.push(`  - ${g}`));
     }
     if (cg.emailWhenNotToUse.length > 0) {
       sections.push("emailWhenNotToUse:");
-      cg.emailWhenNotToUse.forEach(g => sections.push(`  - ${g}`));
+      cg.emailWhenNotToUse.forEach((g: string) => sections.push(`  - ${g}`));
     }
     if (cg.toneGuidance.length > 0) {
       sections.push("toneGuidance:");
-      cg.toneGuidance.forEach(g => sections.push(`  - ${g}`));
+      cg.toneGuidance.forEach((g: string) => sections.push(`  - ${g}`));
     }
   }
 

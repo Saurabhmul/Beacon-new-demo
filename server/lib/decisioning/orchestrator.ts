@@ -352,12 +352,45 @@ async function _runDecisionPipelineInternal(
     });
   }
 
+  // Deterministic fallback: critical missing information — AI cannot make a reliable decision
+  if (decisionPacket.missingCriticalInformation.length > 0) {
+    const missingDescriptions = decisionPacket.missingCriticalInformation.map(m => m.fieldId).join(", ");
+    const reason = "critical information missing — human review required";
+    return assembleDeterministicFallback({
+      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
+      runFallbackReason: reason,
+      fallbackOutput: buildFallbackOutput(reason, `Critical fields missing: ${missingDescriptions}`),
+      stageMetrics, rawCustomerData,
+      selectionTrace: ruleEvalResult.treatmentSelectionTrace,
+      issues: [`Missing critical fields: ${missingDescriptions}`],
+      decisionPacket, fieldResolution, derivedFieldResult, businessFieldResult, ruleEvalResult,
+    });
+  }
+
+  // Deterministic fallback: hard guardrail flag (contact restriction / legal hold)
+  // Only the highest-severity guardrail types force pre-AI human review.
+  const hardGuardrailTypes = new Set(["contact_restriction", "legal_hold", "legal_dispute", "vulnerability", "deceased"]);
+  const hardGuardrailFlag = decisionPacket.guardrailFlags.find(f => hardGuardrailTypes.has(f.type));
+  if (hardGuardrailFlag) {
+    const reason = "hard guardrail — human review required before AI processing";
+    return assembleDeterministicFallback({
+      runId, engineVersion: ENGINE_VERSION, policyVersion, timestamp, companyId,
+      runFallbackReason: reason,
+      fallbackOutput: buildFallbackOutput(reason, `Hard guardrail active: ${hardGuardrailFlag.description}`),
+      stageMetrics, rawCustomerData,
+      selectionTrace: ruleEvalResult.treatmentSelectionTrace,
+      issues: [`Hard guardrail: ${hardGuardrailFlag.description}`],
+      decisionPacket, fieldResolution, derivedFieldResult, businessFieldResult, ruleEvalResult,
+    });
+  }
+
   // ── Stage 9: Final AI call ───────────────────────────────────────────────
   let finalAIOutput: FinalAIOutput | null = null;
   let validationResult: DecisionValidationResult | null = null;
   let deterministicFallbackReason: string | null = null;
   let aiRawText = "";
-  let retryCount = 0;
+  // Separate counters: parse retry is independent from structural-validation retry
+  let parseRetryCount = 0;
 
   const s9 = startStage();
   const userPrompt = buildFinalDecisionUserPrompt(decisionPacket, ruleEvalResult);
@@ -366,7 +399,7 @@ async function _runDecisionPipelineInternal(
     const parseResult = parseFinalAIOutput(aiRawText);
     if (!parseResult.ok) {
       // Parse failure → retry once
-      retryCount = 1;
+      parseRetryCount = 1;
       const retryText = await callFinalDecisionAI(`${userPrompt}\n\n${buildFinalDecisionRetryPrompt(parseResult.error)}`);
       const retryParse = parseFinalAIOutput(retryText);
       if (!retryParse.ok) {
@@ -384,11 +417,10 @@ async function _runDecisionPipelineInternal(
     deterministicFallbackReason = "AI call failed: " + String(err).substring(0, 100);
     finalAIOutput = buildFallbackOutput(deterministicFallbackReason, "AI call failed during final decision stage");
   }
-  stageMetrics["aiCall"] = endStage(s9, { retryCount: 0 });
+  stageMetrics["aiCall"] = endStage(s9, { parseRetryCount });
 
   // ── Stage 10: Validate AI output ────────────────────────────────────────
   const s10 = startStage();
-  let validationRetryCount = 0;
   if (finalAIOutput && !deterministicFallbackReason) {
     validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
   }
@@ -397,12 +429,13 @@ async function _runDecisionPipelineInternal(
     warnings: validationResult?.warnings.length ?? 0,
   });
 
-  // ── Stage 11: Retry on structural failure (once) ─────────────────────────
+  // ── Stage 11: Retry on structural failure (once, independent of parse retry) ──
+  // Note: structural retry has its own counter; it is NOT blocked by a prior parse retry.
   const s11 = startStage();
+  let validationRetryCount = 0;
   if (
     validationResult?.status === "failed" &&
     validationResult.failureType === "structural_failure" &&
-    retryCount === 0 &&
     finalAIOutput &&
     !deterministicFallbackReason
   ) {
@@ -417,7 +450,7 @@ async function _runDecisionPipelineInternal(
         validationResult = validateDecision(finalAIOutput, decisionPacket, ruleEvalResult.treatmentSelectionTrace);
       }
     } catch (retryErr) {
-      console.error("[orchestrator] Retry AI call failed:", retryErr);
+      console.error("[orchestrator] Structural retry AI call failed:", retryErr);
     }
     // Structural failure unrepaired after retry → deterministic AGENT_REVIEW
     if (validationResult.status === "failed" && validationResult.failureType === "structural_failure") {
@@ -430,29 +463,6 @@ async function _runDecisionPipelineInternal(
     }
   }
   stageMetrics["validationRetry"] = endStage(s11, { retried: validationRetryCount });
-
-  // ── Stage 12: Tie-ambiguity deterministic fallback ───────────────────────
-  // If the AI chose among tied preferred treatments without any traceable reason,
-  // the validator emits a blocking policy_failure. Convert to deterministic AGENT_REVIEW.
-  if (
-    validationResult !== null &&
-    validationResult.status === "failed" &&
-    validationResult.failureType === "policy_failure" &&
-    validationResult.blockingIssues.some(i =>
-      i.field === "treatment_eligibility_explanation" &&
-      i.message.toLowerCase().includes("tied preferred")
-    )
-  ) {
-    deterministicFallbackReason = "tied preferred treatments — no traceable reason to choose";
-    finalAIOutput = buildFallbackOutput(
-      deterministicFallbackReason,
-      "Tied preferred treatments with no documented justification; escalating to agent"
-    );
-    validationResult = null;
-  }
-  stageMetrics["tieAmbiguity"] = endStage(startStage(), {
-    tieFallback: deterministicFallbackReason?.includes("tied preferred") ? 1 : 0,
-  });
 
   // ── Determine decision status ────────────────────────────────────────────
   // failed_validation: policy/guardrail/evidence failures that are not structural

@@ -13,18 +13,18 @@ import type { PolicyPack, TreatmentWithRules } from "@shared/schema";
 
 // ─── Communication types ───────────────────────────────────────────────────────
 
-export interface CommunicationGuidelines {
+export type CommunicationSource = "policy_config" | "default_empty";
+
+/**
+ * Flat communication configuration compiled from policy config (treatment tone fields)
+ * and SOP text. Arrays are directly on this object — no nested "guidelines" wrapper.
+ */
+export interface CommunicationSection {
   communicationGuidelines: string[];
   emailGuidelines: string[];
   emailWhenToUse: string[];
   emailWhenNotToUse: string[];
   toneGuidance: string[];
-}
-
-export type CommunicationSource = "policy_config" | "default_empty";
-
-export interface CommunicationSection {
-  guidelines: CommunicationGuidelines;
   communicationSource: CommunicationSource;
 }
 
@@ -217,13 +217,11 @@ function compileCommunicationFromPolicy(
     toneGuidance.length > 0;
 
   return {
-    guidelines: {
-      communicationGuidelines,
-      emailGuidelines,
-      emailWhenToUse,
-      emailWhenNotToUse,
-      toneGuidance,
-    },
+    communicationGuidelines,
+    emailGuidelines,
+    emailWhenToUse,
+    emailWhenNotToUse,
+    toneGuidance,
     communicationSource: hasAnyContent ? "policy_config" : "default_empty",
   };
 }
