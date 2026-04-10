@@ -290,8 +290,8 @@ function ValidationBadge({ status, failureType, warnings }: {
   );
 }
 
-// Confidence scores from the backend are 1–10 integers (not 0–1 fractions).
-// Display as X/10 and fill bar proportionally.
+// Top-level confidence scores (customer_situation_confidence_score,
+// proposed_next_best_confidence_score) are 1–10 integers per final-decision-prompt.
 function ConfidenceBar({ value }: { value: number | null }) {
   if (value == null) return <span className="text-xs text-muted-foreground">—</span>;
   const clamped = Math.max(0, Math.min(10, value));
@@ -303,6 +303,23 @@ function ConfidenceBar({ value }: { value: number | null }) {
         <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
       </div>
       <span className="text-xs text-muted-foreground">{clamped}/10</span>
+    </div>
+  );
+}
+
+// Business-field confidence values are 0.0–1.0 floats per business-field-engine.ts.
+// Display as percentage bar with X% label.
+function ConfidenceBarFraction({ value }: { value: number | null }) {
+  if (value == null) return <span className="text-xs text-muted-foreground">—</span>;
+  const clamped = Math.max(0, Math.min(1, value));
+  const pct = Math.round(clamped * 100);
+  const color = clamped >= 0.7 ? "bg-green-500" : clamped >= 0.4 ? "bg-amber-400" : "bg-red-400";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-2 w-24 rounded-full bg-muted overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs text-muted-foreground">{pct}%</span>
     </div>
   );
 }
@@ -528,13 +545,20 @@ function SourceDataSection({ srcTrace }: { srcTrace: Record<string, Record<strin
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
             {display.map(([fieldId, trace]) => {
-              const label = str(trace.rawKey) || fieldId;
+              const rawKey = str(trace.rawKey);
               const isNull = trace.rawValue == null || trace.rawValue === "";
               const method = str(trace.method);
               return (
                 <div key={fieldId} className="py-1 border-b border-border/50 last:border-0">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-xs text-muted-foreground break-all">{label}</p>
+                    <div>
+                      {/* fieldId is the canonical field identifier */}
+                      <p className="text-xs font-medium break-all">{fieldId}</p>
+                      {/* rawKey is the source-specific field name (may differ from canonical) */}
+                      {rawKey && rawKey !== fieldId && (
+                        <p className="text-[10px] text-muted-foreground break-all">source: {rawKey}</p>
+                      )}
+                    </div>
                     {method === "alias" && (
                       <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">alias</Badge>
                     )}
@@ -556,8 +580,24 @@ function SourceDataSection({ srcTrace }: { srcTrace: Record<string, Record<strin
 
 // ── V2 Section 3: Derived Fields ──────────────────────────────────────────────
 
-function DerivedFieldsSection({ derivedTrace }: { derivedTrace: Record<string, Record<string, unknown>> }) {
+function DerivedFieldsSection({
+  derivedTrace,
+  srcTrace,
+}: {
+  derivedTrace: Record<string, Record<string, unknown>>;
+  srcTrace: Record<string, Record<string, unknown>>;
+}) {
   const entries = Object.entries(derivedTrace);
+
+  // Look up the resolved value of an input field from available traces
+  function inputValue(inp: string): string | null {
+    const sv = srcTrace[inp]?.rawValue;
+    if (sv != null && sv !== "") return String(sv);
+    const dv = derivedTrace[inp]?.outputValue;
+    if (dv != null) return String(dv);
+    return null;
+  }
+
   return (
     <SectionPanel title="Derived Fields" typeLabel="computed facts" icon={TrendingUp} testId="section-derived-fields">
       {entries.length === 0 ? (
@@ -591,10 +631,18 @@ function DerivedFieldsSection({ derivedTrace }: { derivedTrace: Record<string, R
                   <TableCell className="text-xs max-w-[200px]">
                     {formula && <p className="font-mono text-muted-foreground mb-1">{formula}</p>}
                     {inputsUsed.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {inputsUsed.map((inp, i) => (
-                          <Badge key={i} variant="outline" className="text-[9px] px-1 py-0">{inp}</Badge>
-                        ))}
+                      <div className="flex flex-col gap-0.5">
+                        {inputsUsed.map((inp, i) => {
+                          const val = inputValue(inp);
+                          return (
+                            <div key={i} className="flex items-baseline gap-1">
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">{inp}</Badge>
+                              {val != null && (
+                                <span className="text-[10px] text-muted-foreground">{val}</span>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </TableCell>
@@ -662,7 +710,7 @@ function BusinessFieldEntry({
       </div>
       <div>
         <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Confidence</p>
-        <ConfidenceBar value={confidence} />
+        <ConfidenceBarFraction value={confidence} />
       </div>
       {rationale && (
         <div>
@@ -1097,7 +1145,7 @@ export default function DecisionDetailPage() {
 
         <CaseSummarySection v2={v2} />
         <SourceDataSection srcTrace={v2.srcTrace} />
-        <DerivedFieldsSection derivedTrace={v2.derivedTrace} />
+        <DerivedFieldsSection derivedTrace={v2.derivedTrace} srcTrace={v2.srcTrace} />
         <BusinessFieldsSection bizTrace={v2.bizTrace} />
         <TreatmentDecisionSection
           decision={decision}
