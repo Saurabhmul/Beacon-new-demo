@@ -528,6 +528,42 @@ describe("inferBusinessFields – orchestration", () => {
     expect(result.traces["99"].retryCount).toBe(1);
   });
 
+  it("rejects object/array values for string fields (string-or-null fallback enforced)", async () => {
+    // Field with no explicit dataType and no allowed_values → defaults to string
+    const catalog = [{ ...makeBizField("50", "ambiguous_field"), dataType: null }];
+    const treatment = makeTreatment([makeGroup("eligibility", [makeRule("50")])]);
+
+    // First attempt: model returns an object (invalid for any scalar field)
+    mockGenerateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        field_id: "50",
+        field_label: "ambiguous_field",
+        value: { nested: "object" }, // invalid — object not allowed
+        confidence: 0.6,
+        rationale: "Evidence found.",
+        null_reason: null,
+        evidence: ["item"],
+      }),
+    });
+    // Retry: correct string
+    mockGenerateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        field_id: "50",
+        field_label: "ambiguous_field",
+        value: "some_string", // valid string
+        confidence: 0.6,
+        rationale: "Evidence found.",
+        null_reason: null,
+        evidence: ["item"],
+      }),
+    });
+
+    const result = await inferBusinessFields([treatment], catalog, {});
+    // Object value rejected on first attempt → retry → string value accepted
+    expect(result.values["50"]).toBe("some_string");
+    expect(result.traces["50"].retryCount).toBe(1);
+  });
+
   it("stores null with 'model output invalid after retry' when both attempts fail", async () => {
     const catalog = [makeBizField("42", "some_field")];
     const treatment = makeTreatment([

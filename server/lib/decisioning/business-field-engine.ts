@@ -462,6 +462,8 @@ function validateModelResponse(
   }
 
   // Value type validation against data_type
+  // Per spec: "if data_type is missing: infer from allowed_values → else from description →
+  // else accept string or null only (unless clearly boolean-like)."
   if (parsed.value !== null && parsed.value !== undefined) {
     const effectiveDataType = resolveEffectiveDataType(field);
     if (effectiveDataType === "boolean") {
@@ -478,16 +480,16 @@ function validateModelResponse(
           error: `"value" must be a number or null for a number field, got ${typeof parsed.value}: ${JSON.stringify(parsed.value)}`,
         };
       }
-    } else if (effectiveDataType === "string") {
-      // String type is lenient: accept string, number (coerced), or boolean-as-string from model
-      if (typeof parsed.value !== "string" && typeof parsed.value !== "number") {
+    } else {
+      // effectiveDataType === "string" (default, covers missing/ambiguous types per spec)
+      // Reject objects, arrays, and booleans. Only string scalars are valid.
+      if (typeof parsed.value !== "string") {
         return {
           ok: false,
-          error: `"value" must be a string or null for a string field, got ${typeof parsed.value}: ${JSON.stringify(parsed.value)}`,
+          error: `"value" must be a string or null, got ${typeof parsed.value}: ${JSON.stringify(parsed.value)}`,
         };
       }
     }
-    // When effectiveDataType is null (unknown), accept any non-null scalar — no type constraint
   }
 
   // If allowed_values provided, value must be one of them or null
@@ -522,15 +524,19 @@ function validateModelResponse(
 
 /**
  * Determine the effective data type for a field.
- * Priority: explicit data_type → inferred from allowed_values → inferred boolean from description → null.
+ * Priority: explicit data_type → inferred from allowed_values → inferred boolean from description → "string".
+ *
+ * Per spec: if data_type is missing and no allowed_values, accept string or null only
+ * (unless clearly boolean-like). Default fallback is always "string" — never null.
  */
-function resolveEffectiveDataType(field: CatalogEntry): "boolean" | "number" | "string" | null {
+function resolveEffectiveDataType(field: CatalogEntry): "boolean" | "number" | "string" {
   if (field.dataType) {
     const t = field.dataType.toLowerCase().trim();
     if (t === "boolean" || t === "bool") return "boolean";
     if (t === "number" || t === "integer" || t === "float" || t === "decimal" || t === "numeric") return "number";
     if (t === "string" || t === "text" || t === "varchar") return "string";
-    return null; // unrecognised explicit type — accept any scalar
+    // Unrecognised explicit type: default to "string" — safe conservative fallback
+    return "string";
   }
   if (field.allowedValues && field.allowedValues.length > 0) {
     const lower = field.allowedValues.map(v => v.toLowerCase().trim());
@@ -538,11 +544,11 @@ function resolveEffectiveDataType(field: CatalogEntry): "boolean" | "number" | "
     if (lower.every(v => /^-?\d+(\.\d+)?$/.test(v))) return "number";
     return "string";
   }
-  // No explicit type and no allowed_values: only infer boolean, otherwise no constraint
+  // No explicit type and no allowed_values: infer boolean only if clearly boolean-like; else string.
   const combined = `${field.description ?? ""} ${field.businessMeaning ?? ""}`.toLowerCase();
   const boolSignals = ["true or false", "yes or no", "boolean", "is active", "is enabled", "detected", "confirmed", "flag", "indicator"];
   if (boolSignals.some(s => combined.includes(s))) return "boolean";
-  return null; // no constraint when type is genuinely ambiguous
+  return "string"; // spec: "accept string or null only" as the final fallback
 }
 
 // ─── Confidence normalization ─────────────────────────────────────────────────
