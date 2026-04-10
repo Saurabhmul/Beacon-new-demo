@@ -39,13 +39,18 @@ const DEFAULT_CONFIG: Required<BusinessFieldInferenceConfig> = {
 const HARD_BLOCKER_TYPES = new Set(["hard_blocker"]);
 const ESCALATION_TYPES = new Set(["escalation", "review_trigger", "soft_blocker"]);
 const ELIGIBILITY_TYPES = new Set(["eligibility"]);
+// Guardrail-referenced fields are included but assigned to tier 4 (non-blocking,
+// so they don't elevate to required tiers but are still inferred).
+// (kept for future use as an explicit guardrail type check if needed)
+const _GUARDRAIL_TYPES = new Set(["guardrail"]); void _GUARDRAIL_TYPES;
 
-function ruleTypeTier(ruleType: string): BusinessFieldTier | null {
+function ruleTypeTier(ruleType: string): BusinessFieldTier {
   const lower = ruleType.toLowerCase();
   if (HARD_BLOCKER_TYPES.has(lower)) return 1;
   if (ESCALATION_TYPES.has(lower)) return 2;
   if (ELIGIBILITY_TYPES.has(lower)) return 3;
-  return null; // guardrail, unknown → not a required tier; caller treats as tier-4
+  // guardrail and any unknown rule type → tier 4 (included but lowest priority)
+  return 4;
 }
 
 // ─── Required field selector ──────────────────────────────────────────────────
@@ -85,23 +90,33 @@ export function getRequiredBusinessFieldsForCustomer(
   // Map: fieldId → best tier seen (lower number = higher priority)
   const fieldBestTier = new Map<string, BusinessFieldTier>();
 
+  // Helper: register a candidate field at the most critical tier seen
+  function registerField(fieldId: string | null | undefined, tier: BusinessFieldTier) {
+    if (!fieldId || !businessFieldIds.has(fieldId)) return;
+    const current = fieldBestTier.get(fieldId);
+    if (current === undefined || tier < current) {
+      fieldBestTier.set(fieldId, tier);
+    }
+  }
+
   for (const treatment of treatments) {
     if (!treatment.enabled) continue;
     for (const group of treatment.ruleGroups ?? []) {
+      // All rule group types are inspected — guardrail → tier 4, others as appropriate.
+      // This ensures we never miss a business field referenced anywhere in the policy.
       const tier = ruleTypeTier(group.ruleType ?? "");
-      if (tier === null) continue; // guardrail etc. — skip
       for (const rule of group.rules ?? []) {
-        const leftFieldId = rule.leftFieldId;
-        if (!leftFieldId || !businessFieldIds.has(leftFieldId)) continue;
-        const current = fieldBestTier.get(leftFieldId);
-        if (current === undefined || tier < current) {
-          fieldBestTier.set(leftFieldId, tier);
+        // leftFieldId: LHS of comparison (most common path)
+        registerField(rule.leftFieldId, tier);
+        // rightFieldId: RHS in field-vs-field comparisons — also a potential business field reference
+        if (rule.rightMode === "field") {
+          registerField(rule.rightFieldId, tier);
         }
       }
     }
   }
 
-  // Tier-4: all business fields not assigned a tier 1–3
+  // Tier-4 via feature flag: all remaining catalog business fields
   if (inferTier4Fields) {
     for (const fieldId of Array.from(businessFieldIds)) {
       if (!fieldBestTier.has(fieldId)) {
@@ -110,43 +125,70 @@ export function getRequiredBusinessFieldsForCustomer(
     }
   }
 
-  if (fieldBestTier.size === 0) return [];
+  // Tier-4 via transitive dependency: if a required tier 1–3 field declares
+  // depends_on_business_fields, those dependencies are also inferred (as tier 4)
+  // even when inferTier4Fields = false.
+  //
+  // NOTE: This traversal works with real data once buildFullFieldCatalog is updated to
+  // populate CatalogEntry.dependsOnBusinessFields from persisted policy field metadata.
+  // Until that DB schema extension lands, dependsOnBusinessFields will be null and this
+  // traversal is a no-op (no ordering constraint, no extra fields added). The logic itself
+  // is already correct and future-safe.
+  {
+    const visited = new Set<string>();
 
-  // Group by tier, then topological sort within each tier
-  const tiers: Map<BusinessFieldTier, string[]> = new Map([
-    [1, []],
-    [2, []],
-    [3, []],
-    [4, []],
-  ]);
-
-  for (const [fieldId, tier] of Array.from(fieldBestTier.entries())) {
-    tiers.get(tier)!.push(fieldId);
-  }
-
-  const result: OrderedBusinessField[] = [];
-  let position = 0;
-
-  for (const tier of [1, 2, 3, 4] as BusinessFieldTier[]) {
-    const tierFields = tiers.get(tier)!;
-    if (tierFields.length === 0) continue;
-    const sorted = topologicalSort(tierFields, catalogById);
-    for (const fieldId of sorted) {
+    function expandDependencies(fieldId: string) {
+      if (visited.has(fieldId)) return;
+      visited.add(fieldId);
       const entry = catalogById.get(fieldId);
-      if (!entry) continue;
-      result.push({ fieldId, catalogEntry: entry, tier, dependencyPosition: position++ });
+      for (const depId of entry?.dependsOnBusinessFields ?? []) {
+        if (!catalogById.has(depId)) continue;
+        if (!fieldBestTier.has(depId)) {
+          // Not in any required tier yet — add as tier 4 (dependency of a required field)
+          fieldBestTier.set(depId, 4);
+        }
+        expandDependencies(depId);
+      }
+    }
+
+    // Seed from all currently known required fields (tier 1–3)
+    for (const [fieldId, tier] of Array.from(fieldBestTier.entries())) {
+      if (tier <= 3) {
+        expandDependencies(fieldId);
+      }
     }
   }
 
-  return result;
+  if (fieldBestTier.size === 0) return [];
+
+  // Global topological sort across all tiers.
+  //
+  // Tier determines AGENT_REVIEW routing (not inference position). Dependencies take
+  // precedence over tier ordering — a tier-4 dependency of a tier-1 field MUST be
+  // inferred before the tier-1 field so its value is available in priorBusinessFields.
+  //
+  // Tie-breaking within the same dependency level: lower tier number first (most critical),
+  // then alphabetical by fieldId for deterministic output.
+  const allFieldIds = Array.from(fieldBestTier.keys());
+  const globallyOrdered = globalTopologicalSort(allFieldIds, catalogById, fieldBestTier);
+
+  return globallyOrdered.map((fieldId, index) => ({
+    fieldId,
+    catalogEntry: catalogById.get(fieldId)!,
+    tier: fieldBestTier.get(fieldId)!,
+    dependencyPosition: index,
+  }));
 }
 
 /**
- * Topological sort of business field IDs within a tier, respecting
- * depends_on_business_fields. Falls back to alphabetical order if no
- * dependency info is available or if cycles are detected.
+ * Global topological sort respecting `depends_on_business_fields` across all tiers.
+ * Tie-breaking: lower tier number → earlier in output; then alphabetical by fieldId.
  */
-function topologicalSort(fieldIds: string[], catalog: Map<string, CatalogEntry>): string[] {
+function globalTopologicalSort(
+  fieldIds: string[],
+  catalog: Map<string, CatalogEntry>,
+  tierMap: Map<string, BusinessFieldTier>
+): string[] {
   const idSet = new Set(fieldIds);
   const visited = new Set<string>();
   const visiting = new Set<string>(); // cycle detection
@@ -155,8 +197,7 @@ function topologicalSort(fieldIds: string[], catalog: Map<string, CatalogEntry>)
   function visit(id: string) {
     if (visited.has(id)) return;
     if (visiting.has(id)) {
-      // Cycle detected — skip to avoid infinite loop; log and continue
-      console.warn(`[business-field-engine] Dependency cycle detected at field "${id}" — skipping dependency ordering`);
+      console.warn(`[business-field-engine] Dependency cycle at "${id}" — skipping`);
       return;
     }
     visiting.add(id);
@@ -170,14 +211,21 @@ function topologicalSort(fieldIds: string[], catalog: Map<string, CatalogEntry>)
     ordered.push(id);
   }
 
-  // Sort alphabetically first for deterministic output
-  const sortedIds = [...fieldIds].sort();
+  // Sort initial order by (tier asc, fieldId asc) so tie-breaking is stable before topo traversal
+  const sortedIds = [...fieldIds].sort((a, b) => {
+    const ta = tierMap.get(a) ?? 4;
+    const tb = tierMap.get(b) ?? 4;
+    if (ta !== tb) return ta - tb;
+    return a.localeCompare(b);
+  });
+
   for (const id of sortedIds) {
     visit(id);
   }
 
   return ordered;
 }
+
 
 // ─── Context assembly ─────────────────────────────────────────────────────────
 

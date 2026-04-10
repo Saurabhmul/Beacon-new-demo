@@ -205,6 +205,92 @@ describe("getRequiredBusinessFieldsForCustomer – tier assignment", () => {
     expect(result).toHaveLength(0);
   });
 
+  it("includes business fields referenced in rightFieldId (field-vs-field rules)", () => {
+    const catalog = [
+      makeBizField("10", "left_field"),
+      makeBizField("20", "right_field"),
+    ];
+    const ruleWithRight: TreatmentRule = {
+      id: 1,
+      ruleGroupId: 1,
+      fieldName: "unused",
+      operator: ">",
+      value: null,
+      leftFieldId: "10",
+      rightMode: "field",
+      rightConstantValue: null,
+      rightFieldId: "20",
+      sortOrder: 0,
+    };
+    const treatment = makeTreatment([
+      makeGroup("eligibility", [ruleWithRight]),
+    ]);
+    const result = getRequiredBusinessFieldsForCustomer([treatment], catalog);
+    const ids = result.map(f => f.fieldId);
+    expect(ids).toContain("10");
+    expect(ids).toContain("20");
+    expect(result.find(f => f.fieldId === "20")!.tier).toBe(3); // eligibility
+  });
+
+  it("does NOT include rightFieldId when rightMode is not 'field'", () => {
+    const catalog = [
+      makeBizField("10", "left_field"),
+      makeBizField("20", "right_field"),
+    ];
+    const ruleWithConstant: TreatmentRule = {
+      id: 1,
+      ruleGroupId: 1,
+      fieldName: "unused",
+      operator: "=",
+      value: null,
+      leftFieldId: "10",
+      rightMode: "constant",
+      rightConstantValue: "some_value",
+      rightFieldId: "20", // present but rightMode is "constant" — should be ignored
+      sortOrder: 0,
+    };
+    const treatment = makeTreatment([makeGroup("eligibility", [ruleWithConstant])]);
+    const result = getRequiredBusinessFieldsForCustomer([treatment], catalog);
+    const ids = result.map(f => f.fieldId);
+    expect(ids).toContain("10");
+    expect(ids).not.toContain("20"); // rightFieldId ignored when rightMode != "field"
+  });
+
+  it("includes guardrail-referenced fields as tier 4", () => {
+    const catalog = [makeBizField("77", "guardrail_field")];
+    const treatment = makeTreatment([
+      makeGroup("guardrail", [makeRule("77")]),
+    ]);
+    // inferTier4Fields = false: guardrail-referenced fields are STILL included
+    // (guardrails are always inspected, unlike completely unreferenced fields)
+    const result = getRequiredBusinessFieldsForCustomer([treatment], catalog, false);
+    expect(result).toHaveLength(1);
+    expect(result[0].fieldId).toBe("77");
+    expect(result[0].tier).toBe(4);
+  });
+
+  it("includes transitive dependency (tier-4) of a required tier-1 field even without inferTier4Fields", () => {
+    // Field "A" (tier 1) depends on field "B" (not directly referenced by any rule).
+    // "B" should be inferred as tier 4 via transitive dependency.
+    const catalog = [
+      { ...makeBizField("A", "critical_field"), dependsOnBusinessFields: ["B"] },
+      makeBizField("B", "dependency_field"),
+    ];
+    const treatment = makeTreatment([
+      makeGroup("hard_blocker", [makeRule("A")]),
+    ]);
+    const result = getRequiredBusinessFieldsForCustomer([treatment], catalog, false);
+    const ids = result.map(f => f.fieldId);
+    expect(ids).toContain("A");
+    expect(ids).toContain("B"); // included via transitive dependency expansion
+    const bEntry = result.find(f => f.fieldId === "B");
+    expect(bEntry!.tier).toBe(4); // tier 4 (dependency)
+    // B must come before A in the ordered result (dependency first)
+    const aPos = result.find(f => f.fieldId === "A")!.dependencyPosition;
+    const bPos = bEntry!.dependencyPosition;
+    expect(bPos).toBeLessThan(aPos);
+  });
+
   it("respects dependency ordering within a tier", () => {
     // field "B" depends on field "A" — A must come before B
     const catalog = [
