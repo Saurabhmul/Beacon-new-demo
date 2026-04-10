@@ -570,13 +570,14 @@ export default function ReviewQueuePage() {
                         <TableCell className="whitespace-nowrap" data-testid={`text-confidence-${d.id}`}>
                           {v2.confidenceScore != null ? (
                             <div className="flex items-center gap-1.5">
+                              {/* Backend scores are 1–10 integers — fill bar proportionally */}
                               <div className="h-1.5 w-14 rounded-full bg-muted overflow-hidden">
                                 <div
-                                  className={`h-full rounded-full ${v2.confidenceScore >= 0.7 ? "bg-green-500" : v2.confidenceScore >= 0.4 ? "bg-amber-400" : "bg-red-400"}`}
-                                  style={{ width: `${Math.round(v2.confidenceScore * 100)}%` }}
+                                  className={`h-full rounded-full ${v2.confidenceScore >= 7 ? "bg-green-500" : v2.confidenceScore >= 4 ? "bg-amber-400" : "bg-red-400"}`}
+                                  style={{ width: `${Math.round((Math.max(0, Math.min(10, v2.confidenceScore)) / 10) * 100)}%` }}
                                 />
                               </div>
-                              <span className="text-xs text-muted-foreground">{Math.round(v2.confidenceScore * 100)}%</span>
+                              <span className="text-xs text-muted-foreground">{Math.max(0, Math.min(10, v2.confidenceScore))}/10</span>
                             </div>
                           ) : (
                             <span className="text-xs text-muted-foreground">—</span>

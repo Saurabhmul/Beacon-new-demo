@@ -290,16 +290,19 @@ function ValidationBadge({ status, failureType, warnings }: {
   );
 }
 
+// Confidence scores from the backend are 1–10 integers (not 0–1 fractions).
+// Display as X/10 and fill bar proportionally.
 function ConfidenceBar({ value }: { value: number | null }) {
   if (value == null) return <span className="text-xs text-muted-foreground">—</span>;
-  const pct = Math.round(value * 100);
-  const color = value >= 0.7 ? "bg-green-500" : value >= 0.4 ? "bg-amber-400" : "bg-red-400";
+  const clamped = Math.max(0, Math.min(10, value));
+  const pct = Math.round((clamped / 10) * 100);
+  const color = clamped >= 7 ? "bg-green-500" : clamped >= 4 ? "bg-amber-400" : "bg-red-400";
   return (
     <div className="flex items-center gap-2">
       <div className="h-2 w-24 rounded-full bg-muted overflow-hidden">
         <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-xs text-muted-foreground">{pct}%</span>
+      <span className="text-xs text-muted-foreground">{clamped}/10</span>
     </div>
   );
 }
@@ -968,7 +971,7 @@ function V2TopSummary({
                 <span className="text-sm text-muted-foreground">{v2.recommendedName}</span>
               )}
               {v2.confidenceScore != null && (
-                <span className="text-xs text-muted-foreground">({Math.round(v2.confidenceScore * 100)}% confidence)</span>
+                <span className="text-xs text-muted-foreground">({Math.max(0, Math.min(10, v2.confidenceScore))}/10 confidence)</span>
               )}
             </div>
           </div>
