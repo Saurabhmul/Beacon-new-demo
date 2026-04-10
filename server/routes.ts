@@ -14,6 +14,7 @@ import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import { normalizeFieldLabel, buildFullFieldCatalog } from "./field-catalog";
+import { runDecisionPipeline } from "./lib/decisioning/orchestrator";
 import { toLogicOperator, normalizeDraftPriorities } from "./lib/treatment-logic";
 import { LogicalDerivationConfigSchema, topologicalSort, generateLogicalDerivationSummary } from "./lib/derivation-config";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
@@ -2289,17 +2290,16 @@ export async function registerRoutes(
           let completed = 0;
           let failed = 0;
 
-          clearTemplateCache();
-          const dpdStagesData = await storage.getDpdStages(companyId);
-          const compiled = compilePolicyPrompt({
-            dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
-            vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
-            affordabilityRules: policyConfig?.affordabilityRules,
-            treatments: policyConfig?.availableTreatments,
-            decisionRules: policyConfig?.decisionRules,
-            escalationRules: policyConfig?.escalationRules,
-          });
-          const compiledPolicy = compiled as unknown as Record<string, string>;
+          // ── v2.1 pipeline setup ─────────────────────────────────────────
+          const policyPack = await storage.getPolicyPack(companyId) ?? null;
+          const treatments = policyPack
+            ? await storage.getTreatmentsWithRules(policyPack.id)
+            : [];
+          const catalog = await buildFullFieldCatalog(companyId, storage);
+
+          // SOP text from the first available rulebook
+          const rulebooks = await storage.getRulebooks(companyId);
+          const sopText = rulebooks.find(rb => rb.sopText)?.sopText ?? null;
 
           for (const [custId, data] of customers) {
             try {
@@ -2311,37 +2311,35 @@ export async function registerRoutes(
                 _conversation_count: data.conversations.length,
               };
 
-              const assembledPrompt = assemblePrompt(
-                compiledPolicy,
-                combinedData,
-                dataConfig?.outputFormat || undefined
-              );
-
-              const result = await analyzeCustomer(
-                combinedData,
-                assembledPrompt
-              );
+              const result = await runDecisionPipeline({
+                companyId,
+                rawCustomerData: combinedData,
+                treatments,
+                catalog,
+                policyPack,
+                sopText,
+              });
 
               await storage.createDecision({
                 clientConfigId: clientConfig?.id ?? null,
                 dataUploadId: loanUpload.id,
                 userId,
                 companyId,
-                customerGuid: result.customer_guid || custId,
+                customerGuid: result.customerGuid || custId,
                 customerData: combinedData,
-                combinedCmd: result.combined_cmd,
-                problemDescription: result.problem_description,
-                problemConfidenceScore: result.problem_confidence_score,
-                problemEvidence: result.problem_evidence,
-                proposedSolution: result.proposed_solution,
-                solutionConfidenceScore: result.solution_confidence_score,
-                solutionEvidence: result.solution_evidence,
+                combinedCmd: null,
+                problemDescription: result.problemDescription,
+                problemConfidenceScore: null,
+                problemEvidence: null,
+                proposedSolution: result.recommended_treatment_name,
+                solutionConfidenceScore: null,
+                solutionEvidence: result.solutionEvidence,
                 internalAction: result.internal_action,
-                abilityToPay: result.ability_to_pay,
-                reasonForAbilityToPay: result.reason_for_ability_to_pay,
-                noOfLatestPaymentsFailed: result.no_of_latest_payments_failed,
+                abilityToPay: null,
+                reasonForAbilityToPay: null,
+                noOfLatestPaymentsFailed: null,
                 proposedEmailToCustomer: result.proposed_email_to_customer,
-                aiRawOutput: result as unknown as Record<string, unknown>,
+                aiRawOutput: result.aiRawOutput,
                 status: "pending",
               });
 
@@ -2349,7 +2347,7 @@ export async function registerRoutes(
               emitEvent({ type: "progress", completed, failed, total: customers.length, customerGuid: custId });
             } catch (err) {
               failed++;
-              console.error(`AI analysis failed for customer ${custId}:`, err);
+              console.error(`Decision pipeline failed for customer ${custId}:`, err);
               emitEvent({ type: "error", completed, failed, total: customers.length, customerGuid: custId, error: String(err) });
             }
           }

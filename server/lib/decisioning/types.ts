@@ -248,71 +248,9 @@ export interface BusinessFieldResult {
   stageMetrics: StageMetrics;
 }
 
-// ─── Validation ───────────────────────────────────────────────────────────────
+// ─── (Legacy validation types — superseded by decision-validator.ts in v2.1) ──
+// These are retained here for reference only. Authoritatve types are in:
+//   server/lib/decisioning/decision-validator.ts  (FinalAIOutput, DecisionValidationResult)
+//   server/lib/decisioning/decision-packet.ts      (DecisionPacket, CommunicationSection)
 
-export type ValidationStatus = "valid" | "failed_validation" | "agent_review";
-
-export interface ValidationIssue {
-  type: string;
-  message: string;
-  field?: string;
-}
-
-export interface ValidationResult {
-  status: ValidationStatus;
-  issues: ValidationIssue[];
-}
-
-// ─── Communication ────────────────────────────────────────────────────────────
-
-export interface CommunicationSection {
-  subject?: string;
-  body?: string;
-  communicationSource: "policy_config" | "default_empty";
-}
-
-// ─── Decision Packet ─────────────────────────────────────────────────────────
-
-export interface DecisionPacket {
-  // Fixed customer context fields
-  customer_guid: string | null;
-  customer_name: string | null;
-  customer_phone: string | null;
-  customer_email: string | null;
-  days_past_due: number | null;
-  amount_due: number | null;
-  minimum_due: number | null;
-  // Any additional non-null customer/account context goes here
-  additional_customer_context: Record<string, unknown>;
-
-  // Decision outcome
-  recommended_treatment: string | null;
-  internal_action: string | null;
-  // null for normal AI selections; reason string for deterministic fallbacks
-  runFallbackReason: string | null;
-
-  // Evidence
-  problem_description: string | null;
-  solution_evidence: string | null;
-
-  // Communication draft
-  communication: CommunicationSection;
-
-  // Pipeline traces
-  sourceResolution: Record<string, SourceResolutionTrace>;
-  derivedFields: DerivedFieldResult;
-  businessFields: BusinessFieldResult | null;
-  ruleEvaluation: RuleEvaluationResult;
-  validation: ValidationResult | null;
-
-  // AI raw output from the final decision stage
-  aiRawOutput: Record<string, unknown> | null;
-
-  stageMetrics: {
-    fieldResolution?: StageMetrics;
-    derivedFields?: StageMetrics;
-    ruleEvaluation?: StageMetrics;
-    businessFields?: StageMetrics;
-    finalDecision?: StageMetrics;
-  };
-}
+export type LegacyValidationStatus = "valid" | "failed_validation" | "agent_review";
