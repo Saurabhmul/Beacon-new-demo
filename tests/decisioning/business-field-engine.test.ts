@@ -414,17 +414,18 @@ describe("inferBusinessFields – orchestration", () => {
   });
 
   it("infers a single field and returns values + trace", async () => {
+    // Field has dataType: "string" (default in makeBizField), so value must be a string
     const catalog = [makeBizField("42", "vulnerability_flag")];
     const treatment = makeTreatment([
       makeGroup("hard_blocker", [makeRule("42")]),
     ]);
 
     mockGenerateContent.mockResolvedValueOnce({
-      text: makeValidResponse("42", "vulnerability_flag", true),
+      text: makeValidResponse("42", "vulnerability_flag", "confirmed"),
     });
 
     const result = await inferBusinessFields([treatment], catalog, {}, {}, {});
-    expect(result.values["42"]).toBe(true);
+    expect(result.values["42"]).toBe("confirmed");
     expect(result.traces["42"]).toBeDefined();
     expect(result.traces["42"].tier).toBe(1);
     expect(result.traces["42"].retryCount).toBe(0);
@@ -465,6 +466,66 @@ describe("inferBusinessFields – orchestration", () => {
     expect(result.values["42"]).toBe("inferred_value");
     expect(result.traces["42"].retryCount).toBe(1);
     expect(result.stageMetrics.counts.fieldsRetried).toBe(1);
+  });
+
+  it("requires field_id and field_label in model response (no silent defaulting)", async () => {
+    const catalog = [makeBizField("42", "some_field")];
+    const treatment = makeTreatment([makeGroup("eligibility", [makeRule("42")])]);
+
+    // First attempt: missing field_id and field_label
+    mockGenerateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        // field_id and field_label intentionally missing
+        value: "some_value",
+        confidence: 0.7,
+        rationale: "Evidence found.",
+        null_reason: null,
+        evidence: ["evidence item"],
+      }),
+    });
+    // Retry: valid with all keys present
+    mockGenerateContent.mockResolvedValueOnce({
+      text: makeValidResponse("42", "some_field", "some_value"),
+    });
+
+    const result = await inferBusinessFields([treatment], catalog, {});
+    // Should have retried (first attempt missing required keys)
+    expect(result.traces["42"].retryCount).toBe(1);
+    expect(result.values["42"]).toBe("some_value");
+  });
+
+  it("retries when value type mismatches explicit boolean data_type", async () => {
+    const catalog = [{ ...makeBizField("99", "flag_field"), dataType: "boolean" }];
+    const treatment = makeTreatment([makeGroup("hard_blocker", [makeRule("99")])]);
+
+    // First attempt: wrong type (string instead of boolean)
+    mockGenerateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        field_id: "99",
+        field_label: "flag_field",
+        value: "true", // string, not boolean — invalid
+        confidence: 0.8,
+        rationale: "Evidence found.",
+        null_reason: null,
+        evidence: ["item"],
+      }),
+    });
+    // Retry: correct boolean
+    mockGenerateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        field_id: "99",
+        field_label: "flag_field",
+        value: true, // correct boolean
+        confidence: 0.8,
+        rationale: "Evidence found.",
+        null_reason: null,
+        evidence: ["item"],
+      }),
+    });
+
+    const result = await inferBusinessFields([treatment], catalog, {});
+    expect(result.values["99"]).toBe(true);
+    expect(result.traces["99"].retryCount).toBe(1);
   });
 
   it("stores null with 'model output invalid after retry' when both attempts fail", async () => {

@@ -41,9 +41,6 @@ const ESCALATION_TYPES = new Set(["escalation", "review_trigger", "soft_blocker"
 const ELIGIBILITY_TYPES = new Set(["eligibility"]);
 // Guardrail-referenced fields are included but assigned to tier 4 (non-blocking,
 // so they don't elevate to required tiers but are still inferred).
-// (kept for future use as an explicit guardrail type check if needed)
-const _GUARDRAIL_TYPES = new Set(["guardrail"]); void _GUARDRAIL_TYPES;
-
 function ruleTypeTier(ruleType: string): BusinessFieldTier {
   const lower = ruleType.toLowerCase();
   if (HARD_BLOCKER_TYPES.has(lower)) return 1;
@@ -125,15 +122,9 @@ export function getRequiredBusinessFieldsForCustomer(
     }
   }
 
-  // Tier-4 via transitive dependency: if a required tier 1–3 field declares
-  // depends_on_business_fields, those dependencies are also inferred (as tier 4)
+  // Tier-4 via transitive dependency: required tier 1–3 fields that declare
+  // depends_on_business_fields cause those dependencies to be inferred at tier 4,
   // even when inferTier4Fields = false.
-  //
-  // NOTE: This traversal works with real data once buildFullFieldCatalog is updated to
-  // populate CatalogEntry.dependsOnBusinessFields from persisted policy field metadata.
-  // Until that DB schema extension lands, dependsOnBusinessFields will be null and this
-  // traversal is a no-op (no ordering constraint, no extra fields added). The logic itself
-  // is already correct and future-safe.
   {
     const visited = new Set<string>();
 
@@ -426,6 +417,10 @@ interface RawModelResponse {
 /**
  * Parse and validate the model JSON response against the required schema.
  * Returns the parsed object on success, or a string error message on failure.
+ *
+ * Required keys: field_id, field_label, value, confidence, rationale, null_reason, evidence.
+ * Value type is validated against the field's explicit or inferred data_type.
+ * Any violation triggers a single retry per the spec contract.
  */
 function validateModelResponse(
   rawText: string,
@@ -445,8 +440,8 @@ function validateModelResponse(
     return { ok: false, error: `Invalid JSON: ${(e as Error).message}` };
   }
 
-  // Required keys
-  const required = ["value", "confidence", "rationale", "null_reason", "evidence"];
+  // All 7 keys are required — field_id and field_label must be present (not defaulted silently)
+  const required = ["field_id", "field_label", "value", "confidence", "rationale", "null_reason", "evidence"];
   for (const key of required) {
     if (!(key in parsed)) {
       return { ok: false, error: `Missing required key: "${key}"` };
@@ -466,9 +461,39 @@ function validateModelResponse(
     return { ok: false, error: `"confidence" must be between 0.0 and 1.0, got ${parsed.confidence}` };
   }
 
+  // Value type validation against data_type
+  if (parsed.value !== null && parsed.value !== undefined) {
+    const effectiveDataType = resolveEffectiveDataType(field);
+    if (effectiveDataType === "boolean") {
+      if (typeof parsed.value !== "boolean") {
+        return {
+          ok: false,
+          error: `"value" must be a boolean (true/false) or null for a boolean field, got ${typeof parsed.value}: ${JSON.stringify(parsed.value)}`,
+        };
+      }
+    } else if (effectiveDataType === "number") {
+      if (typeof parsed.value !== "number") {
+        return {
+          ok: false,
+          error: `"value" must be a number or null for a number field, got ${typeof parsed.value}: ${JSON.stringify(parsed.value)}`,
+        };
+      }
+    } else if (effectiveDataType === "string") {
+      // String type is lenient: accept string, number (coerced), or boolean-as-string from model
+      if (typeof parsed.value !== "string" && typeof parsed.value !== "number") {
+        return {
+          ok: false,
+          error: `"value" must be a string or null for a string field, got ${typeof parsed.value}: ${JSON.stringify(parsed.value)}`,
+        };
+      }
+    }
+    // When effectiveDataType is null (unknown), accept any non-null scalar — no type constraint
+  }
+
   // If allowed_values provided, value must be one of them or null
   if (
     parsed.value !== null &&
+    parsed.value !== undefined &&
     field.allowedValues &&
     field.allowedValues.length > 0
   ) {
@@ -484,8 +509,8 @@ function validateModelResponse(
   return {
     ok: true,
     data: {
-      field_id: String(parsed.field_id ?? field.id ?? field.label),
-      field_label: String(parsed.field_label ?? field.label),
+      field_id: String(parsed.field_id),
+      field_label: String(parsed.field_label),
       value: parsed.value,
       confidence: parsed.confidence as number | null,
       rationale: parsed.rationale != null ? String(parsed.rationale) : null,
@@ -493,6 +518,31 @@ function validateModelResponse(
       evidence: (parsed.evidence as unknown[]).map(String),
     },
   };
+}
+
+/**
+ * Determine the effective data type for a field.
+ * Priority: explicit data_type → inferred from allowed_values → inferred boolean from description → null.
+ */
+function resolveEffectiveDataType(field: CatalogEntry): "boolean" | "number" | "string" | null {
+  if (field.dataType) {
+    const t = field.dataType.toLowerCase().trim();
+    if (t === "boolean" || t === "bool") return "boolean";
+    if (t === "number" || t === "integer" || t === "float" || t === "decimal" || t === "numeric") return "number";
+    if (t === "string" || t === "text" || t === "varchar") return "string";
+    return null; // unrecognised explicit type — accept any scalar
+  }
+  if (field.allowedValues && field.allowedValues.length > 0) {
+    const lower = field.allowedValues.map(v => v.toLowerCase().trim());
+    if (lower.every(v => ["true", "false", "yes", "no", "1", "0"].includes(v))) return "boolean";
+    if (lower.every(v => /^-?\d+(\.\d+)?$/.test(v))) return "number";
+    return "string";
+  }
+  // No explicit type and no allowed_values: only infer boolean, otherwise no constraint
+  const combined = `${field.description ?? ""} ${field.businessMeaning ?? ""}`.toLowerCase();
+  const boolSignals = ["true or false", "yes or no", "boolean", "is active", "is enabled", "detected", "confirmed", "flag", "indicator"];
+  if (boolSignals.some(s => combined.includes(s))) return "boolean";
+  return null; // no constraint when type is genuinely ambiguous
 }
 
 // ─── Confidence normalization ─────────────────────────────────────────────────
@@ -576,11 +626,12 @@ async function inferSingleBusinessField(
     const response = await geminiClient.models.generateContent({
       model: "gemini-2.5-pro",
       contents: [
-        { role: "user", parts: [{ text: systemPrompt }] },
-        { role: "model", parts: [{ text: "Understood. I will infer exactly one business field and return valid JSON only." }] },
         { role: "user", parts: [{ text: prompt }] },
       ],
-      config: { maxOutputTokens: 2000 },
+      config: {
+        maxOutputTokens: 2000,
+        systemInstruction: systemPrompt,
+      },
     });
     return response.text ?? "";
   };
