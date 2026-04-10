@@ -108,9 +108,18 @@ export function buildBusinessFieldUserPrompt(
     lines.push(`  data_type: (not specified — inferred as "${inferredType}" from allowed_values)`);
     lines.push(`  IMPORTANT DATA-TYPE RULE: Return a value matching type "${inferredType}" or null.`);
   } else {
-    const inferredType = inferDataTypeFromDescription(description, businessMeaning);
-    lines.push(`  data_type: (not specified — inferred as "${inferredType}" from description/business_meaning)`);
-    lines.push(`  IMPORTANT DATA-TYPE RULE: Return a value matching type "${inferredType}" (string or null) unless the field is clearly boolean-like.`);
+    // No allowed_values and no explicit data_type: per spec, accept string or null
+    // unless the field is clearly boolean-like. Do not try to infer "number" from
+    // description keywords — that forces unintended numeric constraints.
+    const inferredType = inferBooleanFromDescription(description, businessMeaning)
+      ? "boolean"
+      : "string";
+    lines.push(`  data_type: (not specified — accept ${inferredType} or null)`);
+    if (inferredType === "boolean") {
+      lines.push(`  IMPORTANT DATA-TYPE RULE: This field appears boolean. Return true, false, or null only.`);
+    } else {
+      lines.push(`  IMPORTANT DATA-TYPE RULE: Return a string value or null. Do not force numeric type unless the context clearly requires it.`);
+    }
   }
 
   lines.push(``);
@@ -188,10 +197,15 @@ function inferDataTypeFromValues(allowedValues: string[]): string {
   return "string";
 }
 
-function inferDataTypeFromDescription(
+/**
+ * Returns true if the field description/business_meaning strongly suggests a boolean.
+ * Used when data_type is not specified and allowed_values are absent.
+ * Per spec: if not clearly boolean-like, fall back to string or null (do not infer "number").
+ */
+function inferBooleanFromDescription(
   description: string | null | undefined,
   businessMeaning: string | null | undefined
-): string {
+): boolean {
   const combined = `${description ?? ""} ${businessMeaning ?? ""}`.toLowerCase();
   const booleanSignals = [
     "true or false",
@@ -204,8 +218,5 @@ function inferDataTypeFromDescription(
     "flag",
     "indicator",
   ];
-  if (booleanSignals.some(s => combined.includes(s))) return "boolean";
-  const numberSignals = ["amount", "count", "score", "number of", "days", "rate", "percentage", "total"];
-  if (numberSignals.some(s => combined.includes(s))) return "number";
-  return "string";
+  return booleanSignals.some(s => combined.includes(s));
 }

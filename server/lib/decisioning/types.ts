@@ -232,6 +232,15 @@ export interface BusinessFieldResult {
   requires_agent_review: boolean;
   /** Human-readable reason for agent review routing (only set when requires_agent_review = true). */
   agentReviewReason?: string;
+  /**
+   * Structured fallback reason string consumed by the orchestrator to populate
+   * DecisionPacket.runFallbackReason. Follows the spec format:
+   *   "required tier 1–3 business field timed out: <field_id>" for per-field timeouts
+   *   "required tier 1–3 business field cap reached" for cap-enforced truncation
+   *   "stage budget exhausted: required tier 1–3 fields uninferred" for total-budget overrun
+   * Null on normal completion (no escalation).
+   */
+  runFallbackReason: string | null;
   /** True when tier-4 fields were skipped because the cap would have been exceeded. */
   tier4Skipped: boolean;
   /** Set when tier-4 or other non-critical fields were omitted due to the cap. */

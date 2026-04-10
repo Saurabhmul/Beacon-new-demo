@@ -89,6 +89,7 @@ export async function buildFullFieldCatalog(
         businessMeaning: f.businessMeaning ?? null,
         aiGenerated: f.aiGenerated ?? false,
         createdBy: f.createdBy ?? null,
+        dependsOnBusinessFields: f.dependsOnBusinessFields ?? null,
       });
     }
   }

@@ -286,18 +286,50 @@ export function assembleCustomerContext(
   }
 
   // ── Payment history from raw customer data ──────────────────────────────
+  // When truncating, keep: most significant (failed/missed/bounced) + most recent.
+  // "Significant" = any payment that represents a missed obligation or critical event.
   let paymentData: unknown[] = [];
   const rawPayments = rawCustomerData._payments ?? rawCustomerData.payments;
   if (Array.isArray(rawPayments)) {
     if (rawPayments.length > MAX_PAYMENT_ITEMS) {
-      const sorted = [...rawPayments].sort((a, b) => {
+      const SIGNIFICANT_PAYMENT_STATUSES = new Set([
+        "failed", "failure", "missed", "bounced", "dishonoured", "dishonored",
+        "rejected", "returned", "overdue", "delinquent", "ngo", "nsf",
+      ]);
+
+      const isSignificantPayment = (p: unknown): boolean => {
+        const rec = p as Record<string, unknown>;
+        const status = String(rec.status ?? rec.payment_status ?? rec.outcome ?? "").toLowerCase();
+        return SIGNIFICANT_PAYMENT_STATUSES.has(status) || SIGNIFICANT_PAYMENT_STATUSES.has(status.replace(/_/g, ""));
+      };
+
+      // Separate significant from normal; sort each by date desc
+      const significant = rawPayments.filter(isSignificantPayment);
+      const rest = rawPayments.filter(p => !isSignificantPayment(p));
+
+      const byDateDesc = (a: unknown, b: unknown) => {
         const da = new Date((a as Record<string, unknown>).date_of_payment as string || 0).getTime();
         const db = new Date((b as Record<string, unknown>).date_of_payment as string || 0).getTime();
-        return db - da; // most recent first
-      });
-      paymentData = sorted.slice(0, MAX_PAYMENT_ITEMS);
+        return db - da;
+      };
+      significant.sort(byDateDesc);
+      rest.sort(byDateDesc);
+
+      // Fill up to MAX_PAYMENT_ITEMS: significant first, then most recent normal
+      const seen = new Set<unknown>();
+      const merged: unknown[] = [];
+      for (const p of [...significant, ...rest]) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        merged.push(p);
+        if (merged.length >= MAX_PAYMENT_ITEMS) break;
+      }
+
+      paymentData = merged;
+      const sigCount = significant.length;
       truncationWarnings.push(
-        `paymentData truncated: showing ${MAX_PAYMENT_ITEMS} most recent of ${rawPayments.length} total payments`
+        `paymentData truncated: showing ${merged.length} of ${rawPayments.length} total payments ` +
+        `(${sigCount} significant/failed included, remainder are most recent)`
       );
     } else {
       paymentData = rawPayments;
@@ -305,18 +337,50 @@ export function assembleCustomerContext(
   }
 
   // ── Conversation history from raw customer data ─────────────────────────
+  // When truncating, keep: most significant (disputes, commitments, escalations) + most recent.
   let conversationData: unknown[] = [];
   const rawConversations = rawCustomerData._conversations ?? rawCustomerData.conversations;
   if (Array.isArray(rawConversations)) {
     if (rawConversations.length > MAX_CONVERSATION_ITEMS) {
-      const sorted = [...rawConversations].sort((a, b) => {
+      const SIGNIFICANT_CONVERSATION_KEYWORDS = [
+        "dispute", "commitment", "promise_to_pay", "promise to pay", "escalat",
+        "complaint", "hardship", "arrangement", "broken_promise", "broken promise",
+        "legal", "deceased", "fraud", "vulnerable", "critical",
+      ];
+
+      const isSignificantConversation = (c: unknown): boolean => {
+        const rec = c as Record<string, unknown>;
+        const typeStr = String(rec.type ?? rec.outcome ?? rec.result ?? rec.category ?? "").toLowerCase();
+        const summary = String(rec.summary ?? rec.notes ?? rec.description ?? "").toLowerCase();
+        const combined = `${typeStr} ${summary}`;
+        return SIGNIFICANT_CONVERSATION_KEYWORDS.some(kw => combined.includes(kw));
+      };
+
+      const significant = rawConversations.filter(isSignificantConversation);
+      const rest = rawConversations.filter(c => !isSignificantConversation(c));
+
+      const byDateDesc = (a: unknown, b: unknown) => {
         const da = new Date((a as Record<string, unknown>).date as string || 0).getTime();
         const db = new Date((b as Record<string, unknown>).date as string || 0).getTime();
-        return db - da; // most recent first
-      });
-      conversationData = sorted.slice(0, MAX_CONVERSATION_ITEMS);
+        return db - da;
+      };
+      significant.sort(byDateDesc);
+      rest.sort(byDateDesc);
+
+      const seen = new Set<unknown>();
+      const merged: unknown[] = [];
+      for (const c of [...significant, ...rest]) {
+        if (seen.has(c)) continue;
+        seen.add(c);
+        merged.push(c);
+        if (merged.length >= MAX_CONVERSATION_ITEMS) break;
+      }
+
+      conversationData = merged;
+      const sigCount = significant.length;
       truncationWarnings.push(
-        `conversationData truncated: showing ${MAX_CONVERSATION_ITEMS} most recent of ${rawConversations.length} total entries`
+        `conversationData truncated: showing ${merged.length} of ${rawConversations.length} total entries ` +
+        `(${sigCount} significant included, remainder are most recent)`
       );
     } else {
       conversationData = rawConversations;
@@ -629,6 +693,7 @@ export async function inferBusinessFields(
   const traces: Record<string, BusinessFieldTrace> = {};
   let requires_agent_review = false;
   let agentReviewReason: string | undefined;
+  let runFallbackReason: string | null = null;
   let tier4Skipped = false;
   let capWarning: string | undefined;
 
@@ -662,6 +727,7 @@ export async function inferBusinessFields(
       fieldsToInfer = requiredFields.slice(0, cfg.maxBusinessFieldsPerRun);
       tier4Skipped = true;
       requires_agent_review = true;
+      runFallbackReason = "required tier 1–3 business field cap reached";
       agentReviewReason =
         `Business field cap (${cfg.maxBusinessFieldsPerRun}) reached before all required ` +
         `tier 1–3 fields could be inferred. Inferred ${fieldsToInfer.length} of ` +
@@ -694,6 +760,7 @@ export async function inferBusinessFields(
       console.warn(`[business-field-engine] ${timeoutMsg}`);
       if (hasRemainingRequired && !requires_agent_review) {
         requires_agent_review = true;
+        runFallbackReason = "stage budget exhausted: required tier 1–3 fields uninferred";
         const remainingRequiredIds = remainingFields.filter(f => f.tier <= 3).map(f => f.fieldId).join(", ");
         agentReviewReason = `Stage budget exhausted before all required tier 1–3 fields could be inferred. ` +
           `Remaining required fields: [${remainingRequiredIds}]. ${timeoutMsg}`;
@@ -787,8 +854,9 @@ export async function inferBusinessFields(
         );
         if (isCritical && !requires_agent_review) {
           requires_agent_review = true;
-          agentReviewReason =
-            `required tier ${tier} business field timed out: ${fieldId}`;
+          // runFallbackReason follows the spec contract format for orchestrator consumption
+          runFallbackReason = `required tier 1–3 business field timed out: ${fieldId}`;
+          agentReviewReason = runFallbackReason;
         }
         fieldTrace = {
           fieldId,
@@ -863,6 +931,7 @@ export async function inferBusinessFields(
     traces,
     requires_agent_review,
     ...(agentReviewReason ? { agentReviewReason } : {}),
+    runFallbackReason,
     tier4Skipped,
     ...(capWarning ? { capWarning } : {}),
     stageMetrics,

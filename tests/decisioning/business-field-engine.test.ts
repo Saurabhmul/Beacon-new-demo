@@ -525,6 +525,9 @@ describe("inferBusinessFields – orchestration", () => {
     expect(result.traces["42"].nullReason).toBe("field inference timeout");
     expect(result.requires_agent_review).toBe(true);
     expect(result.agentReviewReason).toMatch(/critical field timed out|timed out/i);
+    // runFallbackReason follows spec contract: "required tier 1–3 business field timed out: <field_id>"
+    expect(result.runFallbackReason).toMatch(/required tier 1.+3 business field timed out/i);
+    expect(result.runFallbackReason).toContain("42");
     expect(result.stageMetrics.counts.fieldsTimedOut).toBe(1);
   });
 
@@ -578,6 +581,7 @@ describe("inferBusinessFields – orchestration", () => {
 
     expect(result.requires_agent_review).toBe(true);
     expect(result.agentReviewReason).toMatch(/cap/i);
+    expect(result.runFallbackReason).toBe("required tier 1–3 business field cap reached");
   });
 
   it("sets priorBusinessFieldsReferenced = true for the second field inferred", async () => {
@@ -641,6 +645,7 @@ describe("inferBusinessFields – orchestration", () => {
     // All remaining fields should be null due to budget, and AGENT_REVIEW triggered
     expect(result.requires_agent_review).toBe(true);
     expect(result.agentReviewReason).toMatch(/required|tier/i);
+    expect(result.runFallbackReason).toBe("stage budget exhausted: required tier 1–3 fields uninferred");
   });
 
   it("confidence normalized: null value → confidence ≤ 0.1", async () => {
