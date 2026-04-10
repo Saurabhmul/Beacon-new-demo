@@ -193,8 +193,8 @@ function chosenVsPreferred(v2: ReturnType<typeof getV2Raw>) {
 }
 
 function derivedStatusLabel(status: string, nullReason: string, errorMsg: string): string {
-  if (status === "computed") return "Computed";
-  if (status === "error") return `Error — ${errorMsg || "unknown error"}`;
+  if (status === "computed") return "computed";
+  if (status === "error") return `error — ${errorMsg || "unknown error"}`;
   if (status === "skipped") return "Skipped — not required for this decision";
   if (status === "null") {
     const r = (nullReason || "").toLowerCase();

@@ -65,6 +65,23 @@ const SYSTEM_HOLD_PATTERNS = [
   "stage budget exhausted",
 ];
 
+function extractCustomerName(d: Decision): string | null {
+  const data = ((d.customerData || {}) as Record<string, unknown>);
+  const NAME_KEYS = [
+    "customer name", "customer_name", "name", "full name", "full_name",
+    "first name", "first_name", "client name", "client_name",
+    "borrower name", "borrower_name", "account name", "account_name",
+  ];
+  for (const key of NAME_KEYS) {
+    for (const [k, v] of Object.entries(data)) {
+      if (k.toLowerCase().trim() === key && v != null && String(v).trim()) {
+        return String(v).trim();
+      }
+    }
+  }
+  return null;
+}
+
 function getV2Data(d: Decision) {
   const raw = ((d.aiRawOutput || {}) as Record<string, unknown>);
   const engineVersion = raw.engineVersion as string | undefined;
@@ -206,7 +223,9 @@ export default function ReviewQueuePage() {
       if (cat !== validationFilter) return false;
     }
     if (reviewFilter === "needs_review") {
-      if (!v2.requiresAgentReview && !isSystemHold(d, v2)) return false;
+      // System holds are NOT the same as requires-agent-review;
+      // show only rows explicitly flagged by the model for human review.
+      if (!v2.requiresAgentReview) return false;
     }
     if (treatmentFilter) {
       const tf = treatmentFilter.toLowerCase();
@@ -476,6 +495,7 @@ export default function ReviewQueuePage() {
                     const badgeInfo = validationBadgeInfo(d, v2);
                     const treatmentName = v2.recommendedTreatmentName || v2.recommendedTreatmentCode || d.proposedSolution || "—";
                     const rationale = v2.treatmentRationale;
+                    const customerName = extractCustomerName(d);
 
                     return (
                       <TableRow key={d.id} className={selectedIds.has(d.id) ? "bg-muted/50" : ""}>
@@ -490,9 +510,14 @@ export default function ReviewQueuePage() {
                           </TableCell>
                         )}
                         <TableCell>
-                          <span className="font-medium text-sm font-mono" data-testid={`text-customer-id-${d.id}`}>
-                            {d.customerGuid}
-                          </span>
+                          <div className="space-y-0.5">
+                            {customerName && (
+                              <p className="text-sm font-medium" data-testid={`text-customer-name-${d.id}`}>{customerName}</p>
+                            )}
+                            <span className={`font-mono ${customerName ? "text-xs text-muted-foreground" : "font-medium text-sm"}`} data-testid={`text-customer-id-${d.id}`}>
+                              {d.customerGuid}
+                            </span>
+                          </div>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap" data-testid={`text-run-date-${d.id}`}>
                           {new Date(d.createdAt).toLocaleDateString("en-US", {
