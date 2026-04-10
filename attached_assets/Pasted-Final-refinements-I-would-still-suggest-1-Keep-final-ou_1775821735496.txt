@@ -1,0 +1,176 @@
+Final refinements I would still suggest
+1) Keep final output schema stable, not too dynamic
+
+One part I would tighten is this line in Task #40:
+
+Customer section (AI outputs whatever is non-null from source/derived data): customer_guid, customer_name, customer_phone, customer_email, days_past_due, amount_due, minimum_due, plus any other non-null customer identity or account-state fields present in the decision packet
+
+For MVP, I would not let the top-level schema become open-ended.
+
+That can make:
+
+validation harder
+UI rendering harder
+downstream consumers inconsistent
+Better approach
+
+Keep the top-level output schema fixed, and put extra customer/account fields into something like:
+
+"customer_attributes": [
+  { "name": "days_past_due", "value": "90" },
+  { "name": "amount_due", "value": "1020" }
+]
+
+or
+
+"additional_customer_context": {
+  "days_past_due": 90,
+  "amount_due": 1020,
+  "minimum_due": 251
+}
+Why
+
+You want:
+
+stable schema
+stable UI
+easier validation
+
+So this is my biggest remaining recommendation.
+
+2) Add validator limit for email length / format
+
+You already define:
+
+"Subject: ... Body: ..." or NO_ACTION
+
+Good.
+
+I would also explicitly validate:
+
+subject exists if email exists
+body exists if email exists
+email stays within reasonable length, for example <= 10 lines as originally intended
+no empty subject/body
+Why
+
+Prevents malformed email outputs.
+
+3) Make communication config provenance explicit
+
+In the decision packet, you now include:
+
+communicationGuidelines
+emailGuidelines
+emailWhenToUse
+emailWhenNotToUse
+toneGuidance
+
+This is good.
+
+I would suggest adding one more small field:
+
+communicationSource: "policy_config" | "default_empty"
+Why
+
+Later, if an email looks weak, you will know whether:
+
+the client actually configured communication rules
+or Beacon had no communication guidance
+4) Clarify timeout behavior in Task #39 for required fields
+
+Current behavior is good, but I would tighten one thing.
+
+If a required tier 1–3 field times out and becomes null, that does not always mean AGENT_REVIEW immediately.
+It should depend on whether that field is truly critical for:
+
+blocker logic
+treatment selection
+review trigger
+Better wording
+
+If timeout/null affects a field that is critical for safe decisioning, route to AGENT_REVIEW.
+If it affects a non-critical inferred field, continue with warning.
+
+Why
+
+Prevents over-escalation.
+
+5) Add one more UI chip: “System hold”
+
+For cases like:
+
+policy completeness failure
+failed validation
+system-driven AGENT_REVIEW
+
+It may help to show a distinct chip instead of making everything look like the same customer-review case.
+
+Why
+
+Agents should immediately see:
+“this is not a normal case recommendation.”
+
+6) Slight wording cleanup in #40
+
+One line says:
+
+All five selectionMode values must map to exactly one treatment entry in the trace; the unchosen treatments have no selectionMode set.
+
+That is fine, but I would make clear:
+
+fallback_agent_review and no_action may not correspond to a real treatment row unless you model them as pseudo-treatment entries.
+Better wording
+
+Either:
+
+represent AGENT_REVIEW / NO_ACTION as pseudo-treatment trace entries
+or
+state that selectionMode is recorded only on the chosen real treatment when applicable, and separately on the run result for fallback outcomes
+Why
+
+Avoid implementation ambiguity.
+
+My final recommendation to send Replit
+
+You can send this:
+
+Final MVP sign-off notes
+
+This plan is now strong and ready for implementation.
+Please make these last refinements before execution:
+
+1. Keep final output schema stable
+
+Do not allow arbitrary extra top-level customer/account fields in final AI output.
+Keep the main output schema fixed and place additional non-null customer/account fields inside a structured container such as:
+
+customer_attributes[], or
+additional_customer_context {}
+
+This will keep validation and UI stable.
+
+2. Add explicit email format validation
+
+When proposed_email_to_customer != "NO_ACTION":
+
+require both Subject: and Body:
+reject empty subject/body
+enforce concise size (for example <= 10 lines total or similar practical limit)
+3. Add communication config provenance
+
+In the decision packet, include whether communication guidance came from real policy config or default empty values, e.g.:
+
+communicationSource: "policy_config" | "default_empty"
+4. Refine timeout escalation logic
+
+If a business-field timeout affects a truly critical required field, route to AGENT_REVIEW.
+If it affects a non-critical inferred field, continue with warning rather than forcing review.
+
+5. Add distinct UI label for system-driven review/hold cases
+
+For policy completeness failures, failed validation, or system-generated hold cases, show a distinct “System hold” or similar chip so agents do not confuse them with normal customer-driven recommendations.
+
+6. Clarify fallback trace representation
+
+For AGENT_REVIEW and NO_ACTION, clarify whether these are represented as pseudo-treatment entries in treatmentSelectionTrace or stored separately as run-level fallback outcomes. Avoid ambiguous ownership.

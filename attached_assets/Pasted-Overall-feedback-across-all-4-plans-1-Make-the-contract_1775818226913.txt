@@ -1,0 +1,651 @@
+Overall feedback across all 4 plans
+1) Make the contracts stricter
+
+Right now the plans are directionally good, but some parts are still too open-ended.
+
+Tell Replit to define clearly for every stage:
+
+exact input
+exact output
+what happens on missing data
+what happens on invalid config
+what happens on nulls
+what happens on partial success
+
+Why this matters:
+If these contracts are fuzzy, debugging later will become painful.
+
+2) Keep v1 simple, but design for v2
+
+A few parts in the plans are starting to become “perfect system” thinking.
+
+For v1, you want:
+
+deterministic derived fields
+one-field-at-a-time business field inference
+rule evaluation before final AI
+strong validation
+traceability
+
+You do not want Replit to build:
+
+a huge alias engine
+overly smart fuzzy matching
+a giant new schema migration
+too much UI complexity before backend stabilizes
+
+Why:
+You need a strong decisioning spine first.
+
+3) Add explicit distinction between:
+hard blockers
+soft blockers
+missing information
+review triggers
+
+Right now these ideas are mixed a bit.
+
+They should be separated everywhere.
+
+Why:
+
+hard blocker = AI cannot override
+soft blocker = AI can still recommend agent review or cautious action
+missing information = data gap, not policy block
+review trigger = even valid decision may still require human review
+
+This will make the engine much cleaner.
+
+4) Add versioning everywhere
+
+Tell Replit to version:
+
+decision engine version
+business field inference prompt version
+final decision prompt version
+policy compilation version if possible
+
+Why:
+Later you will need to compare outputs before and after prompt/rule changes.
+
+5) Add observability, not just traces
+
+The plans talk about traces, which is good.
+
+Also tell Replit to add:
+
+stage start/end logging
+per-stage duration
+counts of derived fields computed / null
+counts of business fields inferred / null / failed
+validator fail reasons aggregated
+
+Why:
+This will help you see where the system is breaking in production.
+
+Plan #38 — Decision Engine Foundation
+
+This plan is strong, but I would improve 6 things.
+
+A. Do not overdo fuzzy field matching
+
+The field-value-resolver.ts idea is right, but “partial matches” can become dangerous.
+
+Tell Replit:
+
+exact match first
+normalized exact match second
+configured aliases third
+only very limited fuzzy fallback
+log when fallback aliasing was used
+
+Why:
+You do not want wrong field mapping silently happening.
+
+What to tell Replit
+
+“Do not rely heavily on fuzzy matching. Prefer explicit alias maps and normalized exact matches. If fallback mapping is used, log it in trace.”
+
+B. Separate source resolution trace from derived trace
+
+Right now source resolver is described, but not the trace clearly.
+
+Tell Replit to store:
+
+raw key
+canonical field id matched
+matching method used (exact, normalized, alias)
+raw value
+normalized value
+
+Why:
+If source mapping is wrong, all downstream logic is wrong.
+
+C. Derived field engine should support statuses beyond null/error
+
+Right now status is:
+
+computed
+null
+error
+
+I would add:
+
+skipped
+
+Example:
+
+field not applicable because config incomplete
+field not evaluable because rule not defined properly
+
+Why:
+Null and skipped are not always the same thing.
+
+D. Rule evaluator should output rule-level traces
+
+Not just “eligible treatments” and “blocked treatments”.
+
+Tell Replit to also output:
+
+which exact rule groups evaluated
+which rules passed
+which rules failed
+which field values were used
+
+Why:
+Agents and admins will eventually want to know why a treatment was blocked.
+
+Add something like
+treatmentRuleTrace: {
+  [treatmentCode: string]: {
+    evaluatedRules: Array<{
+      ruleId: string;
+      field: string;
+      operator: string;
+      expected: unknown;
+      actual: unknown;
+      result: boolean | null;
+      reason?: string;
+    }>
+  }
+}
+E. Add explicit “critical missing fields”
+
+Right now missingCriticalInformation is mentioned, good, but define how it is decided.
+
+Tell Replit:
+A field is “critical missing” only if it is required for:
+
+a hard blocker rule
+a treatment eligibility rule
+a mandatory output / review trigger
+
+Why:
+Otherwise too many fields will get marked “critical”.
+
+F. Add unit tests before moving on
+
+For #38 specifically, ask Replit to add tests now, not later.
+
+Why:
+This is the deterministic core. It should be locked down early.
+
+Plan #39 — Business Field Engine
+
+This plan is mostly right. I would improve 8 things.
+
+A. Define inference order
+
+You said already-computed business fields can be passed in. Good.
+
+But tell Replit to define deterministic order for business fields, for example:
+
+fields referenced by blockers first
+then escalation/review-trigger fields
+then treatment-eligibility fields
+then optional fields
+
+Why:
+If one business field depends on another, order matters.
+
+B. Distinguish independent vs dependent business fields
+
+Tell Replit:
+Not all business fields should be inferred in arbitrary order.
+
+Add optional config:
+
+depends_on_business_fields
+
+Why:
+This prevents circular or unstable inference.
+
+C. Add a strict “do not invent facts” instruction for business fields
+
+This should be explicit and repeated.
+
+Tell Replit the business-field prompt must say:
+
+use only provided evidence
+do not use outside knowledge
+if uncertain return null
+do not infer from stereotypes or generic collections assumptions
+
+Why:
+Business fields are a high hallucination risk.
+
+D. Missing data_type should not fail, but allowed values should dominate
+
+You already decided this. Good.
+
+Tell Replit:
+If data_type missing:
+
+infer from allowed values if present
+else infer from field description / business meaning
+else allow string/null only unless explicitly boolean-like
+
+Why:
+This keeps output safer.
+
+E. “All customer data” should still be structured, not dumped
+
+This is important.
+
+You agreed to pass all data for v1, which I agree with.
+But tell Replit not to dump it as raw chaos.
+
+Structure it like:
+
+customer profile
+loan data
+payment data
+conversation data
+bureau data
+derived fields
+prior business fields
+
+Why:
+The model reasons better when the context is organized.
+
+F. Add token safety / truncation policy
+
+This is a missing point.
+
+Tell Replit:
+If conversation/payment history is too long:
+
+summarize older items
+keep most recent and most relevant evidence
+log truncation
+
+Why:
+Today data is small, but this will matter quickly.
+
+G. Add evidence quality requirement
+
+Not just evidence array.
+
+Tell Replit:
+Each business field should cite top evidence, not random evidence.
+Prefer:
+
+explicit statements
+recent records
+corroborated signals
+
+Why:
+Otherwise evidence lists become noisy and weak.
+
+H. Add confidence normalization
+
+Tell Replit to standardize confidence:
+
+0 to 1 only
+if null value returned, confidence should be low or null
+confidence should not be high when evidence is weak
+
+Why:
+Helps later analytics and UI consistency.
+
+Plan #40 — Decision Orchestrator, Validator & Route Integration
+
+This is the most important plan. I would improve 10 things.
+
+A. Retry logic should be narrow
+
+Right now it says retry once on validation failure.
+
+Tell Replit:
+Retry only for:
+
+malformed JSON
+missing required keys
+enum/type issues
+formatting/schema issues
+
+Do not retry for:
+
+policy contradiction
+blocked treatment chosen
+evidence contradiction
+
+Why:
+If the reasoning is wrong, retrying the same way may not help.
+
+B. Validation should classify failure type
+
+Tell Replit to return:
+
+structural_failure
+policy_failure
+guardrail_failure
+evidence_failure
+warning_only
+
+Why:
+This will help system hold queues and debugging.
+
+C. Final AI should receive only eligible treatments, but also blocked treatments and why
+
+This is partly there, but emphasize it.
+
+Why:
+The model should know not only what is allowed, but what is blocked and why, so it doesn’t reason weirdly.
+
+D. Add deterministic fallback when no treatment is eligible
+
+Tell Replit to define explicit behavior:
+
+If:
+
+no treatment eligible
+or critical missing info prevents decision
+or guardrail forces human review
+
+Then output:
+
+recommended_treatment_code = AGENT_REVIEW
+requires_agent_review = true
+
+Why:
+Never leave this ambiguous.
+
+E. Add “decision basis summary” inside traces
+
+Tell Replit to store a compact summary like:
+
+source fields count
+derived fields count
+business fields count
+eligible treatments count
+blocked treatments count
+missing critical info count
+
+Why:
+This gives a fast health view for each decision.
+
+F. Backwards compatibility mapping should be cautious
+
+The plan says map new output back to old columns. Good, but make it conservative.
+
+Tell Replit:
+Only map old fields if there is a clear equivalent.
+Otherwise leave null.
+
+Why:
+Do not force the new generic model into old Prodigy-shaped columns.
+
+G. failed_validation decisions should still be inspectable
+
+Tell Replit:
+Do not hide them completely.
+Put them in:
+
+system hold
+failed validation queue
+or admin-only view
+
+Why:
+You will need to inspect failures to improve the engine.
+
+H. Add idempotency / re-run safety
+
+Very important and missing.
+
+Tell Replit:
+runDecisionPipeline() should be safe to re-run for the same customer + config version.
+
+Track:
+
+customer id
+company id
+policy version
+engine version
+run timestamp / run id
+
+Why:
+You will later want to re-run decisions after policy or prompt changes.
+
+I. Add stage-level persistence or at least recoverable failure logging
+
+If business field 5/12 fails, you do not want zero visibility.
+
+Tell Replit:
+Persist intermediate traces or at least capture them in memory and write partial failure data if final stage crashes.
+
+Why:
+Better debugging and less black-box failure.
+
+J. Final prompt should explicitly prefer treatment language and operational clarity
+
+Tell Replit the final AI prompt should not sound like a generic essay.
+
+It should produce:
+
+clear customer situation
+clear treatment recommendation
+clear reason
+clear operational next step
+
+Why:
+This is for agents, not a research note.
+
+Plan #41 — Decision Detail UI v2 + Review Queue
+
+Very good plan, but I would improve 7 things.
+
+A. Don’t make UI too dense in v1
+
+5 sections is good. But tell Replit to default to:
+
+a clean summary at top
+details expandable underneath
+
+Why:
+Agents should not get overwhelmed.
+
+B. Review queue should show the minimum useful fields only
+
+Tell Replit not to overload the queue table.
+
+Show:
+
+customer id / name
+recommended treatment
+confidence
+validation status
+needs review
+maybe last updated
+
+Why:
+Queue is for scanning, not deep analysis.
+
+C. Add a “why this treatment” short line in queue
+
+Very useful.
+
+A 1-line summary under treatment or in hover:
+
+“Payment Plan eligible; no hard blockers; customer engaged”
+or
+“Agent review required due to vulnerability trigger”
+
+Why:
+Helps triage faster.
+
+D. Decision detail should clearly separate facts vs inference
+
+This is very important.
+
+Tell Replit to label:
+
+source data = facts
+derived fields = computed facts
+business fields = inferred judgments
+treatment decision = recommendation
+
+Why:
+This improves trust.
+
+E. Add null / unavailable display intentionally
+
+Not just “not available”.
+
+Use labels like:
+
+Null — insufficient evidence
+Null — missing source fields
+Skipped — not required for this decision
+Unavailable — generated before v2.1
+
+Why:
+Much better operator understanding.
+
+F. Add copy/export for traces
+
+Maybe not on day 1, but very useful.
+
+Tell Replit to at least make:
+
+decision packet copyable
+validation issues copyable
+raw JSON trace view for admin/debug mode
+
+Why:
+Great for debugging and for sharing examples internally.
+
+G. Add filters in review queue for:
+validation status
+requires agent review
+treatment type
+
+Why:
+As soon as volume grows, this becomes necessary.
+
+Additional recommendations to give Replit across all 4 plans
+1) Add a “policy completeness” check before decisioning
+
+Before running the engine, validate that client policy has:
+
+treatments
+rule references valid
+field references valid
+no broken field ids
+
+Why:
+Bad policy config should fail early, not create weird decisions.
+
+2) Add a “field availability summary” per customer
+
+Before business field inference / final decision:
+
+how many source fields present
+how many null
+what data sources available
+
+Why:
+Useful for confidence and missing-data handling.
+
+3) Add evaluation dataset hooks now
+
+Tell Replit to structure the engine so later you can run:
+
+same customers
+same policy
+new engine version
+compare outputs
+
+Why:
+You will definitely need this for accuracy testing.
+
+4) Keep prompts in separate files or builder functions
+
+Not hardcoded inside orchestration logic.
+
+Why:
+Easier to iterate prompt wording without touching pipeline logic.
+
+5) Add admin/debug mode
+
+Tell Replit to make it easy to inspect:
+
+final prompt payload
+business field prompt payload
+validator results
+rule traces
+
+Why:
+You will need this constantly while tuning.
+
+What I would tell Replit as direct improvement notes
+
+You can paste this part almost directly:
+
+Improvement notes for all 4 plans
+Make stage contracts explicit
+Each stage must define exact input, output, null behavior, and failure behavior.
+Do not overuse fuzzy field matching
+Prefer exact match, normalized match, and configured aliases. Log when fallback mapping is used.
+Trace source resolution separately
+Store raw key, canonical field id, mapping method, raw value, and normalized value.
+Add rule-level traces
+For each treatment, record which rules passed, failed, or were not evaluable, and which field values were used.
+Separate hard blockers, soft blockers, missing information, and review triggers
+Do not mix these concepts.
+Business field inference must be ordered
+Infer blocker/review-trigger fields first, then treatment-eligibility fields, then optional fields.
+All customer data can be passed for business field inference in v1, but it must be structured by section
+Do not dump raw mixed data blobs.
+Missing data_type must not fail business field inference
+Allowed values and field description should guide validation.
+Retry only for formatting/schema failures
+Do not retry reasoning failures blindly.
+When no treatment is safely eligible, fall back deterministically to AGENT_REVIEW
+Do not leave this ambiguous.
+Store engine version, prompt versions, and policy version in traces
+Version everything for comparison later.
+Failed validation decisions must remain inspectable
+Route them to system hold / admin view instead of dropping them.
+UI must clearly separate facts, computed facts, inferred judgments, and final recommendation
+This is important for agent trust.
+Add stage-level observability
+Record stage durations, counts, and failure reasons.
+Keep v1 focused
+Do not over-engineer schema changes or overly complex UI before the backend pipeline is stable.
+My final view
+
+The 4 plans are strong and the decomposition is correct.
+
+The biggest improvements I’d push are:
+
+tighter contracts
+stronger traces
+clearer blocker/review separation
+safer field resolution
+narrower retry logic
+better fallback behavior
+less UI complexity in v1
+more observability and versioning
+
+These will make the system much more reliable and easier to improve over time.

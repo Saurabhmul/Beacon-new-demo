@@ -1,0 +1,260 @@
+Final recommendation on each plan
+#38 Deterministic core
+
+This is in good shape.
+
+Very small tweak
+
+In treatmentSelectionTrace, selectionMode is currently populated later by validator. That is okay, but I would make the ownership explicit:
+
+rule-evaluator populates:
+priority
+prioritySource
+rank
+isPreferred
+validator/final-selection-step populates:
+selectionMode
+selectionReason
+
+Why:
+It avoids confusion about which stage owns which fields.
+
+One more small improvement
+
+For prioritySource: "defaulted", define exactly what default means.
+
+Tell Replit:
+
+if priority absent and system assigns fallback rank, mark prioritySource = "missing" unless there is an explicit configured default priority rule
+use defaulted only when a real configured default exists
+
+Why:
+Otherwise defaulted and missing can get blurry.
+
+#39 Business field engine
+
+This is also strong now.
+
+Good change you added
+
+maxBusinessFieldsPerRun is smart.
+
+One tweak
+
+The current behavior says if cap exceeded:
+
+infer tiers 1–3 first
+skip tier 4
+route to AGENT_REVIEW
+
+I would refine that slightly.
+
+If the cap is exceeded only because of tier 4 optional fields, do not automatically route to AGENT_REVIEW.
+Just skip tier 4 and continue.
+
+Only route to AGENT_REVIEW if the cap prevents completion of required fields in tiers 1–3.
+
+What to tell Replit
+
+Change cap behavior to:
+
+if cap cuts off only optional/enrichment tier 4 fields → continue normally, log warning
+if cap prevents inference of required tier 1–3 fields → route to AGENT_REVIEW
+
+Why:
+This keeps MVP practical and avoids unnecessary reviews.
+
+One more tweak
+
+Add a timeout budget per field or per full business-field stage if easy.
+
+Why:
+A single slow field should not stall the whole run too long.
+
+#40 Orchestrator / validator / integration
+
+This is the most important plan, and it is now much better.
+
+1) Very important wording cleanup on policy completeness
+
+You now have two paths:
+
+admin context → typed error
+analyze context → create AGENT_REVIEW record
+
+I agree with that.
+
+But tell Replit to make the resulting record clearly say:
+
+this is not a customer-driven review
+this is a policy configuration review / system hold reason
+
+Why:
+Otherwise agents may think the customer case itself triggered review.
+
+A simple field or note in internal_action / selectionReason is enough.
+
+2) One small improvement to tie handling
+
+Your new tie rule is good:
+
+tied preferred treatments
+AI may choose among them only with clear reason
+otherwise AGENT_REVIEW
+
+I agree.
+
+I would just ask Replit to make validator check that if chosen treatment is in preferredTreatments and there are multiple tied preferred options, then:
+
+selectionMode = "tied_preferred"
+selectionReason explains why this tied option was chosen
+
+Why:
+This will make tie decisions much easier to audit.
+
+3) One tweak on NO_ACTION
+
+Right now you allow:
+
+one treatment from ranked eligible
+AGENT_REVIEW
+NO_ACTION
+
+That is right.
+
+But define when NO_ACTION is valid.
+
+Tell Replit:
+NO_ACTION should be allowed only when:
+
+policy or contact rules support holding action,
+or recent outreach / cooling-off / wait-state logic applies,
+or no treatment is needed and review is not required.
+
+Why:
+Otherwise models sometimes overuse NO_ACTION as an escape hatch.
+
+4) Strongly recommend one extra validator rule
+
+Add this:
+
+If model outputs NO_ACTION, validator should require traceable justification in:
+
+treatment_eligibility_explanation
+or
+key_factors_considered
+
+Why:
+Same reason as priority deviation. No silent ambiguity.
+
+5) On priority deviation — this is now good
+
+I agree with the latest version:
+
+justified lower-rank choice → warning
+unjustified lower-rank choice → policy_failure
+
+That is the right place to land for MVP.
+
+6) Tiny naming cleanup
+
+In the text, one line still says:
+
+Decision validator with priority-deviation check — ... + priority-deviation warning check
+
+But your actual logic is no longer just warning-only.
+So ask Replit to rename that wording to:
+
+priority-deviation validation
+
+Why:
+Matches the real behavior now.
+
+#41 UI
+
+This is also good now.
+
+1) Good change
+
+Showing preferred vs chosen treatment side-by-side is exactly right.
+
+2) One tweak
+
+In review queue, consider adding a small badge if:
+
+chosen treatment differs from preferred treatment
+
+Even just a tiny “Priority deviation” chip.
+
+Why:
+Lets agents spot the unusual cases quickly without opening detail.
+
+3) One tweak
+
+Keep raw trace and full evidence collapsed by default.
+You already say raw trace is collapsed. Good. Keep that.
+
+4) One tweak
+
+In Section 5, when preferred and chosen differ, display:
+
+preferred treatment(s)
+chosen treatment
+selectionMode
+selectionReason
+validator warning/failure if relevant
+
+You already mostly have this. Just make sure those 4 appear together.
+
+Final small improvement list to send Replit
+
+You can send this directly:
+
+Final MVP refinement notes
+
+The plans are now strong and close to final. Please make these last refinements:
+
+1. Clarify ownership of treatmentSelectionTrace
+rule-evaluator should populate: priority, prioritySource, rank, isPreferred
+validator / final selection step should populate: selectionMode, selectionReason
+2. Tighten prioritySource
+
+Use:
+
+configured only when explicitly set in policy
+defaulted only when a real configured default-priority rule exists
+missing when no priority exists and ranking is forced to the end
+3. Refine maxBusinessFieldsPerRun behavior
+
+If the cap only excludes optional tier 4 enrichment fields, continue normally and log a warning.
+Only force AGENT_REVIEW if the cap prevents inference of required tier 1–3 fields.
+
+4. Add business-field stage timeout protection if practical
+
+A single slow field should not stall the full run excessively. Log timeout/failure in trace.
+
+5. Make policy-completeness review records clearly system-driven
+
+When analysis context creates an AGENT_REVIEW due to incomplete policy config, clearly mark that this is a policy/system review reason, not a normal customer-case recommendation.
+
+6. Tighten tie handling audit trail
+
+If multiple treatments are tied in preferredTreatments and AI chooses one of them, store:
+
+selectionMode = "tied_preferred"
+selectionReason explaining why that tied option was selected
+7. Define when NO_ACTION is valid
+
+NO_ACTION should only be allowed when policy/contact logic supports no outreach or no treatment action. Add validator expectation for traceable justification.
+
+8. Add validator rule for NO_ACTION
+
+If NO_ACTION is chosen, require clear justification in output (treatment_eligibility_explanation and/or key_factors_considered).
+
+9. Rename wording from “priority-deviation warning check” to “priority-deviation validation”
+
+Because the logic now supports both warning and failure.
+
+10. UI: show priority deviation in review queue too
+
+If chosen treatment differs from preferred treatment, show a small “Priority deviation” badge in the queue row in addition to the detail page.

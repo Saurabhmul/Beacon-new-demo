@@ -1,0 +1,696 @@
+Replit implementation brief: Beacon decision layer v2.1
+Goal
+
+Build a robust, scalable decision layer for Beacon that works across different clients like Prodigy Finance, Lendable, and future clients where:
+
+SOPs differ
+treatment rules differ
+escalation and guardrails differ
+source datasets differ
+source field names differ
+some clients provide only loan data
+others provide payment history, conversations, bureau, or other sources
+
+The system should follow this 4-step pipeline:
+
+derive fields with deterministic code
+infer business fields with AI
+make final decision with AI using policy + all populated fields
+validate decision against rules and guardrails before showing in review queue
+
+The design must be:
+
+reliable
+traceable
+easy for agents to review
+resilient to partial metadata
+scalable across clients
+Core principle
+
+Do not use one giant raw prompt for the full decision in one shot.
+
+Instead use a structured pipeline:
+
+source customer data
+derived fields
+business fields
+policy rules
+treatment eligibility / blockers
+final AI decision
+validation
+review queue output
+
+The AI should not do everything at once.
+
+Existing code to reuse
+
+Reuse and extend the existing codebase.
+
+Reuse these parts
+server/field-catalog.ts
+reuse field catalog generation
+server/lib/derivation-config.ts
+reuse derivation config and dependency ordering logic
+server/lib/prompt/compile-policy.ts
+reuse to compile the structured client-specific policy pack
+server/lib/prompt/assemble-prompt.ts
+refactor to assemble structured decision packets instead of free-text blobs
+server/ai-engine.ts
+reuse Gemini / LLM integration
+server/routes.ts
+update current analysis flow to call the new decision pipeline
+shared/schema.ts
+reuse decisions storage, but expand trace data inside aiRawOutput
+New architecture to build
+
+Create a new folder:
+
+server/lib/decisioning/
+
+Create these files:
+
+types.ts
+field-value-resolver.ts
+derived-field-engine.ts
+business-field-engine.ts
+rule-evaluator.ts
+decision-packet.ts
+decision-engine.ts
+decision-validator.ts
+1) Derived fields with deterministic code
+File
+
+server/lib/decisioning/derived-field-engine.ts
+
+Purpose
+
+Populate all required derived fields using deterministic logic only.
+
+Do not use AI here.
+
+Inputs
+customer source data
+field catalog
+company policy fields
+derivation config
+Rules
+evaluate fields in dependency order
+support arithmetic and logical derivations
+if required input missing → return null
+if type mismatch or invalid value → return null
+if dependency cycle exists → return null for affected fields and record error
+never guess
+Examples
+arrears_balance_gbp > 0
+inbound_comms_received > 0
+amount_due - minimum_due
+breathing_space_ref is not empty
+Required behavior
+
+For every derived field store:
+
+output value
+status
+inputs used
+formula used
+null reason or error if applicable
+Expected output structure
+type DerivedFieldResult = {
+  values: Record<string, unknown>;
+  traces: Record<
+    string,
+    {
+      status: "computed" | "null" | "error";
+      formula: string;
+      inputsUsed: Array<{
+        fieldId: string;
+        label: string;
+        value: unknown;
+      }>;
+      outputValue: unknown;
+      nullReason?: string;
+      error?: string;
+    }
+  >;
+};
+Helper requirement
+
+Create shared coercion helpers:
+
+toNumber
+toBoolean
+toString
+toDate
+
+Normalize common values like:
+
+"Yes" / "No"
+"true" / "false"
+"1" / "0"
+2) Business fields with AI
+File
+
+server/lib/decisioning/business-field-engine.ts
+
+Purpose
+
+Populate business fields using AI, one field at a time.
+
+These fields need judgment, contextual interpretation, or language understanding.
+
+Important implementation update
+Missing data_type must not fail the system
+
+If a business field does not have data_type, the pipeline must still work.
+
+Use whatever metadata is available:
+
+field id
+label
+display name
+description
+business meaning
+allowed values
+default value
+source evidence
+derived fields
+other business fields
+customer data
+relevant policy context
+
+data_type should help when present, but must not be mandatory.
+
+Important implementation update for v1
+
+For business field inference, do not try to tightly filter only a few source fields in v1.
+
+Instead, for each business field inference call, pass:
+
+field id
+label
+display name
+description
+business meaning
+allowed values if present
+default value if present
+all customer data available
+loan data
+payment data
+conversation data
+bureau data
+any other customer-level data source
+all derived fields
+already computed business fields if available
+relevant policy context only when needed
+Why
+
+For now, customer-level data volume is limited, and feeding all available data is the simplest and safest first implementation.
+
+This reduces orchestration complexity and increases the chance of correctly inferring business fields that depend on weak signals across multiple data sources.
+
+But still do this one field at a time
+
+This is mandatory.
+
+Do not infer all business fields in one AI call.
+
+Inferring one field at a time makes the system:
+
+more controllable
+easier to debug
+easier to validate
+easier to retry when output is bad
+Build helper
+
+Create:
+getRequiredBusinessFieldsForCustomer(companyId, policyPackId)
+
+This should inspect:
+
+treatment rules
+escalation rules
+guardrails
+required decision outputs
+
+Only infer business fields actually needed for this customer decision flow.
+
+Do not infer unused fields.
+
+AI output schema for one business field
+
+Use strict JSON:
+
+{
+  "field_id": "string",
+  "field_label": "string",
+  "value": "string | number | boolean | null",
+  "confidence": 0.0,
+  "rationale": "string",
+  "null_reason": "string | null",
+  "evidence": [
+    {
+      "type": "source_field | derived_field | business_field | conversation | payment | bureau | rule_context",
+      "key": "string",
+      "value": "string"
+    }
+  ]
+}
+Rules for business field inference
+infer only one field per AI call
+use only evidence provided
+do not use generic collections assumptions
+if evidence insufficient → return null
+if allowed values exist → return only an allowed value or null
+if field is effectively boolean → return true, false, or null
+rationale should be short, factual, and evidence-based
+cite evidence used in the evidence array
+Retry behavior
+
+If model returns:
+
+invalid JSON
+unsupported type
+invalid enum value
+malformed structure
+
+Then:
+
+retry once with validator feedback
+if still invalid → store null
+Trace
+
+For every business field store:
+
+value
+confidence
+rationale
+evidence
+null reason
+3) Rule evaluation before final decision
+File
+
+server/lib/decisioning/rule-evaluator.ts
+
+Purpose
+
+Before final AI decisioning, run a deterministic rule pass.
+
+This reduces AI freedom and increases reliability.
+
+This rule pass should determine
+eligible treatments
+blocked treatments
+escalation triggers
+guardrail flags
+missing critical information
+Important principle
+
+If policy rules already define treatment eligibility or blockers, calculate them in code first.
+
+Do not leave all treatment eligibility interpretation to AI.
+
+Output structure
+type RuleEvaluationResult = {
+  eligibleTreatments: Array<{
+    code: string;
+    name: string;
+    reasons: string[];
+  }>;
+  blockedTreatments: Array<{
+    code: string;
+    name: string;
+    reasons: string[];
+  }>;
+  escalationFlags: string[];
+  guardrailFlags: string[];
+  missingCriticalInformation: string[];
+};
+Examples
+if breathing_space_active = true → normal collections treatments blocked
+if active_insolvency = true → standard recovery treatments blocked
+if ie_assessment_completed != Yes → some treatments blocked
+if vulnerability rule triggered → escalation required
+if active DCA placement → block internal treatment if policy says so
+4) Final decision with AI
+Files
+server/lib/decisioning/decision-packet.ts
+server/lib/decisioning/decision-engine.ts
+Purpose
+
+The final AI step should consume:
+
+source data
+derived fields
+business fields
+compiled policy
+eligible treatments
+blocked treatments
+escalation flags
+guardrail flags
+missing information
+
+Then produce the final review queue output.
+
+Important design rule
+
+The final AI step should not:
+
+calculate derived fields
+infer missing business fields from scratch
+invent treatments
+override hard policy blockers
+
+Its job is only:
+
+understand the case
+explain the customer situation
+pick the next best treatment from allowed options
+explain why
+draft communication if needed
+Final decision packet
+File
+
+server/lib/decisioning/decision-packet.ts
+
+Build one structured packet like this:
+
+type DecisionPacket = {
+  customer: {
+    customerGuid: string;
+    profile: {
+      customerName?: string | null;
+      customerPhone?: string | null;
+      customerEmail?: string | null;
+    };
+    sourceData: Record<string, unknown>;
+    derivedFields: Record<string, unknown>;
+    businessFields: Record<string, unknown>;
+  };
+  policy: {
+    compiledPolicyText: Record<string, string>;
+    allowedTreatments: Array<{ code: string; name: string }>;
+    eligibleTreatments: Array<{ code: string; name: string; reasons: string[] }>;
+    blockedTreatments: Array<{ code: string; name: string; reasons: string[] }>;
+    escalationFlags: string[];
+    guardrailFlags: string[];
+  };
+  evidence: {
+    paymentHistorySummary: string | null;
+    conversationSummary: string | null;
+    missingInformation: string[];
+    keyFactorsConsidered: string[];
+  };
+};
+Final review queue output schema
+
+Use this updated schema for the final decision output.
+
+{
+  "customer_guid": "string",
+  "customer_name": "string | null",
+  "customer_phone": "string | null",
+  "customer_email": "string | null",
+
+  "payment_history_summary": "string | null",
+  "conversation_summary": "string | null",
+
+  "customer_situation": "string (max 5 lines)",
+  "customer_situation_confidence_score": 1,
+  "customer_situation_evidence": "string (max 5 lines)",
+
+  "used_fields": ["string"],
+  "used_rules": ["string"],
+  "missing_information": ["string"],
+  "key_factors_considered": ["string"],
+
+  "structured_assessments": [
+    {
+      "name": "string",
+      "value": "string | null",
+      "reason": "string"
+    }
+  ],
+
+  "recommended_treatment_name": "string",
+  "recommended_treatment_code": "string",
+  "proposed_next_best_action": "string (max 5 lines)",
+  "treatment_eligibility_explanation": "string (max 5 lines)",
+  "blocked_conditions": ["string"],
+
+  "proposed_next_best_confidence_score": 1,
+  "proposed_next_best_evidence": "string (max 5 lines)",
+
+  "requires_agent_review": true,
+  "internal_action": "string",
+
+  "proposed_email_to_customer": "Subject: ... Body: ... OR NO_ACTION"
+}
+Important output rules
+Review queue output should tell a story in this order
+who the customer is
+what is happening
+what evidence Beacon used
+what rules / fields were considered
+what treatment is recommended
+what should happen next
+Naming rule
+
+Use the word treatment, not solution.
+
+Genericity rule
+
+Do not force universal top-level fields like:
+
+affordability
+willingness
+ability_to_pay
+
+If needed, surface them inside:
+
+structured_assessments
+key_factors_considered
+customer_situation
+Final AI prompt behavior
+
+The final prompt should instruct the model to:
+
+use only the structured decision packet
+use only treatments that are eligible
+never recommend blocked treatments
+if escalation flags exist, respect them
+if evidence is missing, say so
+explain the customer situation clearly
+produce output in exact JSON schema
+draft customer email only if useful to advance the treatment
+otherwise return NO_ACTION
+Hard rule
+
+The final AI may only choose:
+
+an eligible treatment
+AGENT_REVIEW
+NO_ACTION
+
+No invented treatment names.
+
+5) Validate final decision before review queue
+File
+
+server/lib/decisioning/decision-validator.ts
+
+Purpose
+
+Validate final AI output before it appears in the review queue.
+
+This is mandatory.
+
+Validation layers
+A. Structural validation
+
+Check:
+
+valid JSON
+all required fields present
+correct types
+confidence score ranges valid
+arrays are arrays
+string fields are well-formed
+B. Policy validation
+
+Check:
+
+recommended treatment is allowed
+recommended treatment is eligible
+recommended treatment is not blocked
+if escalation rule triggered and output ignores it → fail
+if mandatory review trigger exists and requires_agent_review = false → fail
+C. Guardrail validation
+
+Check:
+
+breathing space / insolvency / DCA / litigation blockers respected
+no disallowed communication recommendation
+no treatment contradicts treatment rules
+no output contradicts known case facts
+D. Evidence validation
+
+Check:
+
+if output claims something, it must exist in source / derived / business data
+if a field is null, model cannot speak as if it is known
+used_fields and used_rules must be traceable
+Validation result
+type ValidationResult = {
+  status: "passed" | "warning" | "failed";
+  blockingIssues: string[];
+  warnings: string[];
+};
+Queue behavior
+passed → show in review queue
+warning → show in review queue with warning badge
+failed → do not show as normal recommendation; route to system hold or force agent review
+Orchestration
+File
+
+server/lib/decisioning/decision-engine.ts
+
+Create one main function:
+
+runDecisionPipeline({
+  companyId,
+  customerGuid,
+  sourceData,
+  clientConfig,
+  dataConfig,
+  policyPack,
+  policyConfig
+})
+Required order
+load field catalog
+resolve source values
+compute derived fields
+determine required business fields
+infer business fields one at a time
+evaluate treatment rules and guardrails
+build decision packet
+call final AI
+validate result
+retry once if output invalid because of model formatting issue
+persist result and traces
+Storage requirements
+For now
+
+Reuse existing decisions table.
+
+Store full traces inside aiRawOutput.
+
+Store this structure in aiRawOutput
+{
+  "engineVersion": "decision-layer-v2.1",
+  "derivedFieldTrace": {},
+  "businessFieldTrace": {},
+  "ruleEvaluation": {},
+  "decisionPacket": {},
+  "validation": {}
+}
+Optional later improvements
+
+Only if needed for filtering / analytics, add DB columns for:
+
+recommendedTreatmentCode
+validationStatus
+requiresAgentReview
+
+Do not block v1 on this.
+
+Route changes
+File
+
+server/routes.ts
+
+Update the current analysis flow.
+
+Replace the existing direct single-shot AI decision path with:
+
+runDecisionPipeline(...)
+
+Use this wherever decisions are currently generated.
+
+UI changes
+Review queue
+
+Show:
+
+customer id
+customer name if available
+recommended treatment
+confidence
+validation status
+requires agent review
+Decision detail
+
+Show 5 sections:
+
+customer and case summaries
+source data used
+derived fields
+business fields
+treatment decision + validation trace
+
+The goal is to make the decision auditable and easy to trust.
+
+Non-negotiable rules
+
+Replit must follow these rules exactly:
+
+never use AI for derived fields
+infer business fields one field at a time only
+missing data_type must not fail the system
+for business field inference in v1, pass all available customer data
+return null when evidence is insufficient
+final AI cannot invent treatment names
+deterministic rules override AI on hard blockers
+always validate before review queue
+always store reasoning traces
+use treatment language, not solution language
+do not force universal top-level fields like affordability / willingness / ATP
+Testing requirements
+Unit tests
+
+Add tests for:
+
+arithmetic derivation
+logical derivation
+null propagation
+dependency ordering
+cycle detection
+enum validation
+retry behavior for invalid business field AI output
+missing data_type does not break business field inference
+Scenario tests
+Lendable
+breathing space active → normal treatment blocked
+arrears + contact established + IE complete → Payment Plan eligible
+insolvency active → standard treatment blocked
+Prodigy
+vulnerable case → requires agent review
+hardship with incomplete documentation → treatment recommendation reflects missing info
+missing conversation data but payment data present → still returns structured decision without hallucination
+Generic
+client with only loan data still works
+client with loan + payment + conversation works
+business field inference works even when data_type missing
+output fails validation if AI invents unsupported treatment
+Definition of done
+
+This work is done when:
+
+derived fields are computed deterministically
+business fields are inferred one at a time with evidence trace
+business field inference still works if data_type is missing
+business field inference in v1 uses all customer data
+treatment eligibility is rule-evaluated before final AI step
+final output follows the updated review queue schema
+final output uses treatment language
+invalid recommendations never silently reach review queue
+agents can inspect source fields, derived fields, business fields, and decision trace

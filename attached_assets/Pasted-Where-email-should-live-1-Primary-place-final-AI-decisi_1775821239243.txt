@@ -1,0 +1,221 @@
+Where email should live
+1) Primary place: final AI decision step in Task #40
+
+This is the most important place.
+
+Why:
+By the time Beacon reaches the final decision step, it already knows:
+
+customer situation
+treatment chosen
+blockers / guardrails
+review triggers
+missing info
+policy context
+communication guidelines
+
+That is exactly when AI can decide:
+
+should we send an email at all?
+what should the email try to achieve?
+what tone should it use?
+or should it return NO_ACTION?
+
+So email generation belongs in the final decision output, not in derived fields or business fields.
+
+2) Supporting place: compiled policy / decision packet
+
+The final AI needs the policy-side communication rules.
+
+So in the compiled policy and then in the decision packet, you should include a section like:
+
+communicationGuidelines
+emailGuidelines
+emailWhenToUse
+emailWhenNotToUse
+tone / compliance constraints
+
+Why:
+The final AI should not draft emails from generic instinct.
+It should draft them using the client’s configured communication policy.
+
+3) Validator should check email consistency
+
+Also in Task #40.
+
+Validator should check:
+
+if proposed_email_to_customer != NO_ACTION, is that consistent with:
+chosen treatment
+blockers / guardrails
+review triggers
+internal-only actions
+if case is escalation-only or internal monitoring only, email should usually be NO_ACTION
+if email is drafted, it should not contradict the treatment or facts
+
+So email belongs in:
+
+final decision prompt
+final decision validator
+Where it should NOT live
+Not in Task #38
+
+That is deterministic only.
+Email is not deterministic core logic.
+
+Not in Task #39
+
+Business field inference is for field values like:
+
+vulnerability status
+engagement
+hardship indicators
+
+Email drafting is not a business field.
+It is a final action communication artifact.
+
+Not mainly in Task #41
+
+UI only displays what was decided.
+It should not own email logic.
+
+What I would add to the plans
+Add to Task #40 — decision packet
+
+Include a communication policy section in the packet, for example:
+
+communication: {
+  communicationGuidelines: string[];
+  emailGuidelines: string[];
+  emailWhenToUse: string[];
+  emailWhenNotToUse: string[];
+  toneGuidance?: string[];
+}
+
+This should come from the compiled policy / SOP config.
+
+Add to Task #40 — final prompt
+
+In the final decision prompt, explicitly instruct the model:
+
+decide whether an email is needed
+if yes, draft it in ≤10 lines
+if no, return NO_ACTION
+only send email when it advances the treatment or customer handling
+use communication guidelines from policy
+Add to Task #40 — output schema
+
+You already have:
+
+"proposed_email_to_customer": "Subject: ... Body: ... OR NO_ACTION"
+
+Keep that in the final output schema.
+That is the correct place.
+
+Add to Task #40 — validator rules for email
+
+Validator should check:
+
+Email allowed?
+
+If treatment / case context suggests no external outreach, then email should be NO_ACTION.
+
+Email consistent?
+
+If email is drafted:
+
+it must align with chosen treatment
+it must not ask for things irrelevant to the case
+it must not contradict blockers / review triggers
+it must not invent facts
+Exact wording I’d tell Replit to add
+
+You can send this directly:
+
+Add email handling explicitly to Task #40
+
+Email should be handled in the final decision stage, not in derived fields or business-field inference.
+
+Why
+
+By the final decision stage, Beacon already knows:
+
+customer situation
+selected treatment
+blockers / guardrails
+review triggers
+missing information
+policy context
+
+That is the correct point to decide:
+
+whether an email should be sent
+what the email should try to achieve
+what tone it should use
+or whether to return NO_ACTION
+Required additions
+1. Add communication guidance into compiled policy / decision packet
+
+Include a section in the decision packet such as:
+
+communicationGuidelines
+emailWhenToUse
+emailWhenNotToUse
+toneGuidance
+
+This should come from the client SOP / policy configuration.
+
+2. Keep proposed_email_to_customer in the final output schema
+
+Format:
+
+Subject: ... Body: ...
+or NO_ACTION
+3. Add explicit final-prompt instructions for email
+
+The final AI prompt should include guidance like:
+
+Draft an email only if it meaningfully advances the recommended treatment or customer handling.
+Return NO_ACTION if no email is needed.
+Use communication guidelines and tone guidance from policy.
+Typical valid email purposes include:
+request missing documents or information
+answer a customer’s outstanding question
+acknowledge hardship and explain support path
+inform next steps
+reinforce a good repayment path
+re-engage respectfully when appropriate
+Do not draft an email for internal-only actions, monitoring-only actions, or escalation-only outcomes unless policy explicitly supports customer outreach.
+4. Add validator checks for email consistency
+
+If proposed_email_to_customer != NO_ACTION, validator should check:
+
+email is consistent with the recommended treatment
+email does not contradict blockers, guardrails, or review triggers
+email does not invent unsupported facts
+email is not present when the action is purely internal/escalation-only unless explicitly justified
+Suggested prompt text to add into final decision prompt
+
+In the final AI system/user prompt, add something like:
+
+EMAIL DECISION RULES
+You must decide whether a customer email is needed.
+
+Return:
+- "NO_ACTION" if no email should be sent
+OR
+- "Subject: ... Body: ..." if an email would meaningfully advance the recommended treatment or customer handling.
+
+Only draft an email when it helps achieve one of these purposes:
+- request missing information or documents
+- answer a customer’s open question clearly
+- acknowledge hardship and explain support or next steps
+- inform the customer of the next step we are taking and what we need from them
+- reinforce positive repayment behaviour
+- re-engage a silent customer respectfully when appropriate
+
+Do not draft an email for internal-only actions, monitoring-only actions, or escalation-only actions unless the decision packet clearly supports customer outreach.
+
+Use the communication guidelines and tone guidance provided in the decision packet.
+Keep the email concise and operational.
+Do not invent facts not present in the decision packet.

@@ -1,0 +1,298 @@
+Overall final feedback
+
+The biggest thing you fixed correctly is this:
+
+treatment eligibility is deterministic
+treatment ranking is deterministic
+AI is now mostly doing:
+business judgment fields
+final narrative + treatment recommendation within policy bounds
+
+That is the right architecture.
+
+The remaining improvements are mostly about:
+
+making tie-handling cleaner
+making priority behavior even more deterministic
+making validator behavior clearer
+keeping MVP from becoming too heavy
+A) Improvements I would still suggest for MVP
+1) In #40, tie at top priority should not always force AGENT_REVIEW
+
+Right now the plan says:
+
+if multiple top-ranked treatments exist and case is ambiguous, tie-break falls to AGENT_REVIEW
+
+That is good, but I would tighten the wording.
+
+Because there are two different cases:
+
+Case 1: tied treatments but one is clearly better from customer context
+
+Then AI should be allowed to choose among the tied top-priority treatments.
+
+Case 2: tied treatments and the packet does not clearly support one over the other
+
+Then yes, use AGENT_REVIEW.
+
+What to tell Replit
+
+Update wording to:
+
+If multiple treatments are tied in preferredTreatments, the final AI may choose among those tied preferred treatments only if the decision packet provides a clear, traceable reason. If no clear reason exists, fall back to AGENT_REVIEW.
+
+Why:
+This avoids too many unnecessary agent reviews.
+
+2) Priority-deviation should sometimes be a failure, not always just a warning
+
+Right now the validator says:
+
+lower-priority selection without justification = warning
+
+I think that is slightly too soft.
+
+For MVP, I would split it:
+
+Warning
+
+If:
+
+chosen treatment is tied in top-priority group, or
+lower-priority treatment chosen but explicit rationale exists and policy does not forbid it
+Failure
+
+If:
+
+a clearly lower-ranked treatment is selected
+a higher-ranked treatment is eligible
+and there is no traceable justification
+What to tell Replit
+
+Change validator rule to:
+
+If the selected treatment is not in preferredTreatments and no traceable justification exists, classify as policy_failure or at minimum failed warning escalation, not only amber warning.
+
+Why:
+Otherwise priority becomes advisory, not meaningful.
+
+3) Add explicit “selection mode” in treatmentSelectionTrace
+
+This would make the trace easier to read.
+
+Suggested field
+selectionMode: "preferred" | "tied_preferred" | "lower_rank_justified" | "fallback_agent_review" | "no_action"
+
+Why:
+Very useful for analytics and debugging.
+
+4) Add “priority source” in ranking
+
+Sometimes priority may come from:
+
+explicit configured field
+default fallback
+missing priority
+Suggested addition to RankedTreatment
+prioritySource: "configured" | "defaulted" | "missing"
+
+Why:
+Helps diagnose weak policy configuration.
+
+5) In #38, BlockerType should probably include review_trigger only if you truly want one unified type
+
+Right now you separated reviewTriggers from blockers, which I agree with.
+
+So I would simplify:
+
+keep BlockerType = hard | soft | missing_info
+keep reviewTriggers completely separate
+
+That is already mostly what your current plan does. I would keep it that way and not mix the concepts again later.
+
+6) In #39, add cap on number of business fields inferred per run for MVP
+
+This is practical.
+
+If a policy accidentally references too many business fields, cost and latency could spike.
+
+What to tell Replit
+
+For MVP:
+
+add a safe configurable cap, for example maxBusinessFieldsPerRun
+if exceeded, log warning and route to AGENT_REVIEW or infer only required tiers 1–3 first
+
+Why:
+Protects latency and cost.
+
+7) In #39, clarify what “optional/enrichment fields” means
+
+This is still a little loose.
+
+For MVP, I would tell Replit:
+
+tiers 1–3 are required for decisioning
+tier 4 optional/enrichment fields should only be inferred if:
+they are needed for final output, or
+a feature flag enables them
+
+Why:
+Prevents overwork in MVP.
+
+8) In #40, policy completeness failure should not enter normal decision flow
+
+This is small but important.
+
+You already say fail fast, good.
+I would make sure it results in either:
+
+a typed system error for admin
+or deterministic AGENT_REVIEW only if the product flow requires a stored record
+
+Why:
+Do not pretend there was a valid decision when the policy itself is broken.
+
+9) In #41, keep business field evidence collapsed by default
+
+For MVP, this is important for usability.
+
+Why:
+Otherwise the page will feel too dense.
+
+10) In #41, show preferred treatment vs chosen treatment in UI
+
+This is especially useful now that priority matters.
+
+Add in Treatment Decision section:
+preferred treatment(s)
+chosen treatment
+if different, show justification badge
+
+Why:
+This makes the priority system visible and trustable.
+
+B) Deep dive on priority — final recommendation
+
+Yes, I agree strongly with your latest direction.
+
+Priority should matter in three places:
+
+1) Rule evaluator
+
+This is where priority should first be applied.
+
+The engine should:
+
+compute eligible treatments
+sort them by priority
+create rankedEligibleTreatments
+create preferredTreatments
+
+This is correct in your latest plan.
+
+2) Final AI prompt
+
+AI should not choose from all eligible treatments equally.
+
+It should receive:
+
+ranked eligible treatments
+preferred treatments
+explicit rule saying prefer preferred treatments
+
+This is also correct now.
+
+3) Validator
+
+Validator should ensure priority is not ignored.
+
+This is where I still want a stronger rule:
+
+unjustified deviation from preferred treatment should be more than a mild warning in clear-cut cases
+
+That is my main remaining recommendation.
+
+Exact improvement note I would send Replit
+
+You can paste this:
+
+Final improvement notes on the updated v2.1 plan
+
+The plan is strong and close to final. Please make the following MVP refinements:
+
+1. Tie handling for preferred treatments
+
+If multiple treatments are tied in preferredTreatments, do not automatically fall back to AGENT_REVIEW.
+Allow final AI to choose among tied preferred treatments only if the decision packet contains a clear, traceable reason.
+If no clear reason exists, then fall back to AGENT_REVIEW.
+
+2. Strengthen priority-deviation validation
+
+Current priority-deviation is only a warning. Please refine this:
+
+if selected treatment is outside preferredTreatments and there is clear traceable justification, keep as warning or pass
+if selected treatment is outside preferredTreatments and there is no traceable justification, escalate to a stronger validator outcome (failed / policy_failure preferred over warning)
+
+Priority should be a real policy signal, not just advisory.
+
+3. Add explicit selection mode to treatmentSelectionTrace
+
+Add a field such as:
+
+selectionMode: "preferred" | "tied_preferred" | "lower_rank_justified" | "fallback_agent_review" | "no_action"
+
+This will make downstream debugging and analytics much clearer.
+
+4. Add priority source metadata
+
+In ranked treatments, store:
+
+prioritySource: "configured" | "defaulted" | "missing"
+
+This helps distinguish well-configured policy from fallback behavior.
+
+5. Keep review triggers separate from blockers
+
+Do not merge reviewTriggers into blockers.
+Keep:
+
+blockers = hard / soft / missing_info
+reviewTriggers = separate list
+6. Add an MVP safety cap for business field inference
+
+Introduce a configurable maxBusinessFieldsPerRun safeguard.
+If exceeded:
+
+log warning
+prioritize tiers 1–3
+avoid unbounded latency/cost in MVP
+7. Clarify optional/enrichment fields
+
+Tier 4 business fields should be inferred only if:
+
+needed for final output, or
+explicitly enabled by configuration
+
+Do not infer enrichment fields by default if they are not needed for the decision.
+
+8. Policy completeness failure handling
+
+If policy completeness fails, do not proceed as if a normal decision was made.
+Either:
+
+fail fast with typed admin-visible error, or
+create deterministic AGENT_REVIEW record only if the flow requires a stored outcome
+9. UI should show preferred vs chosen treatment
+
+In decision detail, show:
+
+preferred treatment(s)
+chosen treatment
+justification when chosen treatment differs from preferred
+
+This is important now that treatment priority is part of the policy engine.
+
+10. Keep evidence-heavy sections collapsed by default
+
+For MVP, business field evidence and raw trace should remain collapsed by default to keep the UI usable.

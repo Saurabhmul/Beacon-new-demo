@@ -1,0 +1,756 @@
+1) Recommendation note to send to Replit
+Overall direction
+
+The updated 4 plans are strong and much better structured. I agree with the architecture.
+
+The main improvements I want are:
+
+make AI boundaries even more explicit
+make prompt/version/model settings explicit
+keep v1 robust but not overcomplicated
+make token / truncation handling deliberate
+make source resolution and rule traces very auditable
+make deterministic fallback behavior absolutely unambiguous
+Plan-by-plan improvements to give Replit
+#38 Decision Engine Foundation — improvements
+1. Source resolution should prefer configured aliases, not smart guessing
+
+The current priority order is good:
+
+exact
+normalized
+alias
+unresolved
+
+Please keep it strict.
+
+Instruction to Replit:
+Do not add fuzzy guessing beyond the defined priority order. If a field does not resolve via exact / normalized / configured alias, mark it unresolved and trace it. Do not silently map fields using weak heuristics.
+
+Why:
+Wrong source-field mapping will poison the entire pipeline.
+
+2. Add explicit source-resolution trace object into outputs
+
+Please make source resolution fully inspectable.
+
+Add:
+
+raw source key
+canonical field id
+matching method
+raw value
+normalized value
+whether alias was used
+
+Why:
+This is one of the highest-risk parts of multi-client reliability.
+
+3. Keep skipped separate from null
+
+Please preserve the distinction carefully:
+
+null = could not compute because data missing / insufficient
+skipped = field not required or config incomplete
+error = actual computation failure
+
+Why:
+This matters for debugging and for UI labels later.
+
+4. Rule evaluator should produce rule-level trace per treatment
+
+This is important and should stay.
+
+Instruction to Replit:
+For every treatment, store:
+
+which rules were checked
+which passed
+which failed
+which were not evaluable
+which field values were used
+blocker type (hard / soft / missing_info / review_trigger)
+
+Why:
+Later, both admins and agents will need to understand “why treatment X was blocked.”
+
+5. Add explicit reviewTriggers separate from blockers
+
+Right now review triggers are conceptually in there, but please surface them clearly.
+
+Instruction to Replit:
+In rule evaluation outputs, include a separate list:
+
+reviewTriggers
+
+Do not fold review triggers into generic blockers.
+
+Why:
+A review trigger is not the same as a blocked treatment.
+
+6. Add policy/rule reference integrity checks even in foundation tests
+
+Even if full policy completeness check is in Task #40, add low-level tests here for:
+
+broken field ids in rules
+invalid operator values
+missing rule group references
+
+Why:
+It will harden the deterministic core.
+
+#39 Business Field Engine — improvements
+1. Use Gemini 2.5 Pro explicitly
+
+Please do not leave the model vague.
+
+Instruction to Replit:
+Use Gemini 2.5 Pro for:
+
+single-field business inference
+final decision generation
+
+Do not use a lighter model for these two steps in v1.
+
+Why:
+These are the two highest-value reasoning tasks.
+
+2. Make AI use explicit and narrow
+
+AI should be used only in 2 places:
+
+A. Business field inference
+
+One field at a time.
+
+B. Final decision generation
+
+Using the structured decision packet only.
+
+Instruction to Replit:
+No AI should be used in:
+
+source resolution
+derived field computation
+treatment eligibility computation
+blocker classification
+validation
+
+Why:
+These parts need to stay deterministic and auditable.
+
+3. Structured context should be passed as labeled sections
+
+I agree with passing all customer data for v1. But it must be structured.
+
+Instruction to Replit:
+For business field inference, pass all available customer data, but organize it into sections:
+
+customerProfile
+loanData
+paymentData
+conversationData
+bureauData
+derivedFields
+priorBusinessFields
+
+Do not send one giant raw blob.
+
+Why:
+Gemini reasons better with organized context.
+
+4. Add explicit truncation / summarization policy
+
+This should be defined now, even if data is small today.
+
+Instruction to Replit:
+If conversation or payment history is too long:
+
+preserve most recent items
+preserve the most significant items
+summarize older items
+log truncation/summarization in trace
+
+Why:
+Prevents silent loss of important evidence.
+
+5. Make confidence discipline stricter
+
+This is important.
+
+Instruction to Replit:
+For business fields:
+
+confidence must be 0–1
+if value = null, confidence should be null or <= 0.1
+if only one weak evidence item exists, confidence should not exceed 0.6
+if confidence > 0.8, there should be multiple strong or corroborated evidence items
+
+Why:
+Prevents fake certainty.
+
+6. Prompt builder should be separate file
+
+Please make prompts editable without changing engine logic.
+
+Instruction to Replit:
+Keep prompt builders in dedicated files, for example:
+
+server/lib/decisioning/prompts/business-field-prompt.ts
+server/lib/decisioning/prompts/final-decision-prompt.ts
+
+Why:
+Prompt tuning should not require touching orchestration code.
+
+7. Add business-field inference ordering trace
+
+Please store:
+
+tier used
+dependency order
+whether prior business fields were referenced
+
+Why:
+Useful for debugging field dependencies.
+
+#40 Decision Orchestrator, Validator & Route Integration — improvements
+1. Make deterministic fallback absolutely explicit
+
+This is important enough to state again.
+
+Instruction to Replit:
+If:
+
+no eligible treatment exists
+critical missing information prevents safe decision
+guardrail requires human review
+policy completeness check fails
+final AI output fails validation and cannot be repaired structurally
+
+Then the system must deterministically fall back to:
+
+recommended_treatment_code = "AGENT_REVIEW"
+recommended_treatment_name = "Agent Review"
+requires_agent_review = true
+
+unless the run is marked failed_validation/system_hold.
+
+Why:
+No ambiguity.
+
+2. Retry logic must stay narrow
+
+Please do not retry broadly.
+
+Instruction to Replit:
+Retry final AI exactly once only for structural/schema formatting failures:
+
+invalid JSON
+missing required keys
+wrong type
+invalid enum
+malformed structure
+
+Do not retry for:
+
+policy contradiction
+guardrail violation
+evidence contradiction
+
+Why:
+Those are reasoning failures, not formatting failures.
+
+3. Make policy completeness check a formal first-class stage
+
+This is a very good addition. Keep it strict.
+
+Instruction to Replit:
+Before any customer processing, validate:
+
+policy has at least one treatment
+all rule field references resolve
+all treatment references are valid
+no broken field ids
+no broken rule group references
+no unsupported operators
+
+Fail fast with a clear typed error.
+
+Why:
+Bad policy config should fail early, not produce weird customer decisions.
+
+4. Make failed_validation decisions inspectable, not hidden
+
+Please keep a system-hold/admin-inspection path.
+
+Instruction to Replit:
+Store failed decisions with traces and make them retrievable in admin/debug view. Do not silently drop them.
+
+Why:
+Needed for improving the system.
+
+5. Add run metadata for reproducibility
+
+Please include:
+
+runId
+engineVersion
+promptVersions
+policyVersion
+companyId
+customerGuid
+timestamp
+
+Why:
+This is crucial for re-runs and later evaluation.
+
+6. Add partial failure logging
+
+If a later stage crashes, preserve what was completed.
+
+Instruction to Replit:
+If orchestration fails after some stages have completed, capture partial traces and partial stage metrics before propagating the error.
+
+Why:
+Improves debugging.
+
+7. Final AI should receive blocked treatments with reasons
+
+This is good in the plan. Keep it.
+
+Why:
+It helps Gemini understand the “why not,” not just the “what is allowed.”
+
+8. Conservative backward mapping only
+
+Please do not force the new generic structure into old Prodigy-shaped fields.
+
+Instruction to Replit:
+Map old DB columns only where a clear equivalent exists. Otherwise leave null.
+
+Why:
+Avoid misleading legacy values.
+
+#41 Decision Detail UI v2 + Review Queue — improvements
+1. Keep queue lean
+
+The queue should stay scan-friendly.
+
+Instruction to Replit:
+In the review queue, show only:
+
+customer id/name
+recommended treatment
+confidence
+validation status
+needs review
+one-line rationale
+
+Do not overload the queue with too many columns in v1.
+
+2. Make “facts vs computed vs inferred vs recommendation” visually obvious
+
+This is very important.
+
+Instruction to Replit:
+Label sections clearly as:
+
+facts
+computed facts
+inferred judgments
+recommendation
+
+Why:
+This improves trust dramatically.
+
+3. Null labels must be specific
+
+Please keep explicit labels like:
+
+Null — insufficient evidence
+Null — missing source fields
+Skipped — not required
+Unresolved
+Unavailable — generated before v2.1
+
+Why:
+Much better operator understanding than generic “N/A”.
+
+4. Add raw trace inspection behind debug toggle
+
+Good idea. Keep it admin/debug oriented.
+
+5. Add copy-to-clipboard for validation issues and raw trace
+
+This is useful and should stay.
+
+6. Legacy fallback must be graceful
+
+Very important.
+No crashes, no empty sections.
+
+2) Explicit AI usage note to send to Replit
+
+Send this exactly.
+
+Explicit AI usage boundaries
+
+Beacon v2.1 should use AI in exactly two places only:
+
+1. Business field inference
+
+Model: Gemini 2.5 Pro
+
+Use Gemini 2.5 Pro to infer one business field at a time from:
+
+field metadata
+structured customer data
+derived fields
+previously inferred business fields
+relevant policy context only when needed
+
+This step is judgment-based and cannot be deterministic.
+
+2. Final decision generation
+
+Model: Gemini 2.5 Pro
+
+Use Gemini 2.5 Pro to generate the final review-queue output using:
+
+decision packet
+eligible treatments
+blocked treatments with reasons
+escalation flags
+guardrail flags
+missing information
+structured assessments and evidence
+
+This step is reasoning + explanation + operational drafting.
+
+AI must NOT be used for
+
+Do not use AI for:
+
+source field resolution
+derived field computation
+rule evaluation
+treatment eligibility computation
+blocker classification
+policy completeness validation
+final decision validation
+
+These must remain deterministic.
+
+Model settings
+
+Use Gemini 2.5 Pro for both AI tasks.
+
+Output token guidance
+
+Set output token limit high enough to avoid truncation.
+
+Recommended:
+
+Business field inference: up to ~2k output tokens
+Final decision generation: up to ~4k–6k output tokens
+
+If the SDK supports larger safe output caps, set them generously rather than tightly.
+
+Important instruction
+
+Do not set max output too low.
+We prefer:
+
+complete structured JSON
+full rationale
+non-truncated response
+
+over aggressive token savings.
+
+If prompt context becomes long
+
+For long conversation/payment histories:
+
+summarize older evidence before the call
+preserve recent and significant evidence
+log summarization/truncation in trace
+3) Exact prompts to give Replit
+
+Below are the prompts.
+
+These should live in separate prompt-builder files.
+
+A. Business field inference prompt
+
+Use this as the base prompt template for one field at a time.
+
+System / instruction prompt
+You are Beacon's business-field inference engine.
+
+Your job is to infer exactly ONE business field for ONE customer using only the evidence provided.
+
+You must follow these rules exactly:
+
+1. Use only the provided evidence.
+2. Do not use outside knowledge.
+3. Do not use generic collections assumptions.
+4. Do not use stereotypes.
+5. Do not guess.
+6. If the evidence is insufficient, contradictory, or too weak, return value = null.
+7. If allowed_values are provided, you must return only one of those values or null.
+8. If the field is effectively boolean, return only true, false, or null.
+9. Your rationale must be short, factual, and based on the evidence.
+10. Your evidence array must contain only evidence actually used in your reasoning.
+
+Return valid JSON only. Do not include markdown. Do not include commentary outside the JSON object.
+User prompt template
+Infer the following business field for this customer.
+
+FIELD METADATA
+field_id: {{field_id}}
+field_label: {{field_label}}
+display_name: {{display_name}}
+description: {{description}}
+business_meaning: {{business_meaning}}
+allowed_values: {{allowed_values_json}}
+default_value: {{default_value}}
+data_type: {{data_type_or_null}}
+
+IMPORTANT DATA-TYPE RULE
+If data_type is missing, do not fail.
+Use allowed_values if present.
+If allowed_values are not present, use the field description and business meaning.
+If the field still cannot be safely typed, return a string value or null only unless it is clearly boolean-like.
+
+CUSTOMER CONTEXT
+
+customerProfile:
+{{customer_profile_json}}
+
+loanData:
+{{loan_data_json}}
+
+paymentData:
+{{payment_data_json}}
+
+conversationData:
+{{conversation_data_json}}
+
+bureauData:
+{{bureau_data_json}}
+
+derivedFields:
+{{derived_fields_json}}
+
+priorBusinessFields:
+{{prior_business_fields_json}}
+
+RELEVANT POLICY CONTEXT
+{{policy_context_json_or_null}}
+
+OUTPUT REQUIREMENTS
+Return exactly one JSON object with this schema:
+
+{
+  "field_id": "string",
+  "field_label": "string",
+  "value": "string | number | boolean | null",
+  "confidence": 0.0,
+  "rationale": "string",
+  "null_reason": "string | null",
+  "evidence": [
+    {
+      "type": "source_field | derived_field | business_field | conversation | payment | bureau | rule_context",
+      "key": "string",
+      "value": "string"
+    }
+  ]
+}
+
+CONFIDENCE RULES
+- confidence must be between 0 and 1
+- if value is null, confidence must be null or very low (<= 0.1)
+- do not output high confidence unless evidence is strong and specific
+
+FINAL REMINDER
+Use only the evidence above.
+If evidence is insufficient, return null.
+Return JSON only.
+Retry prompt suffix for schema failure only
+
+If the first business-field response is structurally invalid, append this:
+
+Your previous response did not match the required schema.
+
+VALIDATION FEEDBACK:
+{{validation_error_message}}
+
+Please try again and return exactly one valid JSON object matching the required schema.
+Do not add any text before or after the JSON.
+B. Final decision prompt
+
+This is the prompt for the final decision step.
+
+System / instruction prompt
+You are Beacon's final decision engine for customer review queue recommendations.
+
+Your job is to review one structured customer case and recommend the next best treatment.
+
+You must follow these rules exactly:
+
+1. Use only the information in the decision packet.
+2. Do not use outside knowledge.
+3. Do not invent facts.
+4. Do not invent treatments.
+5. You may choose only:
+   - one treatment from eligible_treatments
+   - AGENT_REVIEW
+   - NO_ACTION
+6. Never recommend a blocked treatment.
+7. Respect all escalation flags and guardrail flags.
+8. If the case is unsafe, ambiguous, blocked by policy, or missing critical information, prefer AGENT_REVIEW.
+9. Use treatment language, not solution language.
+10. Explain the customer situation clearly and operationally for an agent.
+11. Draft a customer email only if it meaningfully advances the recommended treatment. Otherwise return NO_ACTION.
+12. Return valid JSON only.
+
+Do not include markdown. Do not include commentary outside the JSON object.
+User prompt template
+Review this customer case and produce the final review-queue recommendation.
+
+DECISION PACKET
+{{decision_packet_json}}
+
+ELIGIBLE TREATMENTS
+{{eligible_treatments_json}}
+
+BLOCKED TREATMENTS
+{{blocked_treatments_json}}
+
+ESCALATION FLAGS
+{{escalation_flags_json}}
+
+GUARDRAIL FLAGS
+{{guardrail_flags_json}}
+
+MISSING CRITICAL INFORMATION
+{{missing_critical_information_json}}
+
+DETERMINISTIC FALLBACK RULE
+If no treatment is safely eligible, or guardrails/review triggers require human review, or missing critical information makes the recommendation unsafe, return:
+- recommended_treatment_code = "AGENT_REVIEW"
+- recommended_treatment_name = "Agent Review"
+- requires_agent_review = true
+
+OUTPUT SCHEMA
+Return exactly one JSON object matching this schema:
+
+{
+  "customer_guid": "string",
+  "customer_name": "string | null",
+  "customer_phone": "string | null",
+  "customer_email": "string | null",
+
+  "payment_history_summary": "string | null",
+  "conversation_summary": "string | null",
+
+  "customer_situation": "string (max 5 lines)",
+  "customer_situation_confidence_score": 1,
+  "customer_situation_evidence": "string (max 5 lines)",
+
+  "used_fields": ["string"],
+  "used_rules": ["string"],
+  "missing_information": ["string"],
+  "key_factors_considered": ["string"],
+
+  "structured_assessments": [
+    {
+      "name": "string",
+      "value": "string | null",
+      "reason": "string"
+    }
+  ],
+
+  "recommended_treatment_name": "string",
+  "recommended_treatment_code": "string",
+  "proposed_next_best_action": "string (max 5 lines)",
+  "treatment_eligibility_explanation": "string (max 5 lines)",
+  "blocked_conditions": ["string"],
+
+  "proposed_next_best_confidence_score": 1,
+  "proposed_next_best_evidence": "string (max 5 lines)",
+
+  "requires_agent_review": true,
+  "internal_action": "string",
+
+  "proposed_email_to_customer": "Subject: ... Body: ... OR NO_ACTION"
+}
+
+OUTPUT RULES
+- use only treatment names/codes that are eligible, or AGENT_REVIEW, or NO_ACTION
+- if blocked treatments exist, explain blocked conditions clearly
+- used_fields must include the key fields actually used
+- used_rules must include the key rule names / identifiers actually used
+- missing_information should include only genuinely missing items that matter
+- structured_assessments should include only important reasoning assessments, not filler
+- confidence scores must be 1–10 integers
+- be concise, clear, and operational
+
+FINAL REMINDER
+Do not invent facts or treatments.
+If uncertain, prefer AGENT_REVIEW.
+Return JSON only.
+Retry prompt suffix for structural failure only
+Your previous response did not match the required schema.
+
+VALIDATION FEEDBACK:
+{{validation_error_message}}
+
+Please return exactly one valid JSON object matching the required schema.
+Do not add text before or after the JSON.
+Final short instruction you can send to Replit
+
+You can send this as the summary note:
+
+Final implementation guidance
+
+Please improve the plans with the following changes:
+
+Keep AI usage explicit and narrow:
+Gemini 2.5 Pro for business-field inference
+Gemini 2.5 Pro for final decision generation
+no AI for deterministic stages
+Keep source-field resolution strict:
+exact → normalized → alias → unresolved
+no fuzzy guessing
+full resolution trace required
+Preserve clear separation between:
+hard blockers
+soft blockers
+missing critical information
+review triggers
+For business fields:
+infer one field at a time
+pass all customer data for v1, but in structured sections
+missing data_type must not fail inference
+use strict “do not invent facts” prompt
+retry only for schema/format issues
+For final decision:
+use decision packet only
+pass eligible + blocked treatments with reasons
+use treatment language only
+deterministic fallback to AGENT_REVIEW when unsafe/uncertain
+Make prompts separate builder files, not hardcoded
+Set generous output token limits to avoid truncation, especially for final decision JSON
+Add observability and versioning:
+engine version
+prompt versions
+policy version
+run id
+per-stage timing and counts
+Keep failed validation decisions inspectable in system hold/admin view
+Keep UI lean in v1, but clearly separate:
+facts
+computed facts
+inferred judgments
+recommendation
