@@ -358,6 +358,26 @@ export async function runDecisionPipeline(args: RunDecisionPipelineArgs): Promis
         );
         validationResult = null;
       }
+
+      // ── Tied-preferred ambiguity → deterministic AGENT_REVIEW ─────────
+      // When AI chose among tied preferred treatments without any traceable reason,
+      // the validator emits a blocking policy_failure. Convert to deterministic fallback.
+      if (
+        validationResult !== null &&
+        validationResult.status === "failed" &&
+        validationResult.failureType === "policy_failure" &&
+        validationResult.blockingIssues.some(i =>
+          i.field === "treatment_eligibility_explanation" &&
+          i.message.toLowerCase().includes("tied preferred")
+        )
+      ) {
+        deterministicFallbackReason = "tied preferred treatments — no traceable reason to choose";
+        finalAIOutput = buildFallbackOutput(
+          deterministicFallbackReason,
+          "Tied preferred treatments with no documented justification; escalating to agent"
+        );
+        validationResult = null;
+      }
     }
   } catch (err) {
     console.error("[orchestrator] Final AI call failed:", err);
@@ -595,7 +615,8 @@ function buildAnnotatedEmptyTrace(
     prioritySource: "missing" as const,
     rank: i + 1,
     isPreferred: false,
-    selectionMode: "not_selected",
+    // selectionMode intentionally omitted: AGENT_REVIEW is a run-level outcome,
+    // not a treatment selection. Reason stored in runFallbackReason.
     selectionReason,
   }));
 }

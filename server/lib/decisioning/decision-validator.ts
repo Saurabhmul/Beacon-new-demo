@@ -68,9 +68,16 @@ export interface FinalAIOutput {
 
 const FALLBACK_CODES = new Set(["AGENT_REVIEW", "NO_ACTION"]);
 
-const REQUIRED_TOP_LEVEL_KEYS: Array<keyof FinalAIOutput> = [
+const REQUIRED_STRUCTURAL_KEYS: Array<keyof FinalAIOutput> = [
   "recommended_treatment_name",
   "recommended_treatment_code",
+  "used_fields",
+  "used_rules",
+  "structured_assessments",
+];
+
+const REQUIRED_ALL_KEYS: Array<keyof FinalAIOutput> = [
+  ...REQUIRED_STRUCTURAL_KEYS,
   "proposed_next_best_action",
   "treatment_eligibility_explanation",
   "requires_agent_review",
@@ -79,12 +86,9 @@ const REQUIRED_TOP_LEVEL_KEYS: Array<keyof FinalAIOutput> = [
   "customer_situation",
   "customer_situation_confidence_score",
   "proposed_next_best_confidence_score",
-  "used_fields",
-  "used_rules",
-  "structured_assessments",
 ];
 
-// Hard outreach-prohibition signals that make email strictly prohibited
+// Hard outreach-prohibition signals
 const OUTREACH_PROHIBITED_SIGNALS = [
   "no contact", "do not contact", "no outreach", "do not call",
   "deceased", "legal hold", "legal dispute", "in dispute",
@@ -92,7 +96,7 @@ const OUTREACH_PROHIBITED_SIGNALS = [
   "communication ban", "do not email",
 ];
 
-// Internal-only action prefixes that must not produce customer-facing email
+// Internal-only actions that must not produce customer-facing email
 const INTERNAL_ONLY_ACTION_SIGNALS = [
   "system_hold", "escalate_internal", "flag_only", "monitor_only", "internal_only",
 ];
@@ -108,17 +112,14 @@ export function validateDecision(
   const warnings: ValidationIssue[] = [];
 
   // ── Layer 1: Structural failure ──────────────────────────────────────────
-  for (const key of REQUIRED_TOP_LEVEL_KEYS) {
-    const val = output[key];
-    if (val === undefined || val === null) {
-      if (["recommended_treatment_name", "recommended_treatment_code",
-           "used_fields", "used_rules", "structured_assessments"].includes(key as string)) {
-        blockingIssues.push({
-          failureType: "structural_failure",
-          message: `Missing required field: "${key}"`,
-          field: key,
-        });
-      }
+
+  for (const key of REQUIRED_STRUCTURAL_KEYS) {
+    if (output[key] === undefined || output[key] === null) {
+      blockingIssues.push({
+        failureType: "structural_failure",
+        message: `Missing required field: "${key}"`,
+        field: key,
+      });
     }
   }
 
@@ -138,7 +139,7 @@ export function validateDecision(
       if (typeof score !== "number" || !Number.isInteger(score) || score < 1 || score > 10) {
         blockingIssues.push({
           failureType: "structural_failure",
-          message: `"${scoreKey}" must be an integer between 1 and 10, got: ${JSON.stringify(score)}`,
+          message: `"${scoreKey}" must be an integer between 1–10, got: ${JSON.stringify(score)}`,
           field: scoreKey,
         });
       }
@@ -194,7 +195,7 @@ export function validateDecision(
   if (!allowedCodes.has(recommendedCode)) {
     blockingIssues.push({
       failureType: "policy_failure",
-      message: `Recommended treatment "${recommendedCode}" is not in the allowed list (not eligible, not AGENT_REVIEW, not NO_ACTION)`,
+      message: `Recommended treatment "${recommendedCode}" is not in the allowed list`,
       field: "recommended_treatment_code",
     });
   }
@@ -215,10 +216,7 @@ export function validateDecision(
       "cooling", "cooldown", "wait", "waiting", "recent outreach", "no action required",
       "contact window", "policy window", "no review required", "no treatment needed",
     ];
-    const hasNoActionJustification = noActionSignals.some(s =>
-      explanation.includes(s) || keyFactors.includes(s)
-    );
-    if (!hasNoActionJustification) {
+    if (!noActionSignals.some(s => explanation.includes(s) || keyFactors.includes(s))) {
       blockingIssues.push({
         failureType: "policy_failure",
         message: "NO_ACTION recommended without traceable policy or contact-management justification",
@@ -229,15 +227,13 @@ export function validateDecision(
 
   // ── Layer 3: Guardrail failure ───────────────────────────────────────────
 
-  // Escalation flags: strongly prefer AGENT_REVIEW (warning when not chosen)
   if (decisionPacket.escalationFlags.length > 0 && !isRunFallback) {
     warnings.push({
       failureType: "guardrail_failure",
-      message: "Escalation flags are active but AGENT_REVIEW was not recommended",
+      message: "Escalation flags active but AGENT_REVIEW was not recommended",
     });
   }
 
-  // Hard outreach prohibition: email must be blocked
   const allFlagDescriptions = [
     ...decisionPacket.guardrailFlags.map(f => f.description.toLowerCase()),
     ...decisionPacket.escalationFlags.map(f => f.description.toLowerCase()),
@@ -255,10 +251,8 @@ export function validateDecision(
       });
     }
 
-    // Internal-only action must not generate customer-facing email (blocking)
     const internalActionLower = String(output.internal_action ?? "").toLowerCase();
-    const isInternalOnlyAction = INTERNAL_ONLY_ACTION_SIGNALS.some(s => internalActionLower.includes(s));
-    if (isInternalOnlyAction) {
+    if (INTERNAL_ONLY_ACTION_SIGNALS.some(s => internalActionLower.includes(s))) {
       blockingIssues.push({
         failureType: "guardrail_failure",
         message: `Email drafted for internal-only action: "${output.internal_action}"`,
@@ -266,16 +260,14 @@ export function validateDecision(
       });
     }
 
-    // emailWhenNotToUse: blocking guardrail_failure when violated
+    // emailWhenNotToUse: blocking guardrail_failure
     const emailWhenNotToUse = decisionPacket.communication?.guidelines?.emailWhenNotToUse ?? [];
     if (emailWhenNotToUse.length > 0) {
       const emailLower = emailVal.toLowerCase();
       const explanationLower = String(output.treatment_eligibility_explanation ?? "").toLowerCase();
       for (const rule of emailWhenNotToUse) {
-        const ruleLower = rule.toLowerCase();
-        const ruleSignals = ruleLower.split(/[\s,;]+/).filter(t => t.length > 4);
-        const matchesRule = ruleSignals.some(s => emailLower.includes(s) || explanationLower.includes(s));
-        if (matchesRule) {
+        const ruleSignals = rule.toLowerCase().split(/[\s,;]+/).filter(t => t.length > 4);
+        if (ruleSignals.some(s => emailLower.includes(s) || explanationLower.includes(s))) {
           blockingIssues.push({
             failureType: "guardrail_failure",
             message: `Email violates emailWhenNotToUse guideline: "${rule}"`,
@@ -286,21 +278,20 @@ export function validateDecision(
       }
     }
 
-    // Email treatment-consistency: email body should align with recommended treatment
+    // Email treatment-consistency: blocking when email content contradicts recommended treatment
     const emailLower = emailVal.toLowerCase();
     const treatmentLower = recommendedCode.toLowerCase();
-    // Check that email doesn't describe a completely different treatment
     if (treatmentLower.includes("dca") && (emailLower.includes("payment plan") || emailLower.includes("instalment"))) {
-      warnings.push({
+      blockingIssues.push({
         failureType: "guardrail_failure",
         message: "Email content describes payment plan/instalment for a DCA treatment",
         field: "proposed_email_to_customer",
       });
     }
-    if (!treatmentLower.includes("hardship") && emailLower.includes("hardship arrangement")) {
-      warnings.push({
+    if (!treatmentLower.includes("hardship") && emailLower.includes("hardship arrangement") && emailLower.includes("formal hardship")) {
+      blockingIssues.push({
         failureType: "guardrail_failure",
-        message: "Email content mentions hardship arrangement but recommended treatment is not a hardship treatment",
+        message: "Email content references hardship arrangement but recommended treatment is not a hardship treatment",
         field: "proposed_email_to_customer",
       });
     }
@@ -323,11 +314,11 @@ export function validateDecision(
     });
   });
 
-  // Blocking: if >50% of used_fields are unknown — likely hallucinated references
+  // Blocking when >50% of used_fields are unrecognised — likely hallucinated
   if (usedFields.length > 0 && unknownUsedFields.length > Math.max(3, Math.ceil(usedFields.length / 2))) {
     blockingIssues.push({
       failureType: "evidence_failure",
-      message: `used_fields references ${unknownUsedFields.length}/${usedFields.length} unknown fields — possible hallucinated evidence`,
+      message: `used_fields has ${unknownUsedFields.length}/${usedFields.length} unknown fields — possible hallucinated evidence`,
       field: "used_fields",
     });
   } else if (unknownUsedFields.length > 3) {
@@ -338,25 +329,22 @@ export function validateDecision(
     });
   }
 
-  // Invented-facts check: used_rules must reference rules that exist in the packet
-  if ((output.used_rules ?? []).length > 0) {
-    const knownRuleIds = new Set(
-      decisionPacket.rankedEligibleTreatments
-        .flatMap(t => (t as { reasons?: string[] }).reasons ?? [])
-    );
-    // If knownRuleIds is populated, validate against it; otherwise skip (rules may not be tracked)
-    if (knownRuleIds.size > 0) {
-      const unknownRules = (output.used_rules ?? []).map(String).filter(r => {
-        const rLower = r.trim().toLowerCase();
-        return !Array.from(knownRuleIds).some(k => k.toLowerCase().includes(rLower) || rLower.includes(k.toLowerCase()));
+  // Invented-facts check: warn on large numbers of unrecognised rule references
+  const knownRuleIds = new Set(
+    decisionPacket.rankedEligibleTreatments
+      .flatMap(t => (t as { reasons?: string[] }).reasons ?? [])
+  );
+  if (knownRuleIds.size > 0 && (output.used_rules ?? []).length > 0) {
+    const unknownRules = (output.used_rules ?? []).map(String).filter(r => {
+      const rLower = r.trim().toLowerCase();
+      return !Array.from(knownRuleIds).some(k => k.toLowerCase().includes(rLower) || rLower.includes(k.toLowerCase()));
+    });
+    if (unknownRules.length > 3) {
+      warnings.push({
+        failureType: "evidence_failure",
+        message: `used_rules references ${unknownRules.length} unrecognised rules — possible invented evidence`,
+        field: "used_rules",
       });
-      if (unknownRules.length > 3) {
-        warnings.push({
-          failureType: "evidence_failure",
-          message: `used_rules references ${unknownRules.length} unrecognised rules; possible invented evidence`,
-          field: "used_rules",
-        });
-      }
     }
   }
 
@@ -370,38 +358,39 @@ export function validateDecision(
     const isTiedPreferred = isPreferred && preferredTreatments.length > 1;
 
     if (isPreferred && !isTiedPreferred) {
-      // Single preferred treatment — normal case
       if (chosenEntry) {
         chosenEntry.selectionMode = "preferred";
         chosenEntry.selectionReason = `Highest-priority eligible treatment (rank ${chosenEntry.rank})`;
       }
     } else if (isTiedPreferred) {
-      // Multiple tied preferred treatments — AI chose one; this is a WARNING (not a failure)
+      // Multiple tied preferred treatments — require traceable reason for deterministic choice
       const explanation = String(output.treatment_eligibility_explanation ?? "").trim();
-      if (chosenEntry) {
-        chosenEntry.selectionMode = "tied_preferred";
-        if (!explanation) {
-          warnings.push({
-            failureType: "guardrail_failure",
-            message: "Tied preferred treatment selected without any documented reason",
-            field: "treatment_eligibility_explanation",
-          });
-          chosenEntry.selectionReason = "Tied preferred treatment — no explicit reason documented";
-        } else {
+      if (!explanation) {
+        // No reason provided: emit blocking policy_failure so orchestrator routes to AGENT_REVIEW
+        blockingIssues.push({
+          failureType: "policy_failure",
+          message: "Tied preferred treatments — AI chose without any traceable reason. Escalating to agent review.",
+          field: "treatment_eligibility_explanation",
+        });
+        if (chosenEntry) chosenEntry.selectionMode = "tied_preferred";
+      } else {
+        if (chosenEntry) {
+          chosenEntry.selectionMode = "tied_preferred";
           chosenEntry.selectionReason = explanation.substring(0, 500);
         }
       }
-    } else if (!isPreferred) {
+    } else {
       // Lower-ranked treatment — check for sufficient justification
       const explanation = String(output.treatment_eligibility_explanation ?? "");
-      const hasReviewTrigger = decisionPacket.reviewTriggers.length > 0;
-      const hasGuardrail = decisionPacket.guardrailFlags.length > 0;
-      const hasMissingInfo = decisionPacket.missingCriticalInformation.length > 0;
+      const hasContextualJustification =
+        decisionPacket.reviewTriggers.length > 0 ||
+        decisionPacket.guardrailFlags.length > 0 ||
+        decisionPacket.missingCriticalInformation.length > 0;
       const hasExplicitJustification = explanation.length >= 100;
 
       if (chosenEntry) chosenEntry.selectionMode = "lower_rank_justified";
 
-      if (hasReviewTrigger || hasGuardrail || hasMissingInfo || hasExplicitJustification) {
+      if (hasContextualJustification || hasExplicitJustification) {
         warnings.push({
           failureType: "policy_failure",
           message: "Lower-priority treatment chosen; contextual justification present",
@@ -417,16 +406,9 @@ export function validateDecision(
         if (chosenEntry) chosenEntry.selectionReason = "no justification found";
       }
     }
-  } else if (isRunFallback && recommendedCode === "AGENT_REVIEW") {
-    // AI returned AGENT_REVIEW — annotate the trace at run-level
-    const explanation = String(output.treatment_eligibility_explanation ?? "");
-    for (const entry of updatedTrace) {
-      if (!entry.selectionMode) {
-        entry.selectionMode = "not_selected";
-        entry.selectionReason = explanation ? `AGENT_REVIEW: ${explanation.substring(0, 200)}` : "AGENT_REVIEW selected by AI";
-      }
-    }
   }
+  // Note: when AI returns AGENT_REVIEW or NO_ACTION, trace is not modified here —
+  // AGENT_REVIEW/NO_ACTION are run-level outcomes, not treatment selections.
 
   // ── Final status ─────────────────────────────────────────────────────────
   if (blockingIssues.length > 0) {

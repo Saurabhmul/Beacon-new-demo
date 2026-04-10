@@ -15,6 +15,7 @@ import fs from "fs";
 import path from "path";
 import { normalizeFieldLabel, buildFullFieldCatalog } from "./field-catalog";
 import { runDecisionPipeline } from "./lib/decisioning/orchestrator";
+import { checkPolicyCompletenessStrict, PolicyCompletenessError } from "./lib/decisioning/policy-completeness";
 import { toLogicOperator, normalizeDraftPriorities } from "./lib/treatment-logic";
 import { LogicalDerivationConfigSchema, topologicalSort, generateLogicalDerivationSummary } from "./lib/derivation-config";
 import { compilePolicyPrompt } from "./lib/prompt/compile-policy";
@@ -704,6 +705,27 @@ export async function registerRoutes(
       const companyId = getCompanyId(req);
       const { policyName, sourceType, sourceFileName, status, id } = req.body;
       if (!policyName?.trim()) return res.status(400).json({ error: "policyName is required" });
+
+      // When activating a policy, run the strict completeness check before persisting
+      if (status === "active") {
+        const existingPack = await storage.getPolicyPack(companyId);
+        if (existingPack) {
+          const activationTreatments = await storage.getTreatmentsWithRules(existingPack.id);
+          const activationCatalog = await buildFullFieldCatalog(companyId, storage);
+          try {
+            checkPolicyCompletenessStrict(activationTreatments, activationCatalog);
+          } catch (completenessErr) {
+            if (completenessErr instanceof PolicyCompletenessError) {
+              return res.status(400).json({
+                error: "Policy cannot be activated — completeness check failed",
+                issues: completenessErr.issues,
+              });
+            }
+            throw completenessErr;
+          }
+        }
+      }
+
       const pack = await storage.upsertPolicyPack({
         id: id || undefined,
         companyId,

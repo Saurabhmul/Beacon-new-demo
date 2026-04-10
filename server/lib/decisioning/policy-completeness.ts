@@ -13,7 +13,7 @@ export class PolicyCompletenessError extends Error {
   }
 }
 
-// ─── Supported operators & rule types ────────────────────────────────────────
+// ─── Supported operators ──────────────────────────────────────────────────────
 
 const SUPPORTED_OPERATORS = new Set([
   "=", "!=", ">", ">=", "<", "<=",
@@ -21,9 +21,21 @@ const SUPPORTED_OPERATORS = new Set([
   "is_true", "is_false",
 ]);
 
+/**
+ * All ruleType values recognised by the rule-evaluator and business-field-engine.
+ * Must stay in sync with HARD_BLOCKER_TYPES, SOFT_BLOCKER_TYPES, etc. in rule-evaluator.ts.
+ */
 const SUPPORTED_RULE_TYPES = new Set([
-  "eligibility", "blocking", "escalation", "guardrail", "review_trigger",
-  "cooling_period", "vulnerability", "priority", "business_field",
+  "eligibility", "eligibility_rule",
+  "hard_blocker", "blocker_hard",
+  "soft_blocker", "blocker_soft",
+  "review_trigger", "review",
+  "escalation",
+  "guardrail",
+  "business_field",
+  "cooling_period",
+  "vulnerability",
+  "priority",
 ]);
 
 // ─── Result type ──────────────────────────────────────────────────────────────
@@ -33,7 +45,7 @@ export interface PolicyCompletenessResult {
   issues: string[];
 }
 
-// ─── Core check (analysis-context: returns result) ───────────────────────────
+// ─── Core check (analysis-context: returns result, does not throw) ────────────
 
 /**
  * Validate policy completeness before a customer analysis run.
@@ -41,13 +53,13 @@ export interface PolicyCompletenessResult {
  * Checks:
  *   1. At least one enabled treatment exists
  *   2. All rule field references (fieldName, leftFieldId, rightFieldId) resolve to known catalog fields
- *   3. Treatment-reference integrity: treatment IDs in rule metadata resolve to real treatments
- *   4. Broken rule-group references: ruleType is a recognised type; groups reference valid treatmentIds
+ *   3. Treatment-reference integrity: rule groups must reference an existing treatmentId
+ *   4. Broken rule-group references: ruleType must be a recognised type
  *   5. No unsupported operators
  *   6. No empty rule groups
  *
- * Does NOT throw — returns a result object so callers can decide how to handle.
- * For admin-context strict validation, use {@link checkPolicyCompletenessStrict}.
+ * Does NOT throw — returns a result object so callers decide how to handle.
+ * For admin-context strict validation (throws on failure), use {@link checkPolicyCompletenessStrict}.
  */
 export function checkPolicyCompleteness(
   treatments: TreatmentWithRules[],
@@ -60,7 +72,7 @@ export function checkPolicyCompleteness(
     issues.push("Policy has no enabled treatments");
   }
 
-  // Build field-ID and field-label lookups
+  // Build field-ID and label lookups
   const knownFieldIds = new Set<string>();
   const knownFieldLabels = new Set<string>();
   for (const entry of catalog) {
@@ -68,31 +80,28 @@ export function checkPolicyCompleteness(
     knownFieldLabels.add(entry.label.trim().toLowerCase());
   }
 
-  // Build treatment-code and treatment-ID lookups for reference integrity
+  // Build treatment ID and code lookups for reference integrity
   const knownTreatmentIds = new Set(treatments.map(t => t.id));
-  const knownTreatmentCodes = new Set(treatments.map(t => t.name));
 
   for (const treatment of enabledTreatments) {
     const tname = treatment.name;
 
     for (const group of treatment.ruleGroups ?? []) {
-      // ── Rule-group integrity ────────────────────────────────────────────
-      // Check: group's treatmentId references a valid treatment
-      if (!knownTreatmentIds.has(group.treatmentId)) {
+      // ── Treatment-reference integrity ─────────────────────────────────
+      if (group.treatmentId !== treatment.id && !knownTreatmentIds.has(group.treatmentId)) {
         issues.push(
           `Treatment "${tname}" group ${group.id}: references unknown treatmentId ${group.treatmentId}`
         );
       }
 
-      // Check: ruleType is a supported type
-      if (group.ruleType && !SUPPORTED_RULE_TYPES.has(group.ruleType)) {
+      // ── Rule-group type integrity ─────────────────────────────────────
+      if (group.ruleType && !SUPPORTED_RULE_TYPES.has(group.ruleType.toLowerCase())) {
         issues.push(
           `Treatment "${tname}" group ${group.id}: unrecognised ruleType "${group.ruleType}"`
         );
       }
 
       const rules = group.rules ?? [];
-
       if (rules.length === 0) {
         issues.push(
           `Treatment "${tname}" group ${group.id} (type="${group.ruleType}") has no rules`
@@ -108,7 +117,7 @@ export function checkPolicyCompleteness(
           );
         }
 
-        // Check leftFieldId (preferred field reference)
+        // Check leftFieldId (preferred) or fallback to fieldName
         if (rule.leftFieldId) {
           if (!isKnownField(rule.leftFieldId, knownFieldIds, knownFieldLabels)) {
             issues.push(
@@ -116,7 +125,6 @@ export function checkPolicyCompleteness(
             );
           }
         } else if (rule.fieldName) {
-          // Fallback: validate legacy fieldName when leftFieldId is absent
           if (!isKnownField(rule.fieldName, knownFieldIds, knownFieldLabels)) {
             issues.push(
               `Treatment "${tname}" rule ${rule.id}: fieldName "${rule.fieldName}" does not resolve to a known field`
@@ -132,21 +140,6 @@ export function checkPolicyCompleteness(
             );
           }
         }
-
-        // Treatment-reference integrity: if rightConstantValue looks like a treatment code, verify it
-        if (rule.rightMode === "constant" && rule.rightConstantValue) {
-          const val = rule.rightConstantValue.trim();
-          // Detect treatment-code-style values (uppercase, 2–20 chars, underscores ok)
-          if (/^[A-Z][A-Z0-9_]{1,19}$/.test(val) && !val.match(/^\d+$/) && !val.match(/^(AND|OR|NOT|TRUE|FALSE|NULL)$/)) {
-            // If this looks like a treatment code reference but doesn't match any known code,
-            // capture it as a potential broken reference (warning-level, prefixed accordingly)
-            if (!knownTreatmentCodes.has(val) && knownTreatmentCodes.size > 0) {
-              // Only flag when there are defined treatments to compare against
-              // This avoids false positives on genuine string constants
-              // We store it but don't fail — it's a potential reference integrity issue
-            }
-          }
-        }
       }
     }
   }
@@ -157,12 +150,16 @@ export function checkPolicyCompleteness(
   };
 }
 
-// ─── Admin-context strict check (throws PolicyCompletenessError) ──────────────
+// ─── Admin-context strict check (throws PolicyCompletenessError on failure) ───
 
 /**
- * Strict variant for admin contexts (e.g., policy save/publish flows).
+ * Strict variant for admin contexts — e.g. when activating or publishing a policy.
  * Throws {@link PolicyCompletenessError} with all issues if the policy is incomplete.
- * Use {@link checkPolicyCompleteness} for analysis-context (returns result, doesn't throw).
+ *
+ * Example usage in a route:
+ *   checkPolicyCompletenessStrict(treatments, catalog);  // throws 400-worthy error on invalid policy
+ *
+ * Use {@link checkPolicyCompleteness} for analysis-context (returns result, does not throw).
  */
 export function checkPolicyCompletenessStrict(
   treatments: TreatmentWithRules[],

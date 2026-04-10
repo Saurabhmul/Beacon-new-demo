@@ -358,7 +358,7 @@ describe("validateDecision – preferred treatment selection trace", () => {
     expect(ppEntry?.selectionMode).toBe("tied_preferred");
   });
 
-  it("issues a warning (not a blocking failure) when tied preferred treatment chosen without reason", () => {
+  it("emits blocking policy_failure when tied preferred chosen without any reason", () => {
     const packet = minimalDecisionPacket({
       preferredTreatments: [
         { code: "PP", name: "Payment Plan", priority: 1, prioritySource: "configured", rank: 1, reasons: [], isPreferred: true },
@@ -378,12 +378,15 @@ describe("validateDecision – preferred treatment selection trace", () => {
       treatment_eligibility_explanation: "",
     });
     const result = validateDecision(output, packet, trace);
-    // Must not be a blocking failure — tied preferred is a WARNING path
-    expect(result.status).not.toBe("failed");
-    const warning = result.warnings.find(w => w.message.includes("Tied preferred"));
-    expect(warning).toBeDefined();
-    const ppEntry = result.updatedSelectionTrace.find(e => e.treatmentCode === "PP");
-    expect(ppEntry?.selectionMode).toBe("tied_preferred");
+    // Tied preferred without reason must be a blocking policy_failure
+    // The orchestrator converts this to a deterministic AGENT_REVIEW fallback
+    expect(result.status).toBe("failed");
+    expect(result.failureType).toBe("policy_failure");
+    const issue = result.blockingIssues.find(i =>
+      i.field === "treatment_eligibility_explanation" &&
+      i.message.toLowerCase().includes("tied preferred")
+    );
+    expect(issue).toBeDefined();
   });
 });
 
