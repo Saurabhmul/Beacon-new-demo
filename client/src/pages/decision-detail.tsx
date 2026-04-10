@@ -136,11 +136,9 @@ function getV2Raw(raw: Record<string, unknown>) {
     customerSituation: str(finalAI.customer_situation) || null,
     customerSituationConfidenceScore: num(finalAI.customer_situation_confidence_score),
     confidenceScore: num(finalAI.proposed_next_best_confidence_score),
-    // structured_assessments is Array<{name?,value?,reason?}> — not plain strings
     structuredAssessments: ((finalAI.structured_assessments || []) as Array<Record<string, unknown>>),
     proposedNextBestAction: str(finalAI.proposed_next_best_action) || null,
     treatmentEligibilityExplanation: str(finalAI.treatment_eligibility_explanation) || null,
-    // blocked_conditions is unknown[] — elements may be strings or structured objects
     blockedConditions: ((finalAI.blocked_conditions || []) as unknown[]),
     internalAction: str(finalAI.internal_action) || null,
     proposedNextBestEvidence: str(finalAI.proposed_next_best_evidence) || null,
@@ -444,7 +442,6 @@ function CaseSummarySection({ v2 }: { v2: ReturnType<typeof getV2Raw> }) {
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Structured Assessments</p>
             <ul className="space-y-2">
               {v2.structuredAssessments.map((a, i) => {
-                // schema: { name?, value?, reason? } — never render raw object
                 const name = str(a.name);
                 const value = str(a.value);
                 const reason = str(a.reason);
@@ -485,7 +482,6 @@ function CaseSummarySection({ v2 }: { v2: ReturnType<typeof getV2Raw> }) {
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Blocked Conditions</p>
             <ul className="space-y-1.5">
               {v2.blockedConditions.map((bc, i) => {
-                // elements may be strings or structured objects — render defensively
                 const bcStr = typeof bc === "string" ? bc : str((bc as Record<string, unknown>)?.description ?? (bc as Record<string, unknown>)?.reason ?? bc);
                 const lower = bcStr.toLowerCase();
                 const isHard = lower.includes("hard") || lower.includes("must not") || lower.includes("cannot");
@@ -590,7 +586,6 @@ function DerivedFieldsSection({
 }) {
   const entries = Object.entries(derivedTrace);
 
-  // Look up the resolved value of an input field from available traces
   function inputValue(inp: string): string | null {
     const sv = srcTrace[inp]?.rawValue;
     if (sv != null && sv !== "") return String(sv);
@@ -851,7 +846,7 @@ function TreatmentDecisionSection({
           </div>
         )}
 
-        {/* Blocked conditions — also surfaced here for treatment decision context */}
+        {/* Blocked conditions */}
         {v2.blockedConditions.length > 0 && (
           <div>
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Blocked Conditions</p>
