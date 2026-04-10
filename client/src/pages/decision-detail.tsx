@@ -143,21 +143,33 @@ function getV2Raw(raw: Record<string, unknown>) {
   };
 }
 
+// Same patterns as review-queue — must stay in sync
+const SYSTEM_HOLD_PATTERNS = [
+  "policy completeness",
+  "business field",
+  "critical information",
+  "hard guardrail",
+  "unexpected pipeline",
+  "timed out",
+  "required tier",
+  "cap reached",
+  "stage budget exhausted",
+];
+
 function isSystemHoldDecision(
   decision: Decision,
   v2: ReturnType<typeof getV2Raw>
 ): boolean {
+  // DB-persisted internalAction (covers all versions)
   if (decision.internalAction?.startsWith("SYSTEM_HOLD:")) return true;
+  // v2 payload finalAIOutput.internal_action (authoritative for v2 system hold)
+  if (v2.isV2 && v2.internalAction?.startsWith("SYSTEM_HOLD:")) return true;
+  // DB status set to failed_validation = system decided not to proceed
   if (decision.status === "failed_validation") return true;
+  // runFallbackReason patterns (from orchestrator spec)
   if (v2.runFallbackReason) {
     const r = v2.runFallbackReason.toLowerCase();
-    return (
-      r.includes("policy completeness") ||
-      r.includes("business field") ||
-      r.includes("critical information") ||
-      r.includes("hard guardrail") ||
-      r.includes("unexpected pipeline")
-    );
+    if (SYSTEM_HOLD_PATTERNS.some((p) => r.includes(p))) return true;
   }
   return false;
 }
@@ -944,105 +956,6 @@ function V2TopSummary({
               <span><span className="font-medium">Fallback reason:</span> {v2.runFallbackReason}</span>
             </div>
           </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ── Agent Review Widget ────────────────────────────────────────────────────────
-
-function AgentReviewWidget({
-  decision,
-  params,
-  isSuperAdmin,
-}: {
-  decision: Decision;
-  params: { id: string };
-  isSuperAdmin: boolean;
-}) {
-  const [, setLocation] = useLocation();
-  const { toast } = useToast();
-  const [agentReason, setAgentReason] = useState("");
-  const [showRejectForm, setShowRejectForm] = useState(false);
-
-  const reviewMutation = useMutation({
-    mutationFn: async (data: { agentAgreed: boolean; agentReason?: string }) => {
-      const res = await apiRequest("PATCH", `/api/decisions/${params.id}/review`, data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/decisions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/decisions", params.id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/decisions/stats"] });
-      toast({ title: "Decision reviewed", description: "Your review has been recorded." });
-      setLocation("/review");
-    },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to submit review.", variant: "destructive" });
-    },
-  });
-
-  if (isSuperAdmin) return null;
-
-  const isPending = decision.status === "pending";
-  if (!isPending && decision.agentReason) {
-    return (
-      <Card>
-        <CardContent className="p-4">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Agent's Reason for Rejection</p>
-          <p className="text-sm" data-testid="text-agent-reason">{decision.agentReason}</p>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (!isPending) return null;
-
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">Your Decision</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {showRejectForm ? (
-          <div className="space-y-3">
-            <Textarea
-              value={agentReason}
-              onChange={(e) => setAgentReason(e.target.value)}
-              placeholder="Please explain why you disagree with the AI recommendation..."
-              className="min-h-[100px]"
-              data-testid="textarea-reject-reason"
-            />
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button
-                variant="destructive"
-                onClick={() => reviewMutation.mutate({ agentAgreed: false, agentReason })}
-                disabled={!agentReason.trim() || reviewMutation.isPending}
-                data-testid="button-confirm-reject"
-              >
-                {reviewMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
-                Submit Rejection
-              </Button>
-              <Button variant="outline" onClick={() => setShowRejectForm(false)} data-testid="button-cancel-reject">
-                Cancel
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center gap-3 flex-wrap">
-            <Button
-              onClick={() => reviewMutation.mutate({ agentAgreed: true })}
-              disabled={reviewMutation.isPending}
-              data-testid="button-approve"
-            >
-              {reviewMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-              Agree with AI
-            </Button>
-            <Button variant="outline" onClick={() => setShowRejectForm(true)} data-testid="button-disagree">
-              <XCircle className="w-4 h-4 mr-2" /> Disagree
-            </Button>
-          </div>
         )}
       </CardContent>
     </Card>

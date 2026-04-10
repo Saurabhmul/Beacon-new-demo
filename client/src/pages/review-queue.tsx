@@ -52,6 +52,19 @@ const PAGE_SIZE = 25;
 
 // ── V2 data helpers ────────────────────────────────────────────────────────────
 
+// Patterns in runFallbackReason that indicate a system hold (not an agent-review choice)
+const SYSTEM_HOLD_PATTERNS = [
+  "policy completeness",
+  "business field",
+  "critical information",
+  "hard guardrail",
+  "unexpected pipeline",
+  "timed out",
+  "required tier",
+  "cap reached",
+  "stage budget exhausted",
+];
+
 function getV2Data(d: Decision) {
   const raw = ((d.aiRawOutput || {}) as Record<string, unknown>);
   const engineVersion = raw.engineVersion as string | undefined;
@@ -64,6 +77,8 @@ function getV2Data(d: Decision) {
   return {
     isV2,
     engineVersion,
+    // v2 payload internal_action (authoritative for v2 system hold)
+    v2InternalAction: (finalAI.internal_action as string) || null,
     recommendedTreatmentCode: (finalAI.recommended_treatment_code as string) || null,
     recommendedTreatmentName: (finalAI.recommended_treatment_name as string) || null,
     treatmentRationale: (finalAI.treatment_eligibility_explanation as string) || null,
@@ -80,17 +95,16 @@ function getV2Data(d: Decision) {
 }
 
 function isSystemHold(d: Decision, v2: ReturnType<typeof getV2Data>): boolean {
+  // Check DB-persisted internalAction column (covers all versions)
   if (d.internalAction?.startsWith("SYSTEM_HOLD:")) return true;
+  // For v2 decisions check the authoritative payload field
+  if (v2.isV2 && v2.v2InternalAction?.startsWith("SYSTEM_HOLD:")) return true;
+  // DB status set to failed_validation = system decided not to proceed
   if (d.status === "failed_validation") return true;
+  // runFallbackReason patterns (from orchestrator spec)
   if (v2.runFallbackReason) {
     const r = v2.runFallbackReason.toLowerCase();
-    return (
-      r.includes("policy completeness") ||
-      r.includes("business field") ||
-      r.includes("critical information") ||
-      r.includes("hard guardrail") ||
-      r.includes("unexpected pipeline")
-    );
+    if (SYSTEM_HOLD_PATTERNS.some((p) => r.includes(p))) return true;
   }
   return false;
 }
@@ -104,20 +118,32 @@ function hasPriorityDeviation(v2: ReturnType<typeof getV2Data>): boolean {
   return topCode !== v2.recommendedTreatmentCode;
 }
 
+// Normalise validation state across v2 payload and legacy DB status field
+function resolveValidationState(d: Decision, v2: ReturnType<typeof getV2Data>) {
+  const failed =
+    v2.validationStatus === "failed" ||
+    d.status === "failed_validation";
+  const hasWarnings = v2.warnings.length > 0;
+  const passed = !failed && (v2.validationStatus === "passed" || (v2.isV2 && !hasWarnings));
+  return { failed, hasWarnings, passed };
+}
+
 function validationBadgeInfo(d: Decision, v2: ReturnType<typeof getV2Data>) {
   if (isSystemHold(d, v2)) {
     return { label: "System hold", variant: "destructive" as const, icon: ShieldAlert };
   }
-  if (!v2.isV2 || !v2.validationStatus) {
+  if (!v2.isV2 && d.status !== "failed_validation") {
+    // Legacy decision without v2 payload — no badge
     return null;
   }
-  if (v2.validationStatus === "failed" || d.status === "failed_validation") {
+  const { failed, hasWarnings, passed } = resolveValidationState(d, v2);
+  if (failed) {
     return { label: "Failed", variant: "destructive" as const, icon: XCircle };
   }
-  if (v2.warnings.length > 0) {
+  if (hasWarnings) {
     return { label: "Warnings", variant: "secondary" as const, icon: AlertTriangle };
   }
-  if (v2.validationStatus === "passed") {
+  if (passed) {
     return { label: "Passed", variant: "default" as const, icon: CheckCircle2 };
   }
   return null;
@@ -125,9 +151,10 @@ function validationBadgeInfo(d: Decision, v2: ReturnType<typeof getV2Data>) {
 
 function getFilterCategory(d: Decision, v2: ReturnType<typeof getV2Data>): ValidationFilter {
   if (isSystemHold(d, v2)) return "system_hold";
-  if (!v2.isV2) return "passed";
-  if (v2.validationStatus === "failed" || d.status === "failed_validation") return "failed";
-  if (v2.warnings.length > 0) return "warnings";
+  if (!v2.isV2 && d.status !== "failed_validation") return "passed"; // legacy: skip filter
+  const { failed, hasWarnings } = resolveValidationState(d, v2);
+  if (failed) return "failed";
+  if (hasWarnings) return "warnings";
   return "passed";
 }
 
@@ -436,6 +463,7 @@ export default function ReviewQueuePage() {
                     <TableHead>Customer ID</TableHead>
                     <TableHead>Run Date</TableHead>
                     <TableHead>Recommended Treatment</TableHead>
+                    <TableHead className="whitespace-nowrap">Confidence</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Action</TableHead>
                   </TableRow>
@@ -513,6 +541,21 @@ export default function ReviewQueuePage() {
                               </p>
                             )}
                           </div>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap" data-testid={`text-confidence-${d.id}`}>
+                          {v2.confidenceScore != null ? (
+                            <div className="flex items-center gap-1.5">
+                              <div className="h-1.5 w-14 rounded-full bg-muted overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${v2.confidenceScore >= 0.7 ? "bg-green-500" : v2.confidenceScore >= 0.4 ? "bg-amber-400" : "bg-red-400"}`}
+                                  style={{ width: `${Math.round(v2.confidenceScore * 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs text-muted-foreground">{Math.round(v2.confidenceScore * 100)}%</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
                         </TableCell>
                         <TableCell>
                           {badgeInfo ? (
