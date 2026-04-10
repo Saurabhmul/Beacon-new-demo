@@ -133,11 +133,14 @@ function getV2Raw(raw: Record<string, unknown>) {
     recommendedName: str(finalAI.recommended_treatment_name) || null,
     requiresAgentReview: !!(finalAI.requires_agent_review),
     customerSituation: str(finalAI.customer_situation) || null,
+    customerSituationConfidenceScore: num(finalAI.customer_situation_confidence_score),
     confidenceScore: num(finalAI.proposed_next_best_confidence_score),
-    structuredAssessments: ((finalAI.structured_assessments || []) as string[]),
+    // structured_assessments is Array<{name?,value?,reason?}> — not plain strings
+    structuredAssessments: ((finalAI.structured_assessments || []) as Array<Record<string, unknown>>),
     proposedNextBestAction: str(finalAI.proposed_next_best_action) || null,
     treatmentEligibilityExplanation: str(finalAI.treatment_eligibility_explanation) || null,
-    blockedConditions: ((finalAI.blocked_conditions || []) as string[]),
+    // blocked_conditions is unknown[] — elements may be strings or structured objects
+    blockedConditions: ((finalAI.blocked_conditions || []) as unknown[]),
     internalAction: str(finalAI.internal_action) || null,
     proposedNextBestEvidence: str(finalAI.proposed_next_best_evidence) || null,
   };
@@ -418,13 +421,29 @@ function CaseSummarySection({ v2 }: { v2: ReturnType<typeof getV2Raw> }) {
         {v2.structuredAssessments.length > 0 && (
           <div>
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Structured Assessments</p>
-            <ul className="space-y-1.5">
-              {v2.structuredAssessments.map((a, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm">
-                  <CheckSquare className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
-                  <span>{a}</span>
-                </li>
-              ))}
+            <ul className="space-y-2">
+              {v2.structuredAssessments.map((a, i) => {
+                // schema: { name?, value?, reason? } — never render raw object
+                const name = str(a.name);
+                const value = str(a.value);
+                const reason = str(a.reason);
+                return (
+                  <li key={i} className="flex items-start gap-2 text-sm">
+                    <CheckSquare className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
+                    <div>
+                      {name ? (
+                        <>
+                          <span className="font-medium">{name}:</span>{" "}
+                          <span>{value || "—"}</span>
+                          {reason && <p className="text-xs text-muted-foreground mt-0.5">{reason}</p>}
+                        </>
+                      ) : (
+                        <span>{value || JSON.stringify(a)}</span>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}
@@ -445,7 +464,9 @@ function CaseSummarySection({ v2 }: { v2: ReturnType<typeof getV2Raw> }) {
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Blocked Conditions</p>
             <ul className="space-y-1.5">
               {v2.blockedConditions.map((bc, i) => {
-                const lower = (bc || "").toLowerCase();
+                // elements may be strings or structured objects — render defensively
+                const bcStr = typeof bc === "string" ? bc : str((bc as Record<string, unknown>)?.description ?? (bc as Record<string, unknown>)?.reason ?? bc);
+                const lower = bcStr.toLowerCase();
                 const isHard = lower.includes("hard") || lower.includes("must not") || lower.includes("cannot");
                 return (
                   <li key={i} className="flex items-start gap-2 text-sm">
@@ -455,7 +476,7 @@ function CaseSummarySection({ v2 }: { v2: ReturnType<typeof getV2Raw> }) {
                     >
                       {isHard ? "hard blocker" : "soft blocker"}
                     </Badge>
-                    <span>{bc}</span>
+                    <span>{bcStr}</span>
                   </li>
                 );
               })}
@@ -778,6 +799,28 @@ function TreatmentDecisionSection({
           </div>
         )}
 
+        {/* Blocked conditions — also surfaced here for treatment decision context */}
+        {v2.blockedConditions.length > 0 && (
+          <div>
+            <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Blocked Conditions</p>
+            <ul className="space-y-1.5">
+              {v2.blockedConditions.map((bc, i) => {
+                const bcStr = typeof bc === "string" ? bc : str((bc as Record<string, unknown>)?.description ?? (bc as Record<string, unknown>)?.reason ?? bc);
+                const lower = bcStr.toLowerCase();
+                const isHard = lower.includes("hard") || lower.includes("must not") || lower.includes("cannot");
+                return (
+                  <li key={i} className="flex items-start gap-2 text-sm">
+                    <Badge variant={isHard ? "destructive" : "secondary"} className="text-[10px] shrink-0 mt-0.5">
+                      {isHard ? "hard blocker" : "soft blocker"}
+                    </Badge>
+                    <span className="text-muted-foreground">{bcStr}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         {/* Validation result */}
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -942,7 +985,12 @@ function V2TopSummary({
           <>
             <Separator className="my-3" />
             <div>
-              <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Customer Situation</p>
+              <div className="flex items-center gap-2 mb-1">
+                <p className="text-xs uppercase tracking-wider text-muted-foreground">Customer Situation</p>
+                {v2.customerSituationConfidenceScore != null && (
+                  <ConfidenceBar value={v2.customerSituationConfidenceScore} />
+                )}
+              </div>
               <p className="text-sm leading-relaxed" data-testid="text-customer-situation">{v2.customerSituation}</p>
             </div>
           </>
