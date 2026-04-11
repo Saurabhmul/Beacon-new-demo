@@ -576,8 +576,13 @@ export async function registerRoutes(
         const ev = evidenceMap.get(f.fieldName.toLowerCase());
         const rawSamples = ev?.distinctValues ?? ev?.sampleValues ?? [];
         return {
-          ...f,
+          fieldName: f.fieldName,
+          beaconsUnderstanding: f.beaconsUnderstanding,
+          confidence: f.confidence,
           sampleValues: normalizeSampleValues(rawSamples),
+          dataType: f.data_type ?? "string",
+          allowedValues: f.allowed_values ?? [],
+          defaultValue: f.default_value ?? null,
         };
       });
 
@@ -600,6 +605,9 @@ export async function registerRoutes(
           confidence: prev?.confidence || next.confidence,
           ignored: prev?.ignored ?? false,
           sampleValues: prevSamples ?? next.sampleValues,
+          dataType: prev?.dataType ?? next.dataType ?? "string",
+          allowedValues: prev?.allowedValues ?? next.allowedValues ?? [],
+          defaultValue: prev?.defaultValue ?? next.defaultValue ?? null,
         };
       });
 
@@ -901,7 +909,7 @@ export async function registerRoutes(
   app.post("/api/policy-fields", authenticate, authorize("admin"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
-      const { label, description, sourceType, derivationConfig } = req.body;
+      const { label, description, sourceType, derivationConfig, dataType, allowedValues, defaultValue, businessMeaning } = req.body;
       if (!label?.trim()) return res.status(400).json({ error: "label is required" });
       if (!["business_field", "derived_field"].includes(sourceType)) return res.status(400).json({ error: "sourceType must be business_field or derived_field" });
       if (sourceType === "derived_field") {
@@ -919,6 +927,8 @@ export async function registerRoutes(
       const derivationSummary = sourceType === "derived_field" && derivationConfig
         ? generateDerivationSummary(derivationConfig)
         : null;
+      const VALID_TYPES = ["string", "number", "boolean", "date", "enum"];
+      if (dataType && !VALID_TYPES.includes(dataType)) return res.status(400).json({ error: `dataType must be one of: ${VALID_TYPES.join(", ")}` });
       const field = await storage.createPolicyField({
         companyId: companyId!,
         policyPackId: null,
@@ -927,6 +937,10 @@ export async function registerRoutes(
         sourceType,
         derivationConfig: derivationConfig || null,
         derivationSummary,
+        dataType: dataType || null,
+        allowedValues: Array.isArray(allowedValues) && allowedValues.length > 0 ? allowedValues.map(String) : null,
+        defaultValue: typeof defaultValue === "string" ? (defaultValue.trim() || null) : defaultValue != null ? String(defaultValue) : null,
+        businessMeaning: typeof businessMeaning === "string" ? (businessMeaning.trim() || null) : null,
       });
       res.status(201).json(toFieldDto(field));
     } catch (error) {
@@ -946,8 +960,8 @@ export async function registerRoutes(
       if (!["business_field", "derived_field"].includes(existing.sourceType)) {
         return res.status(400).json({ error: "Only business and derived fields can be edited" });
       }
-      const { label, description, derivationConfig } = req.body;
-      const patch: Partial<Pick<typeof existing, "label" | "description" | "derivationConfig" | "derivationSummary">> = {};
+      const { label, description, derivationConfig, dataType, allowedValues, defaultValue, businessMeaning } = req.body;
+      const patch: Partial<Pick<typeof existing, "label" | "description" | "derivationConfig" | "derivationSummary" | "dataType" | "allowedValues" | "defaultValue" | "businessMeaning">> = {};
       if (label !== undefined) {
         const trimmed = label.trim();
         if (!trimmed) return res.status(400).json({ error: "label cannot be empty" });
@@ -972,6 +986,14 @@ export async function registerRoutes(
         patch.derivationConfig = arithmeticConfig;
         patch.derivationSummary = generateDerivationSummary(arithmeticConfig);
       }
+      const VALID_DATA_TYPES = ["string", "number", "boolean", "date", "enum"];
+      if (dataType !== undefined) {
+        if (dataType && !VALID_DATA_TYPES.includes(dataType)) return res.status(400).json({ error: `dataType must be one of: ${VALID_DATA_TYPES.join(", ")}` });
+        patch.dataType = dataType || null;
+      }
+      if (allowedValues !== undefined) patch.allowedValues = Array.isArray(allowedValues) && allowedValues.length > 0 ? allowedValues.map(String) : null;
+      if (defaultValue !== undefined) patch.defaultValue = typeof defaultValue === "string" ? (defaultValue.trim() || null) : defaultValue != null ? String(defaultValue) : null;
+      if (businessMeaning !== undefined) patch.businessMeaning = typeof businessMeaning === "string" ? (businessMeaning.trim() || null) : null;
       const updated = await storage.updatePolicyField(fieldId, patch);
       res.json(toFieldDto(updated));
     } catch (error) {

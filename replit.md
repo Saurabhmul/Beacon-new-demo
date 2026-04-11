@@ -117,7 +117,21 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - **AI Review Banner**: After generation, shows AI summary and open questions (if any) in a dismissible banner above the treatment list.
 - **TreatmentCard enhancements**: Confidence badge (High/Medium/Low, color-coded) shown on cards with AI-generated data. Source/Derived/Business field tab panels appear when counts > 0.
 
+## Field Metadata System (Task #42)
+- **MVP Types**: string, number, boolean, date, enum
+- **AI extraction**: Source field analysis prompt extracts `data_type`, `allowed_values`, `default_value` per field (conservative defaults: unclear → string, [] , null)
+- **SOP extraction**: Business/derived fields from SOP already carry `data_type`, `allowed_values`, `default_value`, `business_meaning`
+- **Source field UI**: Data Config table shows Type dropdown, Allowed Values input (shown for enum), Default Value text input — all editable
+- **Business field modal**: Data Type dropdown, Allowed Values (shown for enum), Default Value (with soft warning if not in allowed_values for enum), Business Meaning textarea
+- **Derived field UI**: Deduced type shown below formula (arithmetic → number, else → string); mismatch warning when arithmetic uses enum/string fields
+- **Field info popover**: Shows Type, Allowed Values, Default Value, Business Meaning for all field types
+- **Runtime type priority**: user-defined → AI-extracted → system-deduced → fallback string
+- **Safe coercion** (`shared/field-utils.ts`): toNumber, toBoolean, toDate, coerceToString, safeCoerce, resolveFieldType, inferBusinessFieldType, deduceTypeFromDerivation, checkFormulaMismatch — all return null on unsafe conversion
+- **PATCH /api/policy-fields/:id**: Accepts dataType, allowedValues, defaultValue, businessMeaning
+- **POST /api/policy-fields**: Accepts dataType, allowedValues, defaultValue, businessMeaning
+
 ## Recent Changes
+- 2026-04-11: Field Metadata Extraction & Editing (Task #42) — AI extracts data_type/allowed_values/default_value for source fields; editable in Data Config; business/derived field modal has full metadata inputs; derived field type deduction + mismatch warnings; safe coercion helpers; PATCH/POST endpoints extended
 - 2026-04-08: SOP multi-PDF upload → Gemini AI treatment draft generation (Task #16) — full end-to-end flow with confidence badges, field tab panels, overwrite modal, AI review banner
 - 2026-04-06: Upload Data tab now uses saved Data Configuration as source of truth — tabs shown only for configured tabular categories (loan_account→loan_data, payment_history, conversation_history, income_employment, credit_bureau); document-only categories (compliance_policy, knowledge_base) excluded; sample CSV generated from saved field analysis (active/non-ignored fields only); falls back to hardcoded defaults if no Data Config saved yet
 - 2026-04-06: Redesigned Data Configuration tab — replaced mandatory/optional field chips with 7 category cards (Loan/Account, Payment History, Conversation History, Income/Employment, Credit Bureau, Compliance Policy, Knowledge Base). Checkbox-driven upload flow with AI field analysis (Gemini 2.0 Flash), inline editable field descriptions, confidence badges (High/Medium/Low), ignore toggles, and save to DB. New backend endpoint POST /api/data-config/analyze-category; xlsx support for XLSX parsing; new schema columns selected_categories and category_data on data_configs

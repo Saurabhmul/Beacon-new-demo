@@ -39,6 +39,9 @@ export interface FieldReview {
   confidence: 'High' | 'Medium' | 'Low';
   ignored: boolean;
   sampleValues?: string[];
+  dataType?: string | null;
+  allowedValues?: string[] | null;
+  defaultValue?: string | null;
 }
 
 export interface CategoryEntry {

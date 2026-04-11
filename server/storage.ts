@@ -78,7 +78,7 @@ export interface IStorage {
   getPolicyFields(companyId: string): Promise<PolicyFieldRecord[]>;
   getPolicyFieldById(id: number): Promise<PolicyFieldRecord | undefined>;
   createPolicyField(data: InsertPolicyField): Promise<PolicyFieldRecord>;
-  updatePolicyField(id: number, data: Partial<Pick<PolicyFieldRecord, "label" | "description" | "derivationConfig" | "derivationSummary">>): Promise<PolicyFieldRecord>;
+  updatePolicyField(id: number, data: Partial<Pick<PolicyFieldRecord, "label" | "description" | "derivationConfig" | "derivationSummary" | "dataType" | "allowedValues" | "defaultValue" | "businessMeaning">>): Promise<PolicyFieldRecord>;
   deletePolicyField(id: number): Promise<void>;
 
   getCompanies(): Promise<Company[]>;
@@ -407,7 +407,7 @@ export class DatabaseStorage implements IStorage {
     return field || undefined;
   }
 
-  async updatePolicyField(id: number, data: Partial<Pick<PolicyFieldRecord, "label" | "description" | "derivationConfig" | "derivationSummary">>): Promise<PolicyFieldRecord> {
+  async updatePolicyField(id: number, data: Partial<Pick<PolicyFieldRecord, "label" | "description" | "derivationConfig" | "derivationSummary" | "dataType" | "allowedValues" | "defaultValue" | "businessMeaning">>): Promise<PolicyFieldRecord> {
     const [field] = await db.update(policyFields).set(data).where(eq(policyFields.id, id)).returning();
     return field;
   }

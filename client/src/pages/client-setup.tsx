@@ -519,6 +519,27 @@ function FieldInfoPopover({ field, onEdit }: { field: PolicyFieldDto; onEdit?: (
           {field.sourceType === "source_field" ? "Source field" : field.sourceType === "business_field" ? "Business field" : "Derived field"}
         </div>
         {field.description && <div className="text-muted-foreground leading-snug">{field.description}</div>}
+        {field.dataType && (
+          <div className="flex gap-1.5">
+            <span className="text-muted-foreground">Type:</span>
+            <span className="font-mono">{field.dataType}</span>
+          </div>
+        )}
+        {field.allowedValues && field.allowedValues.length > 0 && (
+          <div className="flex gap-1.5 flex-wrap">
+            <span className="text-muted-foreground shrink-0">Values:</span>
+            <span>{field.allowedValues.join(", ")}</span>
+          </div>
+        )}
+        {field.defaultValue && (
+          <div className="flex gap-1.5">
+            <span className="text-muted-foreground">Default:</span>
+            <span className="font-mono">{field.defaultValue}</span>
+          </div>
+        )}
+        {field.businessMeaning && (
+          <div className="text-muted-foreground leading-snug italic">{field.businessMeaning}</div>
+        )}
         {field.derivationSummary && (
           <div className="border-t pt-1.5 mt-1.5">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground mb-0.5">Derived from</div>
@@ -624,6 +645,10 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [dupError, setDupError] = useState<string | null>(null);
+  const [metaDataType, setMetaDataType] = useState<string>("string");
+  const [metaAllowedValues, setMetaAllowedValues] = useState("");
+  const [metaDefaultValue, setMetaDefaultValue] = useState("");
+  const [metaBusinessMeaning, setMetaBusinessMeaning] = useState("");
 
   useEffect(() => {
     if (open && editField) {
@@ -634,6 +659,10 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
       setSaving(false);
       setDeleting(false);
       setConfirmDelete(false);
+      setMetaDataType(editField.dataType || "string");
+      setMetaAllowedValues((editField.allowedValues || []).join(", "));
+      setMetaDefaultValue(editField.defaultValue || "");
+      setMetaBusinessMeaning(editField.businessMeaning || "");
       if (editField.sourceType === "derived_field" && editField.derivationConfig && !isLogicalDerived) {
         const c = editField.derivationConfig as ArithmeticDerivationConfig;
         setDerivFieldA(c.fieldA || null);
@@ -671,6 +700,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
     setDerivFieldA(null); setDerivOp1("+"); setDerivBType("constant"); setDerivBValue("");
     setDerivHasStep2(false); setDerivOp2("+"); setDerivCType("constant"); setDerivCValue("");
     setSaving(false); setDeleting(false); setConfirmDelete(false); setDupError(null);
+    setMetaDataType("string"); setMetaAllowedValues(""); setMetaDefaultValue(""); setMetaBusinessMeaning("");
   }
   function handleClose() { resetForm(); onClose(); }
 
@@ -697,7 +727,15 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
 
     try {
       if (isEditMode && editField) {
-        const body: { label: string; description: string | null; derivationConfig?: ArithmeticDerivationConfig } = { label: trimmed, description: description.trim() || null };
+        const parsedAllowedVals = metaAllowedValues.split(",").map(v => v.trim()).filter(Boolean);
+        const body: Record<string, unknown> = {
+          label: trimmed,
+          description: description.trim() || null,
+          dataType: metaDataType || null,
+          allowedValues: parsedAllowedVals.length > 0 ? parsedAllowedVals : null,
+          defaultValue: metaDefaultValue.trim() || null,
+          businessMeaning: metaBusinessMeaning.trim() || null,
+        };
         if (derivationConfig !== null) body.derivationConfig = derivationConfig;
         const res = await fetch(`/api/policy-fields/${editField.id}`, {
           method: "PATCH", credentials: "include",
@@ -711,10 +749,17 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
         handleClose();
         toast({ title: `Field "${updated.label}" updated` });
       } else {
+        const parsedAllowedValsCreate = metaAllowedValues.split(",").map(v => v.trim()).filter(Boolean);
         const res = await fetch("/api/policy-fields", {
           method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ label: trimmed, description: description.trim() || null, sourceType: fieldType, derivationConfig }),
+          body: JSON.stringify({
+            label: trimmed, description: description.trim() || null, sourceType: fieldType, derivationConfig,
+            dataType: metaDataType || null,
+            allowedValues: parsedAllowedValsCreate.length > 0 ? parsedAllowedValsCreate : null,
+            defaultValue: metaDefaultValue.trim() || null,
+            businessMeaning: metaBusinessMeaning.trim() || null,
+          }),
         });
         if (res.status === 409) { const d = await res.json(); setDupError(d.error || `"${trimmed}" already exists.`); return; }
         if (!res.ok) throw new Error();
@@ -794,38 +839,69 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
               placeholder="Optional — describe how this field is used…"
               className="text-xs min-h-[56px] resize-none" data-testid="textarea-field-desc" />
           </div>
-          {isEditMode && fieldType === "business_field" && editField && (
-            editField.dataType || editField.allowedValues || editField.defaultValue || editField.businessMeaning
-          ) && (
-            <div className="space-y-2 rounded-md border p-3 bg-muted/30">
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Field Metadata</div>
-              {editField.dataType && (
-                <div className="flex gap-2 text-xs">
-                  <span className="text-muted-foreground w-28 shrink-0">Data Type</span>
-                  <span className="text-foreground font-mono">{editField.dataType}</span>
-                </div>
-              )}
-              {editField.allowedValues && editField.allowedValues.length > 0 && (
-                <div className="flex gap-2 text-xs">
-                  <span className="text-muted-foreground w-28 shrink-0">Allowed Values</span>
-                  <span className="text-foreground">{editField.allowedValues.join(", ")}</span>
-                </div>
-              )}
-              {editField.defaultValue && (
-                <div className="flex gap-2 text-xs">
-                  <span className="text-muted-foreground w-28 shrink-0">Default Value</span>
-                  <span className="text-foreground font-mono">{editField.defaultValue}</span>
-                </div>
-              )}
-              {editField.businessMeaning && (
-                <div className="flex gap-2 text-xs">
-                  <span className="text-muted-foreground w-28 shrink-0">Business Meaning</span>
-                  <span className="text-foreground leading-snug">{editField.businessMeaning}</span>
-                </div>
-              )}
-              <p className="text-[10px] text-muted-foreground italic">These metadata fields are read-only and set during field creation.</p>
+          <div className="space-y-3 rounded-md border p-3 bg-muted/30">
+            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Field Metadata</div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Data Type</Label>
+              <Select value={metaDataType} onValueChange={setMetaDataType}>
+                <SelectTrigger className="h-8 text-xs" data-testid="select-meta-data-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["string", "number", "boolean", "date", "enum"].map(t => (
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          )}
+            {metaDataType === "enum" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Allowed Values</Label>
+                <Input
+                  value={metaAllowedValues}
+                  onChange={e => setMetaAllowedValues(e.target.value)}
+                  placeholder="e.g. LOW, MEDIUM, HIGH"
+                  className="text-xs h-8"
+                  data-testid="input-meta-allowed-values"
+                />
+                <p className="text-[10px] text-muted-foreground">Comma-separated list of allowed values.</p>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Default Value</Label>
+              <Input
+                value={metaDefaultValue}
+                onChange={e => setMetaDefaultValue(e.target.value)}
+                placeholder="Optional default value"
+                className="text-xs h-8"
+                data-testid="input-meta-default-value"
+              />
+              {metaDataType === "enum" && metaDefaultValue.trim() && metaAllowedValues.trim() && (
+                (() => {
+                  const vals = metaAllowedValues.split(",").map(v => v.trim()).filter(Boolean);
+                  const isValid = vals.some(v => v.toLowerCase() === metaDefaultValue.trim().toLowerCase());
+                  return !isValid ? (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" />
+                      Default value is not in the allowed values list
+                    </p>
+                  ) : null;
+                })()
+              )}
+            </div>
+            {fieldType === "business_field" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Business Meaning</Label>
+                <Textarea
+                  value={metaBusinessMeaning}
+                  onChange={e => setMetaBusinessMeaning(e.target.value)}
+                  placeholder="Why this field exists and how it is used…"
+                  className="text-xs min-h-[48px] resize-none"
+                  data-testid="textarea-meta-business-meaning"
+                />
+              </div>
+            )}
+          </div>
           {fieldType === "derived_field" && isLogicalDerived && (
             <div className="space-y-2 rounded-md border p-3 bg-muted/30">
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Derivation Conditions (read-only)</div>
@@ -885,6 +961,36 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
                   </div>
                 </div>
               )}
+              {(() => {
+                const arithmeticOps = ["+", "-", "*", "/", "%"];
+                const hasArithmetic = [derivOp1, derivHasStep2 ? derivOp2 : null].filter(Boolean).some(op => arithmeticOps.includes(op!));
+                const deduced = hasArithmetic ? "number" : "string";
+                const fieldTypeMap: Record<string, string> = {};
+                policyFields.forEach(f => { fieldTypeMap[f.id] = f.dataType || "string"; });
+                const fieldsUsed: string[] = [];
+                if (derivFieldA) fieldsUsed.push(derivFieldA);
+                if (derivBType === "field" && derivBValue) fieldsUsed.push(derivBValue);
+                if (derivHasStep2 && derivCType === "field" && derivCValue) fieldsUsed.push(derivCValue);
+                const incompatible = hasArithmetic ? fieldsUsed.filter(fId => {
+                  const ft = fieldTypeMap[fId];
+                  return ft === "enum" || ft === "string";
+                }) : [];
+                return (
+                  <div className="space-y-1.5 border-t pt-2">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-muted-foreground">Deduced type:</span>
+                      <span className="font-mono font-medium" data-testid="text-deduced-type">{deduced}</span>
+                      <span className="text-[10px] text-muted-foreground">(editable above)</span>
+                    </div>
+                    {incompatible.length > 0 && (
+                      <div className="flex items-start gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-2 py-1.5 rounded" data-testid="warning-type-mismatch">
+                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                        <span>Type mismatch risk — arithmetic formula references text/enum fields. Result may evaluate to null at runtime.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -3138,6 +3244,40 @@ function DataConfigTab() {
     });
   }
 
+  function updateFieldDataType(categoryId: string, fieldIndex: number, value: string) {
+    setCategoryData(prev => {
+      const entry = prev[categoryId];
+      if (!entry?.fieldAnalysis) return prev;
+      const updatedFields = entry.fieldAnalysis.map((f, i) =>
+        i === fieldIndex ? { ...f, dataType: value } : f
+      );
+      return { ...prev, [categoryId]: { ...entry, fieldAnalysis: updatedFields } };
+    });
+  }
+
+  function updateFieldAllowedValues(categoryId: string, fieldIndex: number, raw: string) {
+    const values = raw.split(",").map(v => v.trim()).filter(Boolean);
+    setCategoryData(prev => {
+      const entry = prev[categoryId];
+      if (!entry?.fieldAnalysis) return prev;
+      const updatedFields = entry.fieldAnalysis.map((f, i) =>
+        i === fieldIndex ? { ...f, allowedValues: values } : f
+      );
+      return { ...prev, [categoryId]: { ...entry, fieldAnalysis: updatedFields } };
+    });
+  }
+
+  function updateFieldDefaultValue(categoryId: string, fieldIndex: number, value: string) {
+    setCategoryData(prev => {
+      const entry = prev[categoryId];
+      if (!entry?.fieldAnalysis) return prev;
+      const updatedFields = entry.fieldAnalysis.map((f, i) =>
+        i === fieldIndex ? { ...f, defaultValue: value || null } : f
+      );
+      return { ...prev, [categoryId]: { ...entry, fieldAnalysis: updatedFields } };
+    });
+  }
+
   function confidenceBadge(confidence: string) {
     if (confidence === "High") return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400";
     if (confidence === "Medium") return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400";
@@ -3267,11 +3407,14 @@ function DataConfigTab() {
                               <table className="w-full text-sm">
                                 <thead>
                                   <tr className="bg-muted/50 border-b">
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[160px]">Field Name</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[140px]">Field Name</th>
                                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Beacon's Understanding</th>
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[200px]">Sample Values</th>
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[85px]">Confidence</th>
-                                    <th className="text-center px-3 py-2 text-xs font-medium text-muted-foreground w-[65px]">Ignore</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[160px]">Sample Values</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[90px]">Type</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[140px]">Allowed Values</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[90px]">Default</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[75px]">Confidence</th>
+                                    <th className="text-center px-3 py-2 text-xs font-medium text-muted-foreground w-[55px]">Ignore</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -3356,6 +3499,46 @@ function DataConfigTab() {
                                             }
                                           </div>
                                         )}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <Select
+                                          value={(field as any).dataType || "string"}
+                                          onValueChange={v => updateFieldDataType(cat.id, idx, v)}
+                                          disabled={isReadOnly || field.ignored}
+                                        >
+                                          <SelectTrigger className="h-7 text-[10px] w-full" data-testid={`select-type-${cat.id}-${idx}`}>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {["string", "number", "boolean", "date", "enum"].map(t => (
+                                              <SelectItem key={t} value={t}>{t}</SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        {(field as any).dataType === "enum" ? (
+                                          <input
+                                            className="w-full text-[10px] border rounded px-1.5 py-1 bg-background outline-none focus:ring-1 focus:ring-primary"
+                                            value={((field as any).allowedValues || []).join(", ")}
+                                            onChange={e => updateFieldAllowedValues(cat.id, idx, e.target.value)}
+                                            placeholder="val1, val2, ..."
+                                            disabled={isReadOnly || field.ignored}
+                                            data-testid={`input-allowed-${cat.id}-${idx}`}
+                                          />
+                                        ) : (
+                                          <span className="text-[10px] text-muted-foreground italic">—</span>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <input
+                                          className="w-full text-[10px] border rounded px-1.5 py-1 bg-background outline-none focus:ring-1 focus:ring-primary"
+                                          value={(field as any).defaultValue || ""}
+                                          onChange={e => updateFieldDefaultValue(cat.id, idx, e.target.value)}
+                                          placeholder="—"
+                                          disabled={isReadOnly || field.ignored}
+                                          data-testid={`input-default-${cat.id}-${idx}`}
+                                        />
                                       </td>
                                       <td className="px-3 py-2">
                                         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${confidenceBadge(field.confidence)}`}>

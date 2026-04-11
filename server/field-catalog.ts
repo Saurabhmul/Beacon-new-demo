@@ -41,7 +41,7 @@ export async function buildFullFieldCatalog(
     }
 
     const categoryData = dataConfig?.categoryData as
-      | Record<string, { fieldAnalysis?: { fieldName: string; ignored: boolean; beaconsUnderstanding?: string; sampleValues?: string[] }[] }>
+      | Record<string, { fieldAnalysis?: { fieldName: string; ignored: boolean; beaconsUnderstanding?: string; sampleValues?: string[]; dataType?: string | null; allowedValues?: string[] | null; defaultValue?: string | null }[] }>
       | null
       | undefined;
 
@@ -58,6 +58,9 @@ export async function buildFullFieldCatalog(
               sourceType: "source_field",
               description: f.beaconsUnderstanding ?? null,
               sampleValues: f.sampleValues ?? [],
+              dataType: f.dataType ?? null,
+              allowedValues: f.allowedValues ?? null,
+              defaultValue: f.defaultValue ?? null,
               derivationSummary: null,
               derivationConfig: null,
             });

@@ -480,6 +480,9 @@ const FieldAnalysisItemSchema = z.object({
   fieldName: z.string().min(1),
   beaconsUnderstanding: z.string(),
   confidence: z.enum(["High", "Medium", "Low"]),
+  data_type: z.enum(["string", "number", "boolean", "date", "enum"]).optional().default("string"),
+  allowed_values: z.array(z.string()).optional().default([]),
+  default_value: z.string().nullable().optional().default(null),
 });
 
 type FieldAnalysisItem = z.infer<typeof FieldAnalysisItemSchema>;
@@ -587,6 +590,19 @@ function parseAIResponse(
     if (item && typeof item === "object") {
       const patched = { ...(item as Record<string, unknown>) };
       patched.confidence = normaliseConfidence(patched.confidence);
+      if (typeof patched.data_type === "string") {
+        patched.data_type = patched.data_type.toLowerCase().trim();
+      }
+      if (patched.allowed_values === null || patched.allowed_values === undefined) {
+        patched.allowed_values = [];
+      } else if (Array.isArray(patched.allowed_values)) {
+        patched.allowed_values = (patched.allowed_values as unknown[]).map(v => String(v ?? ""));
+      }
+      if (patched.default_value === undefined) {
+        patched.default_value = null;
+      } else if (patched.default_value !== null && typeof patched.default_value !== "string") {
+        patched.default_value = String(patched.default_value);
+      }
       const result = FieldAnalysisItemSchema.safeParse(patched);
       if (result.success) {
         valid.push(result.data);
@@ -642,6 +658,12 @@ For each column, return one JSON object with exactly these keys:
   High = column name and/or sample values make the meaning very clear
   Medium = meaning is reasonably inferable but there is some ambiguity
   Low = meaning is genuinely uncertain even after considering name and values
+- data_type: exactly one of "string", "number", "boolean", "date", "enum"
+  Infer from the column name, sample values, and inferred type hint in brackets.
+  If a field has a small fixed set of distinct values (e.g. status codes, categories), use "enum".
+  If uncertain, default to "string" — do not guess aggressively.
+- allowed_values: an array of known allowed values (strings). Populate when data_type is "enum" using the distinct values observed. For non-enum types, use an empty array []. If uncertain, use [].
+- default_value: a single string representing the most likely default, or null if no reasonable default can be inferred. If uncertain, use null — do not guess.
 
 Good description examples:
 - "Current amount overdue on the account, expressed in GBP. This is a core arrears severity measure used to prioritise collections treatment."
@@ -684,7 +706,7 @@ Requirements:
 Fields to rewrite (fieldName [inferredType] | sample or distinct values):
 ${weakEvidenceStr}
 
-Return ONLY a raw JSON array with keys: fieldName (exact original name, character-for-character), beaconsUnderstanding, confidence ("High", "Medium", or "Low").
+Return ONLY a raw JSON array with keys: fieldName (exact original name, character-for-character), beaconsUnderstanding, confidence ("High", "Medium", or "Low"), data_type (one of "string", "number", "boolean", "date", "enum" — default to "string" if unclear), allowed_values (array of strings for enum, empty array [] otherwise), default_value (string or null — use null if unclear).
 No markdown, no code fences, no explanation.`;
 }
 
@@ -797,7 +819,7 @@ export async function analyzeCategoryFields(
   categoryId: string,
   headers: string[],
   columnEvidence: ColumnEvidence[]
-): Promise<Array<{ fieldName: string; beaconsUnderstanding: string; confidence: 'High' | 'Medium' | 'Low' }>> {
+): Promise<Array<{ fieldName: string; beaconsUnderstanding: string; confidence: 'High' | 'Medium' | 'Low'; data_type: string; allowed_values: string[]; default_value: string | null }>> {
   const categoryLabel = categoryId.replace(/_/g, ' ');
 
   console.log(`[analyzeCategoryFields] entry category=${categoryId} fieldCount=${headers.length} evidenceCount=${columnEvidence.length}`);
@@ -889,13 +911,13 @@ export async function analyzeCategoryFields(
 
   for (const h of unresolvedAfterRepair) {
     const fb = buildDomainFallback(h, categoryLabel);
-    resolvedMap.set(h, { fieldName: h, beaconsUnderstanding: fb.beaconsUnderstanding, confidence: fb.confidence });
+    resolvedMap.set(h, { fieldName: h, beaconsUnderstanding: fb.beaconsUnderstanding, confidence: fb.confidence, data_type: "string", allowed_values: [], default_value: null });
   }
 
   // ── Assemble final results (preserving exact original header order) ────────
   const results = headers.map(h => {
     const item = resolvedMap.get(h)!;
-    return { fieldName: h, beaconsUnderstanding: item.beaconsUnderstanding, confidence: item.confidence };
+    return { fieldName: h, beaconsUnderstanding: item.beaconsUnderstanding, confidence: item.confidence, data_type: item.data_type ?? "string", allowed_values: item.allowed_values ?? [], default_value: item.default_value ?? null };
   });
 
   // ── Exit summary log (always emits all 7 fields) ──────────────────────────
