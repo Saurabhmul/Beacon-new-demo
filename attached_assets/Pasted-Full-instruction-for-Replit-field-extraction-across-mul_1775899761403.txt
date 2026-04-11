@@ -1,0 +1,470 @@
+Full instruction for Replit — field extraction across multiple flows
+Overall goal
+
+We want Beacon to extract and store field metadata consistently across all places where fields are created or discovered.
+
+For MVP, the metadata model should stay simple.
+
+Standard field metadata to support
+
+For every field, Beacon should try to capture these properties:
+
+label
+display_name
+description
+business_meaning
+sample_values
+confidence
+data_type
+allowed_values
+default_value
+Supported data types for MVP
+
+Keep data types simple. Only support:
+
+number
+boolean
+date
+string
+enum
+
+Do not build a more complex type system right now.
+
+The four flows where this should happen
+Flow 1 — Source fields from uploaded data
+
+When Beacon analyzes uploaded source files like:
+
+loan data
+payment data
+conversation data
+bureau data
+other tabular uploads
+
+it already extracts:
+
+field name
+Beacon understanding
+sample values
+confidence
+
+Please extend this same AI extraction so it also extracts:
+
+data_type
+allowed_values
+default_value
+What AI should return for source fields
+
+For each source field:
+
+field_name
+beacons_understanding
+sample_values
+confidence
+data_type
+allowed_values
+default_value
+Rules for source field extraction
+be conservative
+if type unclear → use string
+if allowed values unclear → return []
+if default value unclear → return null
+do not guess aggressively
+UI behavior
+
+Show extracted values to user and let user edit:
+
+label
+understanding
+data type
+allowed values
+default value
+
+AI extraction is the starting point, not final truth.
+
+Flow 2 — SOP / policy field extraction
+
+When Beacon extracts fields from SOP text / policy documents using AI, it should also extract:
+
+label
+display_name
+description
+business_meaning
+data_type
+allowed_values
+default_value
+confidence
+What AI should do here
+
+For every field it identifies in SOP text:
+
+infer the likely data type
+infer allowed values if clearly stated or strongly implied
+infer default value if clearly stated
+infer business meaning in simple words
+Rules for SOP field extraction
+if type unclear → use string
+if allowed values unclear → return []
+if default unclear → return null
+do not over-infer
+user must be able to edit all of this later
+UI behavior
+
+In the policy / SOP extraction UI, make these editable:
+
+data type
+allowed values
+default value
+business meaning
+Flow 3 — Business field creation / editing
+
+When a client creates a business field manually or AI creates one during policy generation, Beacon should strongly prefer that the field has:
+
+data_type
+allowed_values if relevant
+default_value optional
+business_meaning
+Rule
+
+For business fields:
+
+ask for type if user is creating/editing manually
+if missing, infer from:
+allowed values
+description
+business meaning
+user can edit it anytime
+Examples
+vulnerability → boolean
+affordability → enum
+ability_to_pay → number
+contact_reason→string`
+Important
+
+Do not make the system fail if business field type is missing.
+Fallback safely:
+
+if unclear → string
+Flow 4 — Derived fields
+
+Derived fields are different.
+
+For derived fields, Beacon should usually deduce the type from the formula or logic.
+
+Examples
+inbound_comms_received > 0 OR outbound_comms_sent > 0 → boolean
+(ability_to_pay - minimum_due) * 6 → number
+concatenated text → string
+Rule
+
+For derived fields:
+
+auto-deduce type from formula
+show deduced type in UI
+allow user override if needed
+Important
+
+If the formula is incompatible with the inferred type, do not silently force it.
+
+Example:
+
+if formula says affordability - minimum_due
+but affordability is enum/string
+do not calculate blindly
+warn and return null until fixed
+Shared principle across all flows
+Data type priority order
+
+At runtime, if Beacon needs to determine a field’s type, use this order:
+
+user-defined type
+AI-extracted type
+system-deduced type
+fallback to string
+
+This priority order should be used consistently.
+
+Runtime safe behavior
+Rule
+
+If type is missing or unclear during analysis:
+
+do not crash unnecessarily
+use safe coercion where obvious
+otherwise return null
+Safe coercion helpers
+
+Implement simple helpers like:
+
+toNumber
+toBoolean
+toDate
+toString
+Safe examples
+"251" → number
+"Yes" → boolean
+"2026-04-28" → date
+Unsafe examples
+
+Do not force:
+
+"HIGH" - 251
+"customer_id_1" > 0
+long free text into boolean
+
+In unsafe cases:
+
+warn internally
+return null
+continue
+Prompt updates Replit should make
+A. Source-field extraction prompt
+
+Update the AI prompt used for uploaded-source-field analysis.
+
+Use instruction like this
+For each source field, extract:
+- field_name
+- beacons_understanding
+- sample_values
+- confidence
+- data_type: one of number, boolean, date, string, enum
+- allowed_values: only if clearly present or strongly implied from sample values
+- default_value: only if clearly present or strongly implied
+
+Be conservative.
+If the type is unclear, use string.
+If allowed values are unclear, return an empty list.
+If default value is unclear, return null.
+Do not guess aggressively.
+Expected output shape
+{
+  "field_name": "string",
+  "beacons_understanding": "string",
+  "sample_values": ["string"],
+  "confidence": "High | Medium | Low",
+  "data_type": "number | boolean | date | string | enum",
+  "allowed_values": ["string"],
+  "default_value": "string | number | boolean | null"
+}
+B. SOP extraction prompt
+
+Update the SOP / policy extraction prompt.
+
+Use instruction like this
+For each field you extract from the SOP or policy text, also extract:
+- label
+- display_name
+- description
+- business_meaning
+- data_type: one of number, boolean, date, string, enum
+- allowed_values if clearly stated or strongly implied
+- default_value if clearly stated
+
+Be conservative.
+If type is unclear, use string.
+If allowed values are unclear, return an empty list.
+If default value is unclear, return null.
+Do not guess aggressively.
+Expected output shape
+{
+  "label": "string",
+  "display_name": "string",
+  "description": "string",
+  "business_meaning": "string",
+  "data_type": "number | boolean | date | string | enum",
+  "allowed_values": ["string"],
+  "default_value": "string | number | boolean | null",
+  "confidence": "High | Medium | Low"
+}
+C. Business-field inference prompt
+
+Keep the current business-field inference prompt rule, but make sure it clearly uses field metadata.
+
+Keep this instruction
+If data_type is missing:
+- use allowed_values if present
+- else use description and business meaning
+- else allow only string or null unless clearly boolean-like
+
+That keeps inference safe.
+
+D. Derived-field type deduction logic
+
+This does not need AI first. Use simple formula-based deduction.
+
+Suggested simple rules
+arithmetic operators → number
+logical/comparison operators → boolean
+text composition → string
+fixed text choice set → enum
+
+Then show the deduced result in UI and let the user edit it.
+
+Database / schema guidance
+
+Do not overengineer the schema.
+
+For fields, support these simple metadata properties wherever relevant:
+
+display_name
+description
+business_meaning
+data_type
+allowed_values
+default_value
+
+If sample_values and confidence are source-analysis-specific, they can stay in source-analysis output / config payloads instead of becoming permanent core field properties everywhere.
+
+Keep it practical.
+
+UI guidance
+Source field mapping/setup UI
+
+Show:
+
+field name
+Beacon understanding
+sample values
+confidence
+data type
+allowed values
+default value
+
+Allow edits.
+
+SOP field extraction UI
+
+Show:
+
+label
+description
+business meaning
+data type
+allowed values
+default value
+confidence
+
+Allow edits.
+
+Business field edit UI
+
+Show:
+
+label
+display name
+description
+business meaning
+data type
+allowed values
+default value
+
+Allow edits.
+
+Derived field edit UI
+
+Show:
+
+formula / logic
+deduced data type
+optional override
+Minimal implementation rule
+
+Please do not build a large type engine.
+
+For MVP, keep it simple:
+
+AI extracts field metadata where AI is already being used
+formulas deduce derived-field type
+user can edit everything
+runtime uses safe coercion or null
+
+That is enough.
+
+Examples Replit should keep in mind
+Example 1 — source field
+
+minimum_due
+
+sample values: 251, 341, 847
+data type: number
+Example 2 — source field
+
+breathing_space_active
+
+sample values: Yes, No
+data type: boolean
+Example 3 — business field
+
+affordability
+
+allowed values: HIGH, MEDIUM, LOW, VERY LOW, NOT SURE
+data type: enum
+Example 4 — derived field
+
+contact_established
+
+formula: inbound_comms_received > 0 OR outbound_comms_sent > 0
+data type: boolean
+Example 5 — invalid derived-field math
+
+six_month_surplus = affordability - minimum_due
+
+if affordability is enum, do not calculate
+warn and return null unless formula is corrected to use numeric field like ability_to_pay
+Final instruction to Replit
+
+Please implement simple field metadata extraction and editing across all major Beacon flows:
+
+1. Source fields from uploaded data
+
+Extend the existing AI extraction to also return:
+
+data_type
+allowed_values
+default_value
+
+User must be able to edit them.
+
+2. SOP / policy extraction
+
+When AI extracts fields from SOP text, also extract:
+
+data_type
+allowed_values
+default_value
+business_meaning
+
+User must be able to edit them.
+
+3. Business fields
+
+Strongly prefer defined type and allowed values.
+If missing, infer from metadata and let user edit.
+
+4. Derived fields
+
+Deduce type from formula automatically and let user override.
+
+5. Runtime
+
+Use this priority:
+
+user-defined
+AI-extracted
+system-deduced
+fallback string
+
+Use safe coercion helpers and return null when unsafe.
+
+6. Keep it simple
+
+Supported types only:
+
+number
+boolean
+date
+string
+enum
+
+Do not overengineer this further for MVP.

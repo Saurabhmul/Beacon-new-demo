@@ -1,0 +1,106 @@
+This is now strong. I agree with this plan.
+
+It is much better than the earlier version because it is:
+
+simple
+consistent
+conservative
+editable by user
+safe at runtime
+not overengineered
+What is especially good
+1. Conservative defaults
+
+This is exactly right:
+
+unclear type → string
+unclear allowed values → []
+unclear default → null
+
+That will prevent a lot of bad downstream behavior.
+
+2. Exact runtime type priority
+
+This is one of the most important parts, and you now made it explicit:
+
+user-defined
+AI-extracted
+system-deduced
+fallback string
+
+That is clean and easy for Replit to implement.
+
+3. Strict coercion
+
+Very good.
+
+This is important because many future bugs come from bad silent coercion.
+Returning null is much better than forcing wrong math.
+
+4. Derived field deduction is best-effort only
+
+Also good.
+
+You are not pretending the system always knows the right derived-field type.
+That is realistic.
+
+5. Non-blocking warnings
+
+Correct choice for MVP.
+Warnings are useful, but blocking would create too much friction right now.
+
+Small refinements I would still suggest
+
+These are minor, not structural.
+
+1. Add one line for source-field extraction confidence
+
+For source fields, since AI is now extracting more metadata, I would ask Replit to keep confidence tied to the overall field understanding, not invent separate precision scores for each metadata property.
+
+In simple words:
+
+one confidence is enough for MVP
+no need for separate type_confidence, default_confidence, etc.
+
+Why:
+keeps it simpler.
+
+2. Clarify default_value storage type
+
+You wrote raw text input, which I agree with.
+
+I would just ask Replit to store it consistently as:
+
+raw value in UI
+parsed only at runtime if needed
+
+Why:
+avoids confusion between "0" and 0, or "true" and true.
+
+3. Clarify allowed_values for non-enum fields
+
+You already say store for all fields when available, but mainly show/use when enum.
+
+That is good.
+
+I would just tell Replit:
+
+do not use allowed_values as hard validation for non-enum fields in MVP
+
+Why:
+otherwise it may accidentally overconstrain booleans, dates, or strings.
+
+4. Add one simple warning label in UI
+
+For derived fields, when there is a mismatch like:
+
+arithmetic using enum/string
+
+show a small visible warning like:
+
+“Type mismatch risk”
+or
+“Formula may not evaluate safely”
+
+Why:
+this will help the user understand why a field later becomes null.

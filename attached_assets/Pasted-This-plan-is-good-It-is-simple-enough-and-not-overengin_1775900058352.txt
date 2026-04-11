@@ -1,0 +1,175 @@
+This plan is good. It is simple enough and not overengineered.
+
+I agree with the direction. A few small changes will make it cleaner and safer.
+
+What is good
+
+It correctly keeps the scope focused on:
+
+extracting field metadata
+making it editable
+supporting the 5 MVP types only
+adding safe coercion
+not trying to build a huge type system
+
+That is the right level.
+
+What I would improve
+1) Keep source-field AI extraction conservative
+
+This line is good, but I would make it more explicit:
+
+if AI is unsure about data_type, use string
+if AI is unsure about allowed_values, use []
+if AI is unsure about default_value, use null
+
+Tell Replit not to guess aggressively.
+
+2) allowed_values should mainly matter for enum
+
+Right now the plan says tag input for allowed values, shown when type is enum or always.
+
+I would simplify:
+
+always store allowed_values
+but only strongly use/show it when data_type = enum
+
+That keeps UI cleaner.
+
+3) default_value should stay as raw text in UI
+
+For MVP, I would not over-parse default values in the form layer.
+
+Better:
+
+let user enter/edit raw default value
+convert safely later at runtime based on resolved type
+
+That avoids UI complexity.
+
+4) Derived-field type deduction should be “best effort”
+
+Good to deduce it, but do not present it as guaranteed truth.
+
+I would ask Replit to label it internally as:
+
+deduced type
+editable by user
+
+And if formula is mixed/unclear, fallback to string or null + warning.
+
+5) Add one simple warning rule for bad formulas
+
+You already say no blocking validation, only warn. Good.
+
+I would make the warning explicit for cases like:
+
+arithmetic formula using enum/string inputs
+boolean formula using free text without coercion
+
+Do not block, just warn in UI and at runtime return null when unsafe.
+
+6) Runtime type priority should be made very explicit
+
+This is one of the most important pieces.
+
+Tell Replit to implement exactly this order:
+
+user-defined type
+AI-extracted type
+system-deduced type
+fallback string
+
+And use this consistently everywhere.
+
+7) Business field type inference should be simple
+
+This line is good:
+
+If data_type is missing, infer from allowed_values or description when possible, fallback to string.
+
+I would tighten it slightly:
+
+if allowed_values exists and has a small fixed set, prefer enum
+if description clearly says yes/no or true/false, prefer boolean
+if description clearly refers to amount/count/percentage, prefer number
+else fallback to string
+
+That is enough for MVP.
+
+8) Safe coercion helpers should never silently invent values
+
+Very important:
+
+"251" → 251 is okay
+"Yes" → true is okay
+"HIGH" → number is not okay
+invalid date string → null, not fake date
+
+This should be strict.
+
+My suggested edits to send Replit
+
+You can send this:
+
+Refinements to Plan #42
+
+The overall plan is good. Please make these small refinements:
+
+A. Conservative AI extraction defaults
+
+For source-field and SOP extraction:
+
+if data_type is unclear → use string
+if allowed_values is unclear → use []
+if default_value is unclear → use null
+Do not guess aggressively.
+B. allowed_values usage
+
+Keep allowed_values stored for all fields if available, but mainly display/use it when data_type = enum to keep UI simple.
+
+C. default_value handling
+
+For MVP, keep default_value as user-editable raw value in the UI. Apply type-aware coercion later at runtime rather than over-validating in the form layer.
+
+D. Derived-field type deduction
+
+Treat derived-field type deduction as best effort only:
+
+arithmetic → number
+logical/comparison → boolean
+text concatenation → string
+unclear/mixed → fallback to string or warn
+Always allow user override.
+E. Add non-blocking warnings for formula/type mismatch
+
+Warn, but do not block, when:
+
+arithmetic formula references enum/string fields
+logical formula references incompatible text fields
+At runtime, return null on unsafe evaluation.
+F. Make runtime type priority exact and shared
+
+Use this exact priority everywhere:
+
+user-defined type
+AI-extracted type
+system-deduced type
+fallback string
+G. Business field type inference
+
+If missing:
+
+fixed small allowed_values → enum
+yes/no semantics → boolean
+amount/count/percentage semantics → number
+otherwise → string
+H. Safe coercion must be strict
+
+Safe coercion helpers must return null on unsafe conversion, not invent values.
+
+My verdict
+
+Yes, I would approve this plan with those small refinements.
+
+It is simple, scalable, and not overengineered.
