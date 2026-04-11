@@ -659,9 +659,20 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [dupError, setDupError] = useState<string | null>(null);
   const [metaDataType, setMetaDataType] = useState<string>("string");
+  const [metaTypeUserOverride, setMetaTypeUserOverride] = useState(false);
   const [metaAllowedValues, setMetaAllowedValues] = useState("");
   const [metaDefaultValue, setMetaDefaultValue] = useState("");
   const [metaBusinessMeaning, setMetaBusinessMeaning] = useState("");
+
+  useEffect(() => {
+    if (!isEditMode && fieldType === "derived_field" && !metaTypeUserOverride) {
+      const { deducedType } = deduceTypeFromDerivation({
+        operator1: derivOp1,
+        operator2: derivHasStep2 ? derivOp2 : undefined,
+      });
+      setMetaDataType(deducedType);
+    }
+  }, [fieldType, derivOp1, derivOp2, derivHasStep2, isEditMode, metaTypeUserOverride]);
 
   useEffect(() => {
     if (open && editField) {
@@ -722,7 +733,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
     setDerivFieldA(null); setDerivOp1("+"); setDerivBType("constant"); setDerivBValue("");
     setDerivHasStep2(false); setDerivOp2("+"); setDerivCType("constant"); setDerivCValue("");
     setSaving(false); setDeleting(false); setConfirmDelete(false); setDupError(null);
-    setMetaDataType("string"); setMetaAllowedValues(""); setMetaDefaultValue(""); setMetaBusinessMeaning("");
+    setMetaDataType("string"); setMetaTypeUserOverride(false); setMetaAllowedValues(""); setMetaDefaultValue(""); setMetaBusinessMeaning("");
   }
   function handleClose() { resetForm(); onClose(); }
 
@@ -865,7 +876,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Field Metadata</div>
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">Data Type</Label>
-              <Select value={metaDataType} onValueChange={setMetaDataType}>
+              <Select value={metaDataType} onValueChange={v => { setMetaDataType(v); setMetaTypeUserOverride(true); }}>
                 <SelectTrigger className="h-8 text-xs" data-testid="select-meta-data-type">
                   <SelectValue />
                 </SelectTrigger>

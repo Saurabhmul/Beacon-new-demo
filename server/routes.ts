@@ -1486,6 +1486,9 @@ export async function registerRoutes(
               description: df.description?.trim() || null,
               sourceType: "derived_field",
               dataType: df.data_type || null,
+              allowedValues: df.allowed_values?.length ? df.allowed_values : null,
+              defaultValue: df.default_value?.trim() || null,
+              businessMeaning: df.business_meaning?.trim() || null,
               derivationConfig: derivationConfig,
               derivationSummary: derivationSummary || null,
               aiGenerated: true,
@@ -2494,8 +2497,7 @@ export async function registerRoutes(
           for (const [key, value] of Object.entries(record)) {
             const fieldType = fieldTypeMap.get(key.toLowerCase());
             if (fieldType && value != null) {
-              const coerced = safeCoerce(value, fieldType);
-              coercedRecord[key] = coerced !== null ? coerced : value;
+              coercedRecord[key] = safeCoerce(value, fieldType);
             } else {
               coercedRecord[key] = value;
             }
