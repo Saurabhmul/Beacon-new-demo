@@ -4,7 +4,6 @@ export type FieldDataType = (typeof FIELD_DATA_TYPES)[number];
 export function toNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") return isFinite(value) ? value : null;
-  if (typeof value === "boolean") return value ? 1 : 0;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (trimmed === "") return null;
@@ -38,11 +37,6 @@ export function toDate(value: unknown): Date | null {
     const d = new Date(trimmed);
     if (isNaN(d.getTime())) return null;
     if (d.getFullYear() < 1900 || d.getFullYear() > 2100) return null;
-    return d;
-  }
-  if (typeof value === "number") {
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return null;
     return d;
   }
   return null;

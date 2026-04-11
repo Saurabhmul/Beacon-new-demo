@@ -9,7 +9,7 @@ import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSO
 import { batchProcessWithSSE } from "./replit_integrations/batch";
 import { users, uploadLogs, companies, treatments, treatmentRuleGroups, treatmentRules, policyPacks, policyFields } from "@shared/schema";
 import type { PolicyFieldDto, RuleSaveRow, DerivationConfig, ArithmeticDerivationConfig, LogicalDerivationConfig } from "@shared/schema";
-import { resolveFieldType, deduceTypeFromDerivation } from "@shared/field-utils";
+import { resolveFieldType, deduceTypeFromDerivation, inferBusinessFieldType, safeCoerce, type FieldDataType } from "@shared/field-utils";
 import { db } from "./db";
 import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
@@ -934,6 +934,10 @@ export async function registerRoutes(
       if (!resolvedType && sourceType === "derived_field" && derivationConfig) {
         const cfg = derivationConfig as { operator1?: string; operator2?: string };
         resolvedType = deduceTypeFromDerivation(cfg).deducedType;
+      }
+      if (!resolvedType && sourceType === "business_field") {
+        const parsedAllowed = Array.isArray(allowedValues) && allowedValues.length > 0 ? allowedValues.map(String) : null;
+        resolvedType = inferBusinessFieldType(parsedAllowed, description);
       }
       resolvedType = resolveFieldType(resolvedType, null, null);
       const field = await storage.createPolicyField({
@@ -2476,11 +2480,28 @@ export async function registerRoutes(
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       };
 
+      const allFields = await storage.getPolicyFields(companyId);
+      const fieldTypeMap = new Map<string, FieldDataType>();
+      for (const f of allFields) {
+        const resolved = resolveFieldType(f.dataType, null, null);
+        fieldTypeMap.set(f.label.toLowerCase(), resolved);
+      }
+
       await batchProcessWithSSE(
         records,
         async (record, index) => {
+          const coercedRecord: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(record)) {
+            const fieldType = fieldTypeMap.get(key.toLowerCase());
+            if (fieldType && value != null) {
+              const coerced = safeCoerce(value, fieldType);
+              coercedRecord[key] = coerced !== null ? coerced : value;
+            } else {
+              coercedRecord[key] = value;
+            }
+          }
           const result = await analyzeCustomer(
-            record,
+            coercedRecord,
             sopText,
             dataConfig?.promptTemplate || undefined
           );
