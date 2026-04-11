@@ -9,6 +9,7 @@ import { analyzeCustomer, extractTextFromImage, analyzeCategoryFields, extractSO
 import { batchProcessWithSSE } from "./replit_integrations/batch";
 import { users, uploadLogs, companies, treatments, treatmentRuleGroups, treatmentRules, policyPacks, policyFields } from "@shared/schema";
 import type { PolicyFieldDto, RuleSaveRow, DerivationConfig, ArithmeticDerivationConfig, LogicalDerivationConfig } from "@shared/schema";
+import { resolveFieldType, deduceTypeFromDerivation } from "@shared/field-utils";
 import { db } from "./db";
 import { eq, inArray } from "drizzle-orm";
 import fs from "fs";
@@ -929,6 +930,12 @@ export async function registerRoutes(
         : null;
       const VALID_TYPES = ["string", "number", "boolean", "date", "enum"];
       if (dataType && !VALID_TYPES.includes(dataType)) return res.status(400).json({ error: `dataType must be one of: ${VALID_TYPES.join(", ")}` });
+      let resolvedType = dataType || null;
+      if (!resolvedType && sourceType === "derived_field" && derivationConfig) {
+        const cfg = derivationConfig as { operator1?: string; operator2?: string };
+        resolvedType = deduceTypeFromDerivation(cfg).deducedType;
+      }
+      resolvedType = resolveFieldType(resolvedType, null, null);
       const field = await storage.createPolicyField({
         companyId: companyId!,
         policyPackId: null,
@@ -937,7 +944,7 @@ export async function registerRoutes(
         sourceType,
         derivationConfig: derivationConfig || null,
         derivationSummary,
-        dataType: dataType || null,
+        dataType: resolvedType,
         allowedValues: Array.isArray(allowedValues) && allowedValues.length > 0 ? allowedValues.map(String) : null,
         defaultValue: typeof defaultValue === "string" ? (defaultValue.trim() || null) : defaultValue != null ? String(defaultValue) : null,
         businessMeaning: typeof businessMeaning === "string" ? (businessMeaning.trim() || null) : null,

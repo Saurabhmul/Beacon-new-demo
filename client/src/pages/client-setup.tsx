@@ -498,24 +498,30 @@ function makeTemplateLocalBase(name: string, shortDescription: string, enabled =
 }
 
 // ── FieldInfoPopover ────────────────────────────────────────────────────────
-function FieldInfoPopover({ field, onEdit }: { field: PolicyFieldDto; onEdit?: (field: PolicyFieldDto) => void }) {
+function FieldInfoPopover({ field, onEdit, policyFields }: { field: PolicyFieldDto; onEdit?: (field: PolicyFieldDto) => void; policyFields?: PolicyFieldDto[] }) {
   const isEditable = field.sourceType === "derived_field" || field.sourceType === "business_field";
-  if (isEditable && onEdit) {
-    return (
-      <button type="button" className="text-muted-foreground hover:text-foreground shrink-0 p-0.5 rounded hover:bg-muted" onClick={() => onEdit(field)} data-testid={`btn-field-info-${field.id}`}>
-        <Info className="w-3 h-3" />
-      </button>
-    );
-  }
+  const derivMismatch = (() => {
+    if (field.sourceType !== "derived_field" || !field.derivationConfig) return null;
+    const cfg = field.derivationConfig as { operator1?: string; operator2?: string; fieldA?: string; operandBType?: string; operandBValue?: string; operandCType?: string; operandCValue?: string };
+    const fieldTypeMap: Record<string, string> = {};
+    (policyFields || []).forEach(f => { fieldTypeMap[f.id] = f.dataType || "string"; });
+    const result = checkFormulaMismatch(cfg, fieldTypeMap);
+    return result.hasWarning ? result.message : null;
+  })();
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" className="text-muted-foreground hover:text-foreground shrink-0 p-0.5 rounded hover:bg-muted" data-testid={`btn-field-info-${field.id}`}>
-          <Info className="w-3 h-3" />
+        <button type="button" className={`shrink-0 p-0.5 rounded hover:bg-muted ${derivMismatch ? "text-amber-500 hover:text-amber-600" : "text-muted-foreground hover:text-foreground"}`} data-testid={`btn-field-info-${field.id}`}>
+          {derivMismatch ? <AlertTriangle className="w-3 h-3" /> : <Info className="w-3 h-3" />}
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" className="w-60 text-xs p-3 space-y-1.5" onClick={e => e.stopPropagation()}>
-        <div className="font-semibold">{field.label}</div>
+      <PopoverContent side="top" className="w-64 text-xs p-3 space-y-1.5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div className="font-semibold">{field.label}</div>
+          {isEditable && onEdit && (
+            <button type="button" className="text-[10px] text-primary hover:underline" onClick={() => onEdit(field)} data-testid={`btn-edit-field-${field.id}`}>Edit</button>
+          )}
+        </div>
         <div className="text-muted-foreground">
           {field.sourceType === "source_field" ? "Source field" : field.sourceType === "business_field" ? "Business field" : "Derived field"}
         </div>
@@ -545,6 +551,12 @@ function FieldInfoPopover({ field, onEdit }: { field: PolicyFieldDto; onEdit?: (
           <div className="border-t pt-1.5 mt-1.5">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground mb-0.5">Derived from</div>
             <div className="font-mono text-[11px] bg-muted px-2 py-1 rounded">{field.derivationSummary}</div>
+          </div>
+        )}
+        {derivMismatch && (
+          <div className="border-t pt-1.5 mt-1.5 flex items-start gap-1 text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+            <span className="text-[10px]">{derivMismatch}</span>
           </div>
         )}
       </PopoverContent>
@@ -660,7 +672,16 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
       setSaving(false);
       setDeleting(false);
       setConfirmDelete(false);
-      setMetaDataType(editField.dataType || (editField.sourceType === "business_field" ? inferBusinessFieldType(editField.allowedValues, editField.description) : "string"));
+      if (editField.dataType) {
+        setMetaDataType(editField.dataType);
+      } else if (editField.sourceType === "business_field") {
+        setMetaDataType(inferBusinessFieldType(editField.allowedValues, editField.description));
+      } else if (editField.sourceType === "derived_field" && editField.derivationConfig) {
+        const cfg = editField.derivationConfig as { operator1?: string; operator2?: string };
+        setMetaDataType(deduceTypeFromDerivation(cfg).deducedType);
+      } else {
+        setMetaDataType("string");
+      }
       setMetaAllowedValues((editField.allowedValues || []).join(", "));
       setMetaDefaultValue(editField.defaultValue || "");
       setMetaBusinessMeaning(editField.businessMeaning || "");
@@ -966,7 +987,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
                 const derivConfig = {
                   operator1: derivOp1,
                   operator2: derivHasStep2 ? derivOp2 : undefined,
-                  fieldA: derivFieldA,
+                  fieldA: derivFieldA || undefined,
                   operandBType: derivBType,
                   operandBValue: derivBValue,
                   operandCType: derivHasStep2 ? derivCType : undefined,
@@ -1184,7 +1205,7 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
                 onChange={fieldId => updateRow(row.localId, { leftFieldId: fieldId })}
                 onAddField={() => openAddField(row.localId, "left")}
                 disabled={isReadOnly} testId={`picker-left-${row.localId}`} />
-              {leftField && <FieldInfoPopover field={leftField} onEdit={!isReadOnly ? setEditingField : undefined} />}
+              {leftField && <FieldInfoPopover field={leftField} onEdit={!isReadOnly ? setEditingField : undefined} policyFields={policyFields} />}
             </div>
             <Select value={row.operator} onValueChange={v => updateRow(row.localId, { operator: v })} disabled={isReadOnly}>
               <SelectTrigger className="h-8 text-xs w-32" data-testid={`select-operator-${row.localId}`}>
@@ -1209,7 +1230,7 @@ function RuleBuilderGroup({ group, knownFields, policyFields, onChange, isReadOn
                       onChange={fieldId => updateRow(row.localId, { rightFieldId: fieldId })}
                       onAddField={() => openAddField(row.localId, "right")}
                       disabled={isReadOnly} testId={`picker-right-${row.localId}`} />
-                    {rightField && <FieldInfoPopover field={rightField} onEdit={!isReadOnly ? setEditingField : undefined} />}
+                    {rightField && <FieldInfoPopover field={rightField} onEdit={!isReadOnly ? setEditingField : undefined} policyFields={policyFields} />}
                   </div>
                 ) : (
                   <Input value={row.rightConstantValue} onChange={e => updateRow(row.localId, { rightConstantValue: e.target.value })}

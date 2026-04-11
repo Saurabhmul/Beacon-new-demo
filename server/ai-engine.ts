@@ -1520,7 +1520,7 @@ DERIVED FIELD FORMAT
  "field_name": "snake_case_name",
  "display_name": "Human Readable Name",
  "description": "what this field represents",
- "data_type": "boolean|number|string|enum",
+ "data_type": "boolean|number|string|date|enum",
  "depends_on": ["source_field_a", "source_field_b"],
  "derivation_config": { DERIVATION CONFIG or null if ambiguous },
  "derivation_summary": "plain english description of the logic",
@@ -1533,9 +1533,9 @@ BUSINESS FIELD FORMAT
  "field_name": "snake_case_name",
  "display_name": "Human Readable Name",
  "description": "what this field captures",
- "data_type": "boolean|number|string|enum",
- "allowed_values": ["value1", "value2"] or [],
- "default_value": "default if applicable",
+ "data_type": "boolean|number|string|date|enum",
+ "allowed_values": ["value1", "value2"] or [] (use [] when not an enum),
+ "default_value": "default if applicable or null when unclear",
  "business_meaning": "why this field exists and how it is used",
  "creation_reason": "REQUIRED — explain why no existing source field was sufficient (name closest candidates)"
 }
