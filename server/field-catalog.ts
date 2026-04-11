@@ -1,4 +1,5 @@
 import type { DataConfig, PolicyFieldRecord, DerivationConfig } from "@shared/schema";
+import { resolveFieldType, deduceTypeFromDerivation } from "@shared/field-utils";
 
 export interface CatalogEntry {
   id?: string;
@@ -72,13 +73,19 @@ export async function buildFullFieldCatalog(
     const dbFields = await storage.getPolicyFields(companyId);
     for (const f of dbFields) {
       const key = normalizeFieldLabel(f.label);
+      let effectiveType = f.dataType ?? null;
+      if (!effectiveType && f.sourceType === "derived_field" && f.derivationConfig) {
+        const config = f.derivationConfig as { operator1?: string; operator2?: string };
+        const { deducedType } = deduceTypeFromDerivation(config);
+        effectiveType = deducedType;
+      }
       dedup.set(key, {
         id: String(f.id),
         label: f.label,
         displayName: f.displayName ?? null,
         sourceType: f.sourceType === "derived_field" ? "derived_field" : "business_field",
         description: f.description ?? null,
-        dataType: f.dataType ?? null,
+        dataType: effectiveType,
         derivationSummary: f.derivationSummary ?? null,
         derivationConfig: f.derivationConfig ?? null,
         allowedValues: f.allowedValues ?? null,

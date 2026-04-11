@@ -6,6 +6,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { deduceTypeFromDerivation, checkFormulaMismatch, inferBusinessFieldType } from "@shared/field-utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -659,7 +660,7 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
       setSaving(false);
       setDeleting(false);
       setConfirmDelete(false);
-      setMetaDataType(editField.dataType || "string");
+      setMetaDataType(editField.dataType || (editField.sourceType === "business_field" ? inferBusinessFieldType(editField.allowedValues, editField.description) : "string"));
       setMetaAllowedValues((editField.allowedValues || []).join(", "));
       setMetaDefaultValue(editField.defaultValue || "");
       setMetaBusinessMeaning(editField.businessMeaning || "");
@@ -962,30 +963,30 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
                 </div>
               )}
               {(() => {
-                const arithmeticOps = ["+", "-", "*", "/", "%"];
-                const hasArithmetic = [derivOp1, derivHasStep2 ? derivOp2 : null].filter(Boolean).some(op => arithmeticOps.includes(op!));
-                const deduced = hasArithmetic ? "number" : "string";
+                const derivConfig = {
+                  operator1: derivOp1,
+                  operator2: derivHasStep2 ? derivOp2 : undefined,
+                  fieldA: derivFieldA,
+                  operandBType: derivBType,
+                  operandBValue: derivBValue,
+                  operandCType: derivHasStep2 ? derivCType : undefined,
+                  operandCValue: derivHasStep2 ? derivCValue : undefined,
+                };
+                const { deducedType } = deduceTypeFromDerivation(derivConfig);
                 const fieldTypeMap: Record<string, string> = {};
                 policyFields.forEach(f => { fieldTypeMap[f.id] = f.dataType || "string"; });
-                const fieldsUsed: string[] = [];
-                if (derivFieldA) fieldsUsed.push(derivFieldA);
-                if (derivBType === "field" && derivBValue) fieldsUsed.push(derivBValue);
-                if (derivHasStep2 && derivCType === "field" && derivCValue) fieldsUsed.push(derivCValue);
-                const incompatible = hasArithmetic ? fieldsUsed.filter(fId => {
-                  const ft = fieldTypeMap[fId];
-                  return ft === "enum" || ft === "string";
-                }) : [];
+                const mismatch = checkFormulaMismatch(derivConfig, fieldTypeMap);
                 return (
                   <div className="space-y-1.5 border-t pt-2">
                     <div className="flex items-center gap-2 text-xs">
                       <span className="text-muted-foreground">Deduced type:</span>
-                      <span className="font-mono font-medium" data-testid="text-deduced-type">{deduced}</span>
+                      <span className="font-mono font-medium" data-testid="text-deduced-type">{deducedType}</span>
                       <span className="text-[10px] text-muted-foreground">(editable above)</span>
                     </div>
-                    {incompatible.length > 0 && (
+                    {mismatch.hasWarning && (
                       <div className="flex items-start gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-2 py-1.5 rounded" data-testid="warning-type-mismatch">
                         <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                        <span>Type mismatch risk — arithmetic formula references text/enum fields. Result may evaluate to null at runtime.</span>
+                        <span>{mismatch.message}</span>
                       </div>
                     )}
                   </div>
@@ -3502,7 +3503,7 @@ function DataConfigTab() {
                                       </td>
                                       <td className="px-3 py-2">
                                         <Select
-                                          value={(field as any).dataType || "string"}
+                                          value={field.dataType || "string"}
                                           onValueChange={v => updateFieldDataType(cat.id, idx, v)}
                                           disabled={isReadOnly || field.ignored}
                                         >
@@ -3517,10 +3518,10 @@ function DataConfigTab() {
                                         </Select>
                                       </td>
                                       <td className="px-3 py-2">
-                                        {(field as any).dataType === "enum" ? (
+                                        {field.dataType === "enum" ? (
                                           <input
                                             className="w-full text-[10px] border rounded px-1.5 py-1 bg-background outline-none focus:ring-1 focus:ring-primary"
-                                            value={((field as any).allowedValues || []).join(", ")}
+                                            value={(field.allowedValues || []).join(", ")}
                                             onChange={e => updateFieldAllowedValues(cat.id, idx, e.target.value)}
                                             placeholder="val1, val2, ..."
                                             disabled={isReadOnly || field.ignored}
@@ -3533,7 +3534,7 @@ function DataConfigTab() {
                                       <td className="px-3 py-2">
                                         <input
                                           className="w-full text-[10px] border rounded px-1.5 py-1 bg-background outline-none focus:ring-1 focus:ring-primary"
-                                          value={(field as any).defaultValue || ""}
+                                          value={field.defaultValue || ""}
                                           onChange={e => updateFieldDefaultValue(cat.id, idx, e.target.value)}
                                           placeholder="—"
                                           disabled={isReadOnly || field.ignored}
