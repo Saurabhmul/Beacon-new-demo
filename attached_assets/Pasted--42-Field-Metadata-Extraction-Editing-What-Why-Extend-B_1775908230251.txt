@@ -1,0 +1,76 @@
+#42 - Field Metadata Extraction & Editing
+What & Why
+Extend Beacon to extract, store, and display field metadata (data_type, allowed_values, default_value, business_meaning) consistently across all four flows where fields are created or discovered: source field uploads, SOP/policy extraction, manual business field creation, and derived field formulas. Add runtime safe-coercion helpers and a type priority system. Supported types for MVP: number, boolean, date, string, enum.
+
+Key principles
+Conservative AI extraction defaults — for both source-field and SOP extraction:
+
+if data_type is unclear → use string
+if allowed_values is unclear → use []
+if default_value is unclear → use null
+Do not guess aggressively.
+Single confidence per field — one confidence score per field covers the overall understanding. Do not invent separate confidence scores for type, default, etc. Keep it simple for MVP.
+
+business_meaning is optional for source fields — business_meaning is especially important for SOP-extracted fields and business fields. It can exist for source fields if AI can infer something useful, but it is not required for source-field extraction. Source fields primarily need: label, understanding, sample values, type, allowed values, default.
+
+Runtime type priority (use this exact order everywhere):
+
+user-defined type
+AI-extracted type
+system-deduced type
+fallback string
+Safe coercion is strict — helpers return null on unsafe conversion, never invent values. "251" → 251 is fine; "HIGH" → number is not; invalid date → null, not a fake date.
+
+allowed_values usage — store for all fields when available, but only prominently display/use when data_type = enum, to keep UI simple. Do not use allowed_values as hard validation for non-enum fields in MVP (avoid accidentally overconstraining booleans, dates, or strings).
+
+default_value handling — for MVP, keep default_value as user-editable raw text in the UI and store as raw text. Parse/coerce only at runtime based on the resolved type — avoids confusion between "0" and 0, or "true" and true. For enum fields, if default_value is present it should ideally be one of allowed_values — warn if it isn't, but do not block.
+
+Derived-field type deduction is best-effort — arithmetic → number, logical/comparison → boolean, text concatenation → string, unclear/mixed → fallback to string or warn. Always allow user override.
+
+Non-blocking formula/type warnings — warn (but do not block) when arithmetic formula references enum/string fields, or logical formula references incompatible text fields. Show a visible label like "Type mismatch risk" or "Formula may not evaluate safely" so the user understands why a field later becomes null. Surface these warnings in both the create/edit UI and the info/detail view so they remain visible after creation. At runtime, return null on unsafe evaluation.
+
+Business field type inference (when missing):
+
+fixed small allowed_values → enum
+yes/no semantics → boolean
+amount/count/percentage semantics → number
+otherwise → string
+Done looks like
+When a user uploads data for field analysis, each field now shows data_type, allowed_values, and default_value alongside the existing understanding/confidence — all editable
+When AI extracts treatments from SOP PDFs, each created field carries data_type, allowed_values, default_value, and business_meaning
+When a user manually creates or edits a business field, they can set data_type, allowed_values, default_value, and business_meaning
+When a derived field is created, Beacon auto-deduces the data type from the formula and shows it as "deduced type" with user override
+Derived fields with formula/type mismatches show a visible warning label in both the create/edit dialog and the field info view
+For enum fields, a soft warning appears if default_value is not one of allowed_values
+At runtime, Beacon uses safe coercion (toNumber, toBoolean, toDate, toString) and returns null instead of crashing on unsafe conversions
+Out of scope
+Complex type system beyond the 5 MVP types
+Blocking validation on formula/type mismatches (warn only)
+Rebuilding the derived field formula builder UI
+Separate confidence scores per metadata property (one confidence per field is enough)
+Hard validation of allowed_values for non-enum fields
+Requiring business_meaning for source fields
+Tasks
+Extend source field AI extraction — Update the Gemini prompt in the source-field analysis flow to also return data_type (one of: number, boolean, date, string, enum), allowed_values, and default_value per field. Do not require business_meaning for source fields. Apply conservative defaults: unclear type → string, unclear allowed_values → [], unclear default → null. Extend the FieldAnalysisItemSchema (Zod) and FieldReview interface to include these three new properties. Keep one confidence score per field — do not add separate scores for each metadata property. Ensure the two-pass prompt and repair pass handle the new fields. Update the merge logic in the analyze-category route to preserve user edits on these new fields.
+
+Source field metadata UI — In the Data Configuration category analysis UI, display the three new metadata fields for each analyzed field. Data type as a dropdown (number/boolean/date/string/enum), allowed_values as a tag/chip input (prominently shown when type is enum, collapsed otherwise), default_value as a simple raw text input. Save edits back to category_data in the DB.
+
+Extend SOP extraction prompt — Update the SOP/policy treatment draft AI prompt to explicitly request data_type, allowed_values, default_value, and business_meaning for every global_derived_field and global_business_field it produces, using the same conservative defaults. Ensure these values flow through to the policy_fields rows when auto-created.
+
+Business field creation/edit UI — In the AddCustomFieldModal and any field edit dialog, add inputs for data_type (dropdown), allowed_values (tag input, prominent for enum), default_value (raw text input with soft warning if value not in allowed_values for enum type), and business_meaning (textarea). When creating, send these to the backend. When editing, allow updating them. If data_type is missing, apply the simple inference rules: small fixed allowed_values → enum, yes/no semantics → boolean, amount/count/percentage → number, else string.
+
+Derived field type deduction + mismatch warnings — Add a helper function that inspects a derivation config and deduces the output data type (best-effort): arithmetic operators → number, logical/comparison → boolean, text concatenation → string, unclear/mixed → string with warning. Label it as "deduced type" in the UI. Always allow user override. Store the resolved type in the dataType column. When formula references incompatible field types (e.g. arithmetic on enum), show a visible warning label like "Type mismatch risk" or "Formula may not evaluate safely". Surface these warnings in both the create/edit dialog and the field info/detail view so they remain visible after creation.
+
+Runtime safe coercion helpers — Create a shared utility module with toNumber, toBoolean, toDate, toString helpers. Must be strict: return null on unsafe conversion, never invent values. default_value is stored as raw text and parsed only at runtime using these helpers. Add a resolveFieldType helper implementing the exact type priority: user-defined → AI-extracted → system-deduced → fallback string. Use this consistently everywhere.
+
+PATCH /api/policy-fields metadata — Extend the existing PATCH endpoint for policy fields to accept and save dataType, allowedValues, defaultValue, and businessMeaning updates for both business and derived fields.
+
+Relevant files
+shared/schema.ts:36-42
+shared/schema.ts:354-388
+server/ai-engine.ts:471-598
+server/ai-engine.ts:615-670
+server/ai-engine.ts:796-884
+server/ai-engine.ts:1387
+server/routes.ts:490-530
+server/routes.ts:920-970

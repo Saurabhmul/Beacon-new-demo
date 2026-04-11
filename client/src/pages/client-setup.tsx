@@ -3440,12 +3440,12 @@ function DataConfigTab() {
                               <table className="w-full text-sm">
                                 <thead>
                                   <tr className="bg-muted/50 border-b">
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[140px]">Field Name</th>
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Beacon's Understanding</th>
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[160px]">Sample Values</th>
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[90px]">Type</th>
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[140px]">Allowed Values</th>
-                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[90px]">Default</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[100px]">Field Name</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[280px]">Beacon's Understanding</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[100px]">Sample Values</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[75px]">Type</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[100px]">Allowed Values</th>
+                                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[75px]">Default</th>
                                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-[75px]">Confidence</th>
                                     <th className="text-center px-3 py-2 text-xs font-medium text-muted-foreground w-[55px]">Ignore</th>
                                   </tr>
