@@ -6,7 +6,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { deduceTypeFromDerivation, checkFormulaMismatch, inferBusinessFieldType } from "@shared/field-utils";
+import { deduceTypeFromDerivation, checkFormulaMismatch, inferBusinessFieldType, type FieldDataType } from "@shared/field-utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -503,8 +503,8 @@ function FieldInfoPopover({ field, onEdit, policyFields }: { field: PolicyFieldD
   const derivMismatch = (() => {
     if (field.sourceType !== "derived_field" || !field.derivationConfig) return null;
     const cfg = field.derivationConfig as { operator1?: string; operator2?: string; fieldA?: string; operandBType?: string; operandBValue?: string; operandCType?: string; operandCValue?: string };
-    const fieldTypeMap: Record<string, string> = {};
-    (policyFields || []).forEach(f => { fieldTypeMap[f.id] = f.dataType || "string"; });
+    const fieldTypeMap: Record<string, FieldDataType> = {};
+    (policyFields || []).forEach(f => { fieldTypeMap[f.id] = (f.dataType || "string") as FieldDataType; });
     const result = checkFormulaMismatch(cfg, fieldTypeMap);
     return result.hasWarning ? result.message : null;
   })();
@@ -1005,8 +1005,8 @@ function AddCustomFieldModal({ open, policyFields, onClose, onFieldCreated, onFi
                   operandCValue: derivHasStep2 ? derivCValue : undefined,
                 };
                 const { deducedType } = deduceTypeFromDerivation(derivConfig);
-                const fieldTypeMap: Record<string, string> = {};
-                policyFields.forEach(f => { fieldTypeMap[f.id] = f.dataType || "string"; });
+                const fieldTypeMap: Record<string, FieldDataType> = {};
+                policyFields.forEach(f => { fieldTypeMap[f.id] = (f.dataType || "string") as FieldDataType; });
                 const mismatch = checkFormulaMismatch(derivConfig, fieldTypeMap);
                 return (
                   <div className="space-y-1.5 border-t pt-2">

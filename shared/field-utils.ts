@@ -28,12 +28,14 @@ export function toBoolean(value: unknown): boolean | null {
   return null;
 }
 
+const STRICT_DATE_PATTERN = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}([ T]\d{1,2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
 export function toDate(value: unknown): Date | null {
   if (value === null || value === undefined || value === "") return null;
   if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if (trimmed === "") return null;
+    if (trimmed === "" || !STRICT_DATE_PATTERN.test(trimmed)) return null;
     const d = new Date(trimmed);
     if (isNaN(d.getTime())) return null;
     if (d.getFullYear() < 1900 || d.getFullYear() > 2100) return null;
