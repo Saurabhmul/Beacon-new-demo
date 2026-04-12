@@ -17,15 +17,11 @@ export interface DerivedFieldTrace {
   output_value: unknown;
   output_type: "number" | "boolean" | "string" | "date-like" | "null";
   configured_type: string | null;
-  deduced_type: string | null;
+  deduced_type: string;
   typeMismatchWarning: boolean;
   nullReason: string | null;
   warningMessage: string | null;
 }
-
-// Any string value longer than this threshold is treated as narrative text, regardless of metadata.
-// Scalar field values (names, numbers, dates, statuses) are never this long.
-const NARRATIVE_TEXT_LENGTH_THRESHOLD = 500;
 
 const SAFE_BOOLEAN_STRINGS: Record<string, boolean> = {
   "true": true, "yes": true, "1": true,
@@ -75,22 +71,15 @@ function getSourceMapMeta(sourceMap: Record<string, unknown>): SourceMapMeta | u
 }
 
 /**
- * Returns true if the field is tagged as a narrative text source in the meta OR
- * if its resolved value is a suspiciously long string (> NARRATIVE_TEXT_LENGTH_THRESHOLD chars),
- * indicating it is a narrative/guidance blob and not a scalar field value.
+ * Returns true only when the field is tagged as a narrative text source in the caller-supplied
+ * provenance metadata. No heuristics are applied — callers are responsible for accurately
+ * declaring which fields carry unstructured guidance text.
  */
 function isNarrativeTextField(fieldId: string, sourceMap: Record<string, unknown>): boolean {
   const meta = getSourceMapMeta(sourceMap);
-  if (meta) {
-    if (fieldId in meta.narrativeTextFields) return true;
-    if (Object.keys(meta.narrativeTextFields).some(k => k.toLowerCase() === fieldId.toLowerCase())) return true;
-  }
-  // Length-based heuristic: catch narrative blobs that arrive without provenance metadata
-  const resolvedVal = resolveFromMap(fieldId, sourceMap);
-  if (typeof resolvedVal === "string" && resolvedVal.trim().length > NARRATIVE_TEXT_LENGTH_THRESHOLD) {
-    return true;
-  }
-  return false;
+  if (!meta) return false;
+  if (fieldId in meta.narrativeTextFields) return true;
+  return Object.keys(meta.narrativeTextFields).some(k => k.toLowerCase() === fieldId.toLowerCase());
 }
 
 function evaluateArithmetic(
@@ -192,23 +181,32 @@ function applyOperator(a: number, b: number, op: string): number | null {
 
 type AnyCondition = Record<string, unknown>;
 
+type LogicalEvalResult =
+  | { kind: "value"; value: boolean }
+  | { kind: "null"; nullReason: string; warningMessage: string }
+  | { kind: "narrative" };
+
 function evaluateLogicalCondition(
   condition: AnyCondition,
   sourceMap: Record<string, unknown>,
   inputsUsed: DerivedFieldTrace["inputs_used"]
-): boolean | null | "unstructured_guidance" {
+): LogicalEvalResult {
   if ("conditions" in condition && Array.isArray(condition.conditions)) {
     const group = condition as { operator: string; conditions: AnyCondition[] };
     const results = group.conditions.map(c => evaluateLogicalCondition(c, sourceMap, inputsUsed));
-    if (results.some(r => r === "unstructured_guidance")) return "unstructured_guidance";
+
+    if (results.some(r => r.kind === "narrative")) return { kind: "narrative" };
+
     if (group.operator === "AND") {
-      if (results.some(r => r === false)) return false;
-      if (results.some(r => r === null)) return null;
-      return true;
+      if (results.some(r => r.kind === "value" && !r.value)) return { kind: "value", value: false };
+      const firstNull = results.find((r): r is Extract<LogicalEvalResult, { kind: "null" }> => r.kind === "null");
+      if (firstNull) return firstNull;
+      return { kind: "value", value: true };
     } else {
-      if (results.some(r => r === true)) return true;
-      if (results.some(r => r === null)) return null;
-      return false;
+      if (results.some(r => r.kind === "value" && r.value)) return { kind: "value", value: true };
+      const firstNull = results.find((r): r is Extract<LogicalEvalResult, { kind: "null" }> => r.kind === "null");
+      if (firstNull) return firstNull;
+      return { kind: "value", value: false };
     }
   }
 
@@ -217,59 +215,64 @@ function evaluateLogicalCondition(
 
   if (isNarrativeTextField(fieldKey, sourceMap)) {
     inputsUsed[fieldKey] = { value: null, sourceKind: undefined };
-    return "unstructured_guidance";
+    return { kind: "narrative" };
   }
 
   const rawVal = resolveFromMap(fieldKey, sourceMap);
   const sk = determineSourceKind(fieldKey, sourceMap);
   inputsUsed[fieldKey] = { value: rawVal, sourceKind: sk };
 
-  if (rawVal === null || rawVal === undefined) return null;
+  if (rawVal === null || rawVal === undefined) {
+    return { kind: "null", nullReason: "missing dependency", warningMessage: `field "${fieldKey}" is null or missing` };
+  }
 
   const op = leaf.operator;
 
   if (op === "is_true") {
     const c = safeBooleanCoerce(rawVal);
-    return c.ok ? c.value! : null;
+    if (!c.ok) return { kind: "null", nullReason: "unsafe coercion", warningMessage: c.reason || `cannot coerce "${fieldKey}" to boolean for is_true` };
+    return { kind: "value", value: c.value! };
   }
   if (op === "is_false") {
     const c = safeBooleanCoerce(rawVal);
-    return c.ok ? !c.value! : null;
+    if (!c.ok) return { kind: "null", nullReason: "unsafe coercion", warningMessage: c.reason || `cannot coerce "${fieldKey}" to boolean for is_false` };
+    return { kind: "value", value: !c.value! };
   }
-  if (op === "exists") return rawVal !== null && rawVal !== undefined;
-  if (op === "not_exists") return rawVal === null || rawVal === undefined;
+  if (op === "exists") return { kind: "value", value: rawVal !== null && rawVal !== undefined };
+  if (op === "not_exists") return { kind: "value", value: rawVal === null || rawVal === undefined };
 
   const compareVal = leaf.value;
 
   if (op === "in") {
     const arr = Array.isArray(compareVal) ? compareVal : [compareVal];
-    return arr.includes(rawVal) || arr.map(String).includes(String(rawVal));
+    return { kind: "value", value: arr.includes(rawVal) || arr.map(String).includes(String(rawVal)) };
   }
   if (op === "not_in") {
     const arr = Array.isArray(compareVal) ? compareVal : [compareVal];
-    return !(arr.includes(rawVal) || arr.map(String).includes(String(rawVal)));
+    return { kind: "value", value: !(arr.includes(rawVal) || arr.map(String).includes(String(rawVal))) };
   }
   if (op === "contains") {
-    return String(rawVal).toLowerCase().includes(String(compareVal).toLowerCase());
+    return { kind: "value", value: String(rawVal).toLowerCase().includes(String(compareVal).toLowerCase()) };
   }
 
   const numericOps = [">", ">=", "<", "<="];
   if (numericOps.includes(op)) {
     const leftNum = safeNumericCoerce(rawVal);
     const rightNum = safeNumericCoerce(compareVal);
-    if (!leftNum.ok || !rightNum.ok) return null;
+    if (!leftNum.ok) return { kind: "null", nullReason: "unsafe coercion", warningMessage: leftNum.reason || `cannot coerce field "${fieldKey}" to number` };
+    if (!rightNum.ok) return { kind: "null", nullReason: "unsafe coercion", warningMessage: rightNum.reason || `cannot coerce comparison value to number` };
     switch (op) {
-      case ">": return leftNum.value! > rightNum.value!;
-      case ">=": return leftNum.value! >= rightNum.value!;
-      case "<": return leftNum.value! < rightNum.value!;
-      case "<=": return leftNum.value! <= rightNum.value!;
+      case ">": return { kind: "value", value: leftNum.value! > rightNum.value! };
+      case ">=": return { kind: "value", value: leftNum.value! >= rightNum.value! };
+      case "<": return { kind: "value", value: leftNum.value! < rightNum.value! };
+      case "<=": return { kind: "value", value: leftNum.value! <= rightNum.value! };
     }
   }
 
-  if (op === "=") return String(rawVal) === String(compareVal);
-  if (op === "!=") return String(rawVal) !== String(compareVal);
+  if (op === "=") return { kind: "value", value: String(rawVal) === String(compareVal) };
+  if (op === "!=") return { kind: "value", value: String(rawVal) !== String(compareVal) };
 
-  return null;
+  return { kind: "null", nullReason: "incompatible formula/type", warningMessage: `unknown logical operator "${op}"` };
 }
 
 function resolveFromMap(fieldId: string, sourceMap: Record<string, unknown>): unknown {
@@ -293,11 +296,17 @@ function determineSourceKind(
   return undefined;
 }
 
-function deduceType(config: Record<string, unknown>): string | null {
+/**
+ * Best-effort type deduction from config:
+ *  - arithmetic (explicit or implicit default) → "number"
+ *  - logical → "boolean"
+ *  - anything else (unclear/mixed/unknown) → "string" as a safe fallback
+ */
+function deduceType(config: Record<string, unknown>): string {
   const type = config.type as string | undefined;
   if (!type || type === "arithmetic") return "number";
   if (type === "logical") return "boolean";
-  return null;
+  return "string";
 }
 
 function makeSourceMapMeta(
@@ -326,7 +335,6 @@ function partitionCyclicNodes(unsortedNodes: FieldNode[]): {
 } {
   const unsortedSet = new Set(unsortedNodes.map(n => n.fieldName.toLowerCase()));
 
-  // Build adjacency list restricted to the unsorted subgraph
   const adj = new Map<string, string[]>();
   for (const node of unsortedNodes) {
     const key = node.fieldName.toLowerCase();
@@ -336,7 +344,6 @@ function partitionCyclicNodes(unsortedNodes: FieldNode[]): {
     );
   }
 
-  // DFS self-reachability: a node is truly cyclic if it can reach itself
   const trulyCyclicSet = new Set<string>();
   for (const node of unsortedNodes) {
     const start = node.fieldName.toLowerCase();
@@ -363,6 +370,18 @@ function partitionCyclicNodes(unsortedNodes: FieldNode[]): {
   };
 }
 
+/**
+ * Compute all derived fields in dependency order.
+ *
+ * @param derivedFields       Derived PolicyFieldRecords from the policy configuration.
+ * @param resolvedSourceFields Scalar values resolved from structured source fields.
+ * @param businessFields       Scalar AI-inferred business field values.
+ * @param narrativeTextFieldIds Optional map of field IDs/labels that carry raw narrative text
+ *                              (compliance rulebook sections, knowledge-base guidance, etc.)
+ *                              and must NOT be used as formula operands. The caller is responsible
+ *                              for declaring these accurately. Any operand matching a key in this
+ *                              map produces nullReason = "unstructured guidance operand".
+ */
 export function computeDerivedFields(
   derivedFields: PolicyFieldRecord[],
   resolvedSourceFields: Record<string, unknown>,
@@ -376,10 +395,6 @@ export function computeDerivedFields(
 
   const { sorted: topoSorted, cyclic: topoUnsorted } = topologicalSort(fieldNodes);
 
-  // Separate truly cyclic nodes (in a cycle) from downstream-blocked nodes (depend on a cycle)
-  // Only truly cyclic nodes get nullReason = "cycle detected".
-  // Downstream-blocked nodes are appended to the evaluation pass and naturally resolve
-  // to nullReason = "missing dependency" when their cyclic upstream evaluates to null.
   const { trulyCyclic, downstreamBlocked } = partitionCyclicNodes(topoUnsorted);
   const cyclicNames = new Set(trulyCyclic.map(c => c.fieldName.toLowerCase()));
   const cyclicGroup = trulyCyclic.map(c => c.fieldName).join(", ");
@@ -389,8 +404,6 @@ export function computeDerivedFields(
 
   const fieldByName = new Map(derivedFields.map(f => [f.label.toLowerCase(), f]));
 
-  // Emit cycle-detected traces first; register null values so downstream fields
-  // can propagate correctly via the hasMissingDep check.
   for (const node of trulyCyclic) {
     const field = fieldByName.get(node.fieldName.toLowerCase());
     if (!field) continue;
@@ -410,8 +423,6 @@ export function computeDerivedFields(
     computedValues[field.label] = null;
   }
 
-  // Evaluate topo-sorted fields first, then downstream-blocked fields.
-  // Downstream-blocked fields will naturally fail via null propagation.
   const evalOrder = [...topoSorted, ...downstreamBlocked];
 
   for (const node of evalOrder) {
@@ -440,14 +451,12 @@ export function computeDerivedFields(
     for (const dep of deps) {
       const depLower = dep.toLowerCase();
 
-      // Direct cycle membership
       if (cyclicNames.has(depLower)) {
         hasMissingDep = true;
         warningMessage = `dependency "${dep}" is in a cycle and could not be computed`;
         break;
       }
 
-      // Upstream derived field that evaluated to null propagates as missing dependency
       const computedDepKey = Object.keys(computedValues).find(k => k.toLowerCase() === depLower);
       if (computedDepKey !== undefined && computedValues[computedDepKey] === null) {
         hasMissingDep = true;
@@ -455,7 +464,6 @@ export function computeDerivedFields(
         break;
       }
 
-      // Completely unknown field (not in source, business, or any computed map)
       const inSource = dep in resolvedSourceFields || Object.keys(resolvedSourceFields).some(k => k.toLowerCase() === depLower);
       const inBusiness = dep in businessFields || Object.keys(businessFields).some(k => k.toLowerCase() === depLower);
       const inComputed = computedDepKey !== undefined;
@@ -497,14 +505,14 @@ export function computeDerivedFields(
       }
     } else if (configType === "logical") {
       const logicalResult = evaluateLogicalCondition(config as AnyCondition, currentSourceMap, inputsUsed);
-      if (logicalResult === "unstructured_guidance") {
+      if (logicalResult.kind === "narrative") {
         nullReason = "unstructured guidance operand";
         warningMessage = "logical condition references a narrative text field that cannot be used as an operand";
-      } else if (logicalResult === null) {
-        nullReason = "missing dependency";
-        warningMessage = "logical condition could not be evaluated — one or more operands are null";
+      } else if (logicalResult.kind === "null") {
+        nullReason = logicalResult.nullReason;
+        warningMessage = logicalResult.warningMessage;
       } else {
-        outputValue = logicalResult;
+        outputValue = logicalResult.value;
       }
     } else {
       nullReason = "incompatible formula/type";
@@ -514,7 +522,7 @@ export function computeDerivedFields(
     const outputType = classifyOutputType(outputValue);
     let typeMismatchWarning = false;
 
-    // Check mismatch against configured type; fall back to deduced type when no override is set.
+    // Compare against configured type first; fall back to deduced type.
     const effectiveType = configuredType ?? deducedType;
     if (outputValue !== null && effectiveType) {
       const typeMatch = checkTypeMatch(outputType, effectiveType);
