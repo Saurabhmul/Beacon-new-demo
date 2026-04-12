@@ -423,7 +423,11 @@ export function computeDerivedFields(
     computedValues[field.label] = null;
   }
 
-  const evalOrder = [...topoSorted, ...downstreamBlocked];
+  // Topologically sort downstream-blocked nodes among themselves so that any
+  // inter-blocked dependencies are correctly ordered and null propagates with the most
+  // precise provenance (upstream-null derived field) rather than "field not found".
+  const { sorted: sortedBlocked } = topologicalSort(downstreamBlocked);
+  const evalOrder = [...topoSorted, ...sortedBlocked];
 
   for (const node of evalOrder) {
     const field = fieldByName.get(node.fieldName.toLowerCase());
@@ -516,7 +520,7 @@ export function computeDerivedFields(
       }
     } else {
       nullReason = "incompatible formula/type";
-      warningMessage = `unknown derivation type "${configType}"`;
+      warningMessage = `unknown derivation type "${configType}"; type deduction fell back to "string"`;
     }
 
     const outputType = classifyOutputType(outputValue);
