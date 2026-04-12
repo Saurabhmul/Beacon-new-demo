@@ -1,0 +1,80 @@
+Small final improvements I would still suggest
+
+These are not blockers, just polish.
+
+1. Define what “safe mapping” means for evidence normalization
+
+Right now it says:
+
+normalize if safely mapped
+
+I would ask Replit to define a tiny mapping table, for example:
+
+source → source_field
+payment_history → payment
+conversation_note → conversation
+bureau_record → bureau
+
+Why:
+otherwise “safe mapping” can become inconsistent.
+
+2. Make confidence downgrade explicit after retry
+
+If the first response fails validation and the second succeeds, I would recommend:
+
+keep the field if valid
+but do not allow extremely high confidence unless the evidence supports it
+
+Why:
+a repaired answer should not automatically look ultra-confident.
+
+3. Clarify empty-object vs empty-array by section
+
+The plan says empty arrays/objects when absent, which is good.
+
+I would ask Replit to define which sections are arrays and which are objects.
+
+For example:
+
+customerProfile → object
+resolvedSourceFields → object
+loanData, paymentData, conversationData, bureauData, incomeEmploymentData → arrays or structured objects, but defined consistently
+compliancePolicyInternalRules → array
+knowledgeBaseAgentGuidance → array
+
+Why:
+stable prompt shape only works if section shapes are also stable.
+
+4. Add one line on null rationale consistency
+
+When a field becomes null due to:
+
+timeout
+schema failure
+insufficient evidence
+
+make sure null_reason is always set consistently and rationale is either empty or still concise and factual.
+
+Why:
+prevents messy traces.
+
+5. Clarify where included_context_sections should come from
+
+I would ask Replit to record a section as “included” only if it is non-empty after truncation/preprocessing, not just because the key exists.
+
+Why:
+otherwise every field trace may show all 10 sections even when most were empty placeholders.
+
+Suggested final note to Replit
+
+You can send this:
+
+Final refinements for Task 43
+
+This plan is good and close to final. Please add these small clarifications:
+
+Define a small explicit mapping table for evidence type normalization, so “safe mapping” is deterministic.
+If a response succeeds only after retry, do not let confidence remain unrealistically high unless evidence supports it.
+Define stable shapes for each context section so empty arrays/objects are used consistently by section.
+Keep null_reason consistent for all null outcomes (timeout, schema failure, insufficient evidence).
+Only record a section in included_context_sections if it is non-empty after truncation/preprocessing.
