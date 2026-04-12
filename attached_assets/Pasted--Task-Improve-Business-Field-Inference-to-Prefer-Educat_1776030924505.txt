@@ -1,0 +1,316 @@
+# Task — Improve Business Field Inference to Prefer Educated Judgement Over "Insufficient Evidence"
+
+## Goal
+
+Improve **all business field evaluation** so the model makes the **best reasonable inference from available data**, instead of overusing responses like **"insufficient evidence"**, **"not sure"**, or equivalent weak outputs when some usable signals are present.
+
+This change must apply **generically across all customers and all business fields**. It must not include any customer-specific logic, company-specific tuning, or field-name-specific hacks.
+
+---
+
+## Why this change is needed
+
+Today, business field evaluation is behaving too conservatively.
+
+In many cases, the AI effectively says:
+
+* "I would need a completed form"
+* "I would need income data"
+* "I would need better evidence"
+* therefore "insufficient evidence"
+
+That is the wrong operating behavior for business fields.
+
+### Why it is a problem
+
+Business fields are supposed to support downstream decisions. If the model defaults too often to "insufficient evidence," then:
+
+* downstream reasoning becomes weaker
+* derived logic becomes less useful
+* the review experience becomes less actionable
+* the model becomes overly dependent on ideal data rather than real-world partial data
+
+In practice, many cases will always have incomplete data. The model must still make a useful directional judgement from what is available.
+
+### Desired behavior
+
+The model should behave like a careful analyst:
+
+* use the strongest evidence available first
+* if direct/verified data is missing, fall back to indirect but still useful signals
+* make an educated inference when enough signal exists
+* lower **confidence** when evidence is weaker
+* clearly explain uncertainty in the rationale
+* reserve **"insufficient evidence" / "not sure"** only for cases with genuinely minimal or unusable signal
+
+### Example
+
+For **Affordability**, absence of a completed forbearance form or verified income should **not** automatically force "insufficient evidence".
+
+The model should still use available signals such as:
+
+* payment history
+* repeated failed payments
+* arrears / delinquency severity
+* hardship language in conversations
+* customer engagement / responsiveness
+* prior promises to pay / broken promises
+
+That should lead to an inference with lower confidence, rather than a non-answer.
+
+---
+
+## Scope
+
+This change is for **all business field evaluation**.
+
+That means:
+
+* every business field should prefer a best-effort inference when meaningful signal exists
+* this is **not limited** to Affordability, Willingness, or Vulnerability, though those are important examples
+* do not hardcode per-customer rules
+* do not hardcode per-field outputs
+* do not special-case Prodigy Finance or any other company
+
+---
+
+## Principle to implement
+
+### New evaluation rule
+
+For every business field:
+
+> Missing ideal data should reduce confidence, not automatically block inference.
+
+And:
+
+> "Insufficient evidence" / "not sure" should be used only when the available signal is truly too weak, too sparse, or too contradictory to support even a directional judgement.
+
+This is the core behavioral change.
+
+---
+
+## What I want investigated
+
+Please inspect the full business field evaluation flow and identify where this behavior is currently controlled.
+
+Check:
+
+* the business field generation prompt/instructions
+* any system prompt or helper prompt used for business field evaluation
+* any post-processing / output validation logic
+* any fallback logic that converts weak confidence into "insufficient evidence"
+* any business-field-specific parsing or normalization rules
+
+Please determine whether the current overuse of "insufficient evidence" is caused by:
+
+1. prompt wording,
+2. downstream guardrails,
+3. post-processing,
+4. or a combination of these.
+
+---
+
+## Expected solution approach
+
+I expect this to be handled primarily through **prompt/instruction changes**, with optional lightweight guardrails if needed.
+
+### Preferred implementation strategy
+
+1. **Prompt change first**
+
+   * Change the business-field instructions so the model is explicitly told to make a best-effort inference from partial evidence.
+   * Tell it to treat missing ideal evidence as a confidence reducer, not an inference blocker.
+
+2. **Lightweight output guardrail if needed**
+
+   * If prompt-only behavior is still unstable, add a minimal generic guardrail that discourages "insufficient evidence" when meaningful signals exist.
+   * This must remain generic and must not become a brittle rules engine.
+
+### Important
+
+Do **not** solve this by hardcoding field-specific labels like:
+
+* if field = Affordability then force Low
+* if field = Willingness then map failed payments to Low
+
+That is not acceptable.
+
+The solution should improve the model’s reasoning quality, not replace it with hardcoded business outcomes.
+
+---
+
+## Exact prompt changes requested
+
+Please update the **business field evaluation prompt/instructions** so that it includes the following ideas explicitly.
+
+### Add these instructions
+
+#### 1) Core inference behavior
+
+Add instruction text equivalent to:
+
+> Your task is to infer each business field using the best available evidence in the case. In real-world cases, data is often incomplete. You must make the most reasonable judgement possible from the evidence that exists, rather than refusing to infer simply because stronger or more direct evidence is missing.
+
+#### 2) Missing data handling
+
+Add instruction text equivalent to:
+
+> Missing ideal, direct, or verified data should lower confidence, but should not automatically result in "insufficient evidence" or "not sure" if other meaningful signals are present.
+
+#### 3) Use indirect evidence
+
+Add instruction text equivalent to:
+
+> When direct evidence is unavailable, use indirect but relevant evidence such as payment history, delinquency severity, failed payments, contact patterns, conversation history, hardship disclosures, responsiveness, broken promises, prior arrangements, and other behavioral or financial signals available in the case.
+
+#### 4) Reserve non-answer states for truly sparse cases
+
+Add instruction text equivalent to:
+
+> Use "insufficient evidence" / "not sure" only when the case contains genuinely too little usable signal, or when the available signals are so contradictory that even a directional judgement would be unreliable.
+
+#### 5) Confidence calibration
+
+Add instruction text equivalent to:
+
+> Separate the inference from the confidence. You should still make a directional inference when there is meaningful but imperfect evidence, and reflect uncertainty by lowering the confidence score and explaining the limitations in the rationale.
+
+#### 6) No wishful deferral
+
+Add instruction text equivalent to:
+
+> Do not base your answer primarily on what additional data would have been helpful. You may mention missing data briefly in the rationale, but your main task is to infer from the data that is actually available.
+
+#### 7) Operational usefulness
+
+Add instruction text equivalent to:
+
+> Prefer an operationally useful judgement grounded in evidence over a non-committal answer. The output should help downstream review and decisioning.
+
+---
+
+## Suggested prompt block to insert
+
+Use this as the new instruction block, or incorporate it cleanly into the existing business field prompt:
+
+```text
+Inference standard for business fields
+You must infer each business field using the best available evidence in the case.
+
+Real-world cases often have incomplete data. Missing ideal, direct, or verified data should reduce confidence, but should not automatically prevent inference when other meaningful signals are present.
+
+When direct evidence is absent, use indirect but relevant signals such as payment history, delinquency severity, failed payments, conversation history, hardship disclosures, responsiveness, prior broken promises, prior arrangements, and other available behavioral or financial evidence.
+
+Your job is to make the most reasonable evidence-based judgement possible from the data that exists now. Do not primarily explain what extra data would have been helpful instead of making an inference.
+
+Use "insufficient evidence" or "not sure" only when the case contains genuinely too little usable signal, or when the evidence is so contradictory that even a directional judgement would be unreliable.
+
+Separate inference from confidence: when evidence is partial or indirect, still make a directional inference and reflect uncertainty through lower confidence and a rationale that explains the limitation.
+
+Prefer an operationally useful judgement grounded in available evidence over a non-committal answer.
+```
+
+---
+
+## Additional prompt refinement for rationale
+
+Please also adjust the rationale instructions so the model explains uncertainty correctly.
+
+### Rationale behavior wanted
+
+The rationale should:
+
+* explain **what evidence was used**
+* explain **why the inference is still reasonable**
+* mention **missing data only as a limitation**, not as the main conclusion
+
+### Good rationale style
+
+Good:
+
+* "Recent payment failures, arrears status, and the customer’s hardship statements suggest low affordability, although confidence is moderate because no verified income data is available."
+
+Bad:
+
+* "The customer did not complete the form, so affordability cannot be inferred."
+
+Please update rationale instructions to reinforce that pattern.
+
+---
+
+## Possible lightweight guardrail (only if needed)
+
+If prompt-only changes are not reliable enough, add a **minimal generic guardrail**.
+
+### Acceptable guardrail behavior
+
+If the model returns a non-answer such as "insufficient evidence" / "not sure", but the case clearly contains multiple meaningful signals, then:
+
+* re-prompt once, or
+* apply a generic retry instruction,
+* asking the model to produce a best-effort inference from available evidence and express uncertainty through confidence instead.
+
+### Important guardrail constraints
+
+* keep it generic
+* do not create field-name-specific business logic
+* do not create customer-specific rules
+* do not replace reasoning with deterministic mappings
+
+This should be a fallback only if prompt changes are not enough.
+
+---
+
+## What not to do
+
+Do not:
+
+* hardcode Prodigy Finance handling
+* hardcode any company-specific behavior
+* hardcode outcomes for specific fields
+* force a specific label without model reasoning
+* treat missing forms or missing income as automatic blockers
+* add a brittle rules engine that bypasses AI reasoning entirely
+
+---
+
+## Deliverables expected back
+
+Please return:
+
+1. **Root cause** of why business fields currently overuse "insufficient evidence"
+2. **Exact files changed**
+3. **Exact prompt changes made**
+4. Whether prompt changes alone were sufficient, or whether a lightweight guardrail was also required
+5. Confirmation that no customer-specific or field-specific hardcoding was introduced
+6. Before/after examples showing that business fields now make educated inferences from partial evidence
+
+---
+
+## Acceptance criteria
+
+This task is done when:
+
+* business field evaluation across the platform is less likely to return "insufficient evidence" when meaningful signals exist
+* missing ideal data lowers confidence rather than blocking inference
+* rationales focus on available evidence first, missing data second
+* the change applies generically across all customers and business fields
+* no customer-specific or field-name-specific hardcoding exists
+
+---
+
+## Example of desired behavior after fix
+
+### Before
+
+* "Affordability = insufficient evidence"
+* rationale mainly says no form / no income data
+
+### After
+
+* "Affordability = low"
+* confidence = low or moderate
+* rationale says repeated failed payments, arrears status, hardship request, and lack of repayment recovery indicate constrained affordability; confidence is limited because no verified income data is available
+
+That is the behavior I want across business field evaluation.

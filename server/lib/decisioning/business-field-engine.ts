@@ -3,6 +3,7 @@ import {
   buildBusinessFieldSystemPrompt,
   buildBusinessFieldUserPrompt,
   buildBusinessFieldRetryPrompt,
+  buildBusinessFieldInsufficientEvidenceRetryPrompt,
   type BusinessFieldMeta,
 } from "./prompts/business-field-prompt";
 import {
@@ -220,12 +221,16 @@ async function callAIForField(
   context: ContextSections,
   isRetry: boolean,
   previousRawResponse?: string,
-  validationError?: string
+  validationError?: string,
+  retryPromptOverride?: string
 ): Promise<{ rawText: string; parsed: Record<string, unknown> | null }> {
   const systemPrompt = buildBusinessFieldSystemPrompt();
-  const userPrompt = isRetry && validationError
-    ? buildBusinessFieldUserPrompt(field, context) + "\n\n" + buildBusinessFieldRetryPrompt(validationError)
-    : buildBusinessFieldUserPrompt(field, context);
+  let userPrompt = buildBusinessFieldUserPrompt(field, context);
+  if (isRetry && retryPromptOverride) {
+    userPrompt += "\n\n" + retryPromptOverride;
+  } else if (isRetry && validationError) {
+    userPrompt += "\n\n" + buildBusinessFieldRetryPrompt(validationError);
+  }
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-pro",
@@ -258,7 +263,11 @@ function parseAndNormalizeEvidence(parsed: Record<string, unknown>): BusinessFie
   return normalized;
 }
 
-const INSUFFICIENT_EVIDENCE_CONFIDENCE_THRESHOLD = 0.4;
+// Threshold below which a non-null inference is coerced to null.
+// Intentionally low (0.15) so that low-confidence but directional inferences
+// (e.g. confidence=0.25, value="Low") are preserved rather than suppressed.
+// Only near-zero-confidence values are nullified by this guardrail.
+const INSUFFICIENT_EVIDENCE_CONFIDENCE_THRESHOLD = 0.15;
 
 function enforceConfidencePolicy(
   confidence: number | null,
@@ -479,7 +488,62 @@ export async function inferBusinessFields(
           result = applyInsufficientEvidenceNormalization(extractFieldResult(parsed, field, 1, rawText, false));
         }
       } else {
-        result = applyInsufficientEvidenceNormalization(extractFieldResult(parsed, field, 0, rawText, false));
+        // First response is schema-valid. If it returned null with null_reason "insufficient
+        // evidence", fire one generic evidence retry asking the model to reconsider partial
+        // signals. This path is separate from the schema-repair retry above and does not
+        // combine with it — whichever retry fires first is the only retry for that field.
+        const firstExtracted = extractFieldResult(parsed, field, 0, rawText, false);
+        const isInsufficientEvidence =
+          firstExtracted.value === null &&
+          firstExtracted.null_reason === "insufficient evidence";
+
+        if (isInsufficientEvidence) {
+          retryCount = 1;
+          const evRetryCallPromise = callAIForField(
+            field,
+            fieldContext,
+            true,
+            rawText,
+            undefined,
+            buildBusinessFieldInsufficientEvidenceRetryPrompt()
+          );
+          const evRetryTimeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("TIMEOUT")), FIELD_TIMEOUT_MS)
+          );
+
+          let evRetryResult: { rawText: string; parsed: Record<string, unknown> | null };
+          try {
+            evRetryResult = await Promise.race([evRetryCallPromise, evRetryTimeoutPromise]);
+          } catch (err) {
+            if (err instanceof Error && err.message.includes("TIMEOUT")) {
+              result = {
+                value: null,
+                confidence: null,
+                rationale: "",
+                null_reason: "field inference timeout",
+                evidence: [],
+                retryCount: 1,
+                rawAiResponse: rawText,
+              };
+              traces.push(buildTrace(field, result, includedContextSections, truncatedSections, truncationMetrics, summarizationUsed));
+              continue;
+            }
+            throw err;
+          }
+
+          rawText = evRetryResult.rawText;
+          parsed = evRetryResult.parsed;
+
+          const evRetryValidation = validateAfterParse(parsed, field.allowedValues);
+          if (!evRetryValidation.valid) {
+            // Evidence retry produced an invalid schema — preserve the original null result.
+            result = applyInsufficientEvidenceNormalization(firstExtracted);
+          } else {
+            result = applyInsufficientEvidenceNormalization(extractFieldResult(parsed, field, 1, rawText, false));
+          }
+        } else {
+          result = applyInsufficientEvidenceNormalization(firstExtracted);
+        }
       }
     } catch (err) {
       console.error(`[business-field-engine] Error inferring field "${field.label}":`, err);
