@@ -237,7 +237,7 @@ async function callAIForField(
     contents: [
       { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
     ],
-    config: { maxOutputTokens: 2000 },
+    config: { maxOutputTokens: 8000 },
   });
 
   const rawText = response.text || "";
