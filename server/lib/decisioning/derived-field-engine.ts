@@ -72,26 +72,28 @@ function getSourceMapMeta(sourceMap: Record<string, unknown>): SourceMapMeta | u
 }
 
 /**
- * Translates a stored field reference — which may be a numeric DB ID string (e.g. "42") or
- * already a human-readable label — into the canonical label used as a key in all runtime
- * source maps.
+ * Translates a stored field reference into the canonical label used as a key in all runtime
+ * source maps. Three stored formats are recognised, in evaluation order:
  *
- * If `ref` matches a known field ID in `idToLabel`, the corresponding label is returned.
- * Otherwise `ref` is returned unchanged (assumed to already be a label or an unknown key).
+ *   1. `source:fieldname` prefix — strips the `source:` prefix, then continues to step 2.
+ *      This is the legacy format produced by older UI builders and AI-generated configs that
+ *      store source-field references as `source:` + the raw data column name (e.g.
+ *      `"source:amount_due"` → `"amount_due"`).
+ *   2. Numeric DB ID string (e.g. `"42"`) — looks up the corresponding label in `idToLabel`
+ *      and returns it if found.
+ *   3. Plain label or unknown key — returned unchanged (assumed already canonical).
  *
- * This is the single canonical place where ID→label normalization occurs. It is intentionally
- * generic: no customer-specific, field-name-specific, or company-specific logic lives here.
+ * This is the single canonical place where stored-reference → label normalisation occurs.
+ * It is intentionally generic: no customer-specific, field-name-specific, or company-specific
+ * logic lives here.
  *
- * NOTE: The runtime source maps (`resolvedSourceFields`, `businessFields`, `computedValues`)
- * are all keyed by `field.label`. This means that if two fields in `allPolicyFields` share the
- * same label within a policy pack, only one value for that label will exist in the source maps,
- * making lookups for either field ambiguous. `idToLabel` itself is keyed by ID so its
- * construction is safe even with duplicate labels — but the downstream label-keyed lookup is
- * not. A DB-level UNIQUE constraint on (policy_pack_id, label) is a recommended follow-up to
- * enforce the uniqueness assumption and make this safe at the data level.
+ * NOTE: The runtime source maps are all keyed by `field.label`. A DB-level UNIQUE constraint
+ * on (policy_pack_id, label) is a recommended follow-up to enforce the uniqueness assumption
+ * and make duplicate-label lookups safe at the data level.
  */
 function normalizeFieldRef(ref: string, idToLabel: Map<string, string>): string {
-  return idToLabel.get(ref) ?? ref;
+  const bare = ref.startsWith("source:") ? ref.slice(7) : ref;
+  return idToLabel.get(bare) ?? bare;
 }
 
 /**
@@ -503,7 +505,6 @@ export function computeDerivedFields(
     let nullReason: string | null = null;
     let warningMessage: string | null = null;
 
-    const depsRaw = extractDependencies(config, new Map());
     const deps = extractDependencies(config, idToLabel);
     let hasMissingDep = false;
     for (const dep of deps) {
@@ -534,19 +535,6 @@ export function computeDerivedFields(
 
     if (hasMissingDep) {
       nullReason = "missing dependency";
-      console.warn(
-        "[derived-field-engine] missing dependency",
-        JSON.stringify({
-          field_label: field.label,
-          raw_config: config,
-          deps_raw: depsRaw,
-          deps_normalized: deps,
-          source_keys: Object.keys(resolvedSourceFields),
-          business_keys: Object.keys(businessFields),
-          computed_keys: Object.keys(computedValues),
-          warning: warningMessage,
-        })
-      );
       traces.push({
         field_id: String(field.id),
         field_label: field.label,
@@ -638,7 +626,8 @@ function checkTypeMatch(outputType: string, configuredType: string): boolean {
 
 /**
  * Extract all field dependencies from a derivation config, normalizing any stored field reference
- * (numeric DB ID or label) to its canonical label using `idToLabel`.
+ * (numeric DB ID, `source:fieldname` prefix, or plain label) to its canonical label using
+ * `normalizeFieldRef` / `idToLabel`.
  *
  * For arithmetic configs: fieldA, operandBValue (when operandBType === "field"), operandCValue
  * (when operandCType === "field") are extracted and normalized.
@@ -673,15 +662,44 @@ function extractConditionDeps(conditions: AnyCondition[], out: string[], idToLab
   }
 }
 
+/**
+ * Build the resolved source-fields map that the derived-field engine uses as its base lookup
+ * table.
+ *
+ * Precedence (later writes win — explicit source_field records override raw keys):
+ *
+ *   Pass 1 — Raw customer data (generic fallback).
+ *     All non-underscore-prefixed keys from `customerData` are written verbatim. This ensures
+ *     that field references stored in the `source:fieldname` format (which `normalizeFieldRef`
+ *     reduces to a bare name such as `"amount_due"`) can be resolved even when no explicit
+ *     `source_field` records exist in `policyFields`. Internal/aggregate keys (`_payments`,
+ *     `_conversations`, `_payment_count`, `_conversation_count`, etc.) are excluded because
+ *     they are not meaningful as scalar source-field values.
+ *
+ *   Pass 2 — Explicit `source_field` records (takes precedence).
+ *     Entries in `policyFields` with `sourceType === "source_field"` are resolved by their
+ *     `field.label` key (with a lowercase-label fallback) and written last, so they override
+ *     any raw key that shares the same name.
+ */
 export function buildResolvedSourceFieldsMap(
   customerData: Record<string, unknown>,
   policyFields: PolicyFieldRecord[]
 ): Record<string, unknown> {
-  const sourceFields = policyFields.filter(f => f.sourceType === "source_field");
   const result: Record<string, unknown> = {};
+
+  // Pass 1: raw customer data as the generic fallback source map.
+  for (const [key, val] of Object.entries(customerData)) {
+    if (!key.startsWith("_") && val !== undefined) {
+      result[key] = val;
+    }
+  }
+
+  // Pass 2: explicit source_field records take precedence over raw keys.
+  const sourceFields = policyFields.filter(f => f.sourceType === "source_field");
   for (const field of sourceFields) {
     const val = customerData[field.label] ?? customerData[field.label.toLowerCase()];
     if (val !== undefined) result[field.label] = val;
   }
+
   return result;
 }

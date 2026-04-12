@@ -280,19 +280,132 @@ describe("UI fallback — old traces without field_label", () => {
 });
 
 describe("buildResolvedSourceFieldsMap", () => {
-  it("maps customer data to source field labels generically", () => {
+  it("includes source_field-mapped entries keyed by their label", () => {
     const src1 = makeSourceField(1, "Outstanding Balance");
     const src2 = makeSourceField(2, "Days Past Due");
 
     const customerData = {
       "Outstanding Balance": 5000,
       "Days Past Due": 45,
-      irrelevant_field: "ignored",
     };
 
     const result = buildResolvedSourceFieldsMap(customerData, [src1, src2]);
     expect(result["Outstanding Balance"]).toBe(5000);
     expect(result["Days Past Due"]).toBe(45);
-    expect("irrelevant_field" in result).toBe(false);
+  });
+
+  it("includes all non-underscore-prefixed raw customer data keys as a fallback (Pass 1)", () => {
+    const customerData = {
+      amount_due: 800,
+      minimum_due: 120,
+      _payments: [{ amount: 50 }],
+      _payment_count: 1,
+    };
+
+    const result = buildResolvedSourceFieldsMap(customerData, []);
+    expect(result["amount_due"]).toBe(800);
+    expect(result["minimum_due"]).toBe(120);
+    expect("_payments" in result).toBe(false);
+    expect("_payment_count" in result).toBe(false);
+  });
+
+  it("explicit source_field records (Pass 2) take precedence over a raw key with the same name", () => {
+    const src = makeSourceField(1, "amount_due");
+    const customerData = {
+      amount_due: 999,
+    };
+
+    const result = buildResolvedSourceFieldsMap(customerData, [src]);
+    expect(result["amount_due"]).toBe(999);
+  });
+
+  it("source_field label overrides a raw key when the label differs in casing", () => {
+    const src = makeSourceField(1, "Amount Due");
+    const customerData = {
+      "amount due": 750,
+      "Amount Due": 800,
+    };
+
+    const result = buildResolvedSourceFieldsMap(customerData, [src]);
+    expect(result["Amount Due"]).toBe(800);
+  });
+});
+
+describe("normalizeFieldRef — source: prefix format", () => {
+  it("resolves arithmetic config where fieldA and operandBValue use source: prefix", () => {
+    const derived = makeDerivedField(100, "Total Arrears", {
+      fieldA: "source:amount_due",
+      fieldALabel: "amount_due",
+      operator1: "-",
+      operandBType: "field",
+      operandBValue: "source:minimum_due",
+      operandBLabel: "minimum_due",
+    });
+
+    const customerData = {
+      amount_due: 800,
+      minimum_due: 120,
+    };
+
+    const resolvedSourceFields = buildResolvedSourceFieldsMap(customerData, []);
+    const traces = computeDerivedFields([derived], resolvedSourceFields, {}, {}, [derived]);
+
+    expect(traces).toHaveLength(1);
+    const trace = traces[0];
+    expect(trace.field_label).toBe("Total Arrears");
+    expect(trace.nullReason).toBeNull();
+    expect(trace.output_value).toBe(680);
+  });
+
+  it("resolves when one operand is a numeric ID and the other uses source: prefix", () => {
+    const businessField = { id: 1, label: "Affordability" } as PolicyFieldRecord & { sourceType: "business_field" };
+    const derived = makeDerivedField(101, "Affordability as % of Min Due", {
+      fieldA: "1",
+      fieldALabel: "Affordability",
+      operator1: "/",
+      operandBType: "field",
+      operandBValue: "source:minimum_due",
+      operandBLabel: "minimum_due",
+    });
+
+    const customerData = { minimum_due: 200 };
+    const resolvedSourceFields = buildResolvedSourceFieldsMap(customerData, []);
+    const allPolicyFields = [
+      { ...businessField, sourceType: "business_field" as const, companyId: "c", policyPackId: 1, displayName: null, description: null, dataType: "number", derivationConfig: null, derivationSummary: null, allowedValues: null, defaultValue: null, businessMeaning: null, aiGenerated: false, createdBy: null, sourceDocumentId: null, createdAt: new Date() },
+      derived,
+    ];
+    const businessFields = { "Affordability": 500 };
+
+    const traces = computeDerivedFields([derived], resolvedSourceFields, businessFields, {}, allPolicyFields);
+
+    expect(traces).toHaveLength(1);
+    expect(traces[0].nullReason).toBeNull();
+    expect(traces[0].output_value).toBe(2.5);
+  });
+
+  it("combined: source: prefix + no source_field records → value resolves from raw data", () => {
+    const derived = makeDerivedField(102, "Six Month Capacity", {
+      fieldA: "source:affordability",
+      fieldALabel: "affordability",
+      operator1: "-",
+      operator2: "*",
+      operandBType: "field",
+      operandBValue: "source:minimum_due",
+      operandBLabel: "minimum_due",
+      operandCType: "constant",
+      operandCValue: "6",
+    });
+
+    const customerData = {
+      affordability: 320,
+      minimum_due: 120,
+    };
+
+    const resolvedSourceFields = buildResolvedSourceFieldsMap(customerData, []);
+    const traces = computeDerivedFields([derived], resolvedSourceFields, {}, {}, [derived]);
+
+    expect(traces).toHaveLength(1);
+    expect(traces[0].nullReason).toBeNull();
+    expect(traces[0].output_value).toBe((320 - 120) * 6);
   });
 });
