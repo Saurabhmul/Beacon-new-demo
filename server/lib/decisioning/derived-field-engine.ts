@@ -290,9 +290,10 @@ function determineSourceKind(
 ): "source_field" | "business_field" | "derived_field" | undefined {
   const meta = getSourceMapMeta(sourceMap);
   if (!meta) return undefined;
-  if (meta.sourceFields && fieldId in meta.sourceFields) return "source_field";
-  if (meta.businessFields && fieldId in meta.businessFields) return "business_field";
-  if (meta.derivedFields && fieldId in meta.derivedFields) return "derived_field";
+  const lower = fieldId.toLowerCase();
+  if (Object.keys(meta.sourceFields).some(k => k.toLowerCase() === lower)) return "source_field";
+  if (Object.keys(meta.businessFields).some(k => k.toLowerCase() === lower)) return "business_field";
+  if (Object.keys(meta.derivedFields).some(k => k.toLowerCase() === lower)) return "derived_field";
   return undefined;
 }
 

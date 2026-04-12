@@ -2455,7 +2455,25 @@ export async function registerRoutes(
                 if (trace.value !== null) businessFieldsMap[trace.field_label] = trace.value;
               }
 
-              const derivedFieldTraces = computeDerivedFields(derivedFieldDefs, resolvedSourceFields, businessFieldsMap);
+              // Build narrative text provenance map: identifiers from knowledge-base guidance
+              // and compliance policy rules represent raw unstructured text that must never
+              // be used as formula operands in derived fields.
+              const narrativeTextFieldIds: Record<string, boolean> = {
+                knowledgeBaseAgentGuidance: true,
+                compliancePolicyInternalRules: true,
+              };
+              for (const rb of rulebookGuidanceItems) {
+                const item = rb as { id?: string; title?: string };
+                if (item.title) narrativeTextFieldIds[item.title] = true;
+                if (item.id) narrativeTextFieldIds[item.id] = true;
+              }
+              for (const rule of compliancePolicyRules) {
+                const r = rule as { id?: string; title?: string };
+                if (r.title) narrativeTextFieldIds[r.title] = true;
+                if (r.id) narrativeTextFieldIds[r.id] = true;
+              }
+
+              const derivedFieldTraces = computeDerivedFields(derivedFieldDefs, resolvedSourceFields, businessFieldsMap, narrativeTextFieldIds);
 
               const derivedFieldsMap: Record<string, unknown> = {};
               for (const trace of derivedFieldTraces) {
