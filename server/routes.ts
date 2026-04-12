@@ -2473,11 +2473,11 @@ export async function registerRoutes(
                 if (r.id) narrativeTextFieldIds[r.id] = true;
               }
 
-              const derivedFieldTraces = computeDerivedFields(derivedFieldDefs, resolvedSourceFields, businessFieldsMap, narrativeTextFieldIds);
+              const derivedFieldTraces = computeDerivedFields(derivedFieldDefs, resolvedSourceFields, businessFieldsMap, narrativeTextFieldIds, allPolicyFields);
 
               const derivedFieldsMap: Record<string, unknown> = {};
               for (const trace of derivedFieldTraces) {
-                if (trace.output_value !== null) derivedFieldsMap[trace.field_id] = trace.output_value;
+                if (trace.output_value !== null) derivedFieldsMap[trace.field_label] = trace.output_value;
               }
 
               const packet = buildDecisionPacket({

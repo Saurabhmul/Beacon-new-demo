@@ -12,6 +12,7 @@ interface SourceMapMeta {
 
 export interface DerivedFieldTrace {
   field_id: string;
+  field_label: string;
   formula: string;
   inputs_used: Record<string, { value: unknown; sourceKind?: "source_field" | "business_field" | "derived_field" }>;
   output_value: unknown;
@@ -71,20 +72,43 @@ function getSourceMapMeta(sourceMap: Record<string, unknown>): SourceMapMeta | u
 }
 
 /**
- * Returns true only when the field is tagged as a narrative text source in the caller-supplied
- * provenance metadata. No heuristics are applied — callers are responsible for accurately
- * declaring which fields carry unstructured guidance text.
+ * Translates a stored field reference — which may be a numeric DB ID string (e.g. "42") or
+ * already a human-readable label — into the canonical label used as a key in all runtime
+ * source maps.
+ *
+ * If `ref` matches a known field ID in `idToLabel`, the corresponding label is returned.
+ * Otherwise `ref` is returned unchanged (assumed to already be a label or an unknown key).
+ *
+ * This is the single canonical place where ID→label normalization occurs. It is intentionally
+ * generic: no customer-specific, field-name-specific, or company-specific logic lives here.
+ *
+ * NOTE: This function (and the `idToLabel` map it consumes) assumes that `label` is unique
+ * within the scope of the policy field set passed to `computeDerivedFields` (i.e., within a
+ * single policy pack's fields for one decision run). A DB-level UNIQUE constraint on
+ * (policy_pack_id, label) is a recommended follow-up to enforce this assumption. If two fields
+ * share a label, `idToLabel` will keep only the last entry for that label during construction.
  */
-function isNarrativeTextField(fieldId: string, sourceMap: Record<string, unknown>): boolean {
+function normalizeFieldRef(ref: string, idToLabel: Map<string, string>): string {
+  return idToLabel.get(ref) ?? ref;
+}
+
+/**
+ * Returns true only when the field is tagged as a narrative text source in the caller-supplied
+ * provenance metadata. The `fieldKey` must already be normalized to a label before calling.
+ * No heuristics are applied — callers are responsible for accurately declaring which fields
+ * carry unstructured guidance text.
+ */
+function isNarrativeTextField(fieldKey: string, sourceMap: Record<string, unknown>): boolean {
   const meta = getSourceMapMeta(sourceMap);
   if (!meta) return false;
-  if (fieldId in meta.narrativeTextFields) return true;
-  return Object.keys(meta.narrativeTextFields).some(k => k.toLowerCase() === fieldId.toLowerCase());
+  if (fieldKey in meta.narrativeTextFields) return true;
+  return Object.keys(meta.narrativeTextFields).some(k => k.toLowerCase() === fieldKey.toLowerCase());
 }
 
 function evaluateArithmetic(
   config: Record<string, unknown>,
-  sourceMap: Record<string, unknown>
+  sourceMap: Record<string, unknown>,
+  idToLabel: Map<string, string>
 ): { value: number | null; nullReason: string | null; warningMessage: string | null; inputsUsed: DerivedFieldTrace["inputs_used"] } {
   const inputsUsed: DerivedFieldTrace["inputs_used"] = {};
 
@@ -99,32 +123,43 @@ function evaluateArithmetic(
       return { ok: true, num: n };
     }
     if (opType === "field" && opValue) {
-      if (isNarrativeTextField(opValue, sourceMap)) {
-        return { ok: false, reason: `field "${opValue}" is a narrative text source and cannot be used as an arithmetic operand`, nullReason: "unstructured guidance operand" };
+      const normalizedOpValue = normalizeFieldRef(opValue, idToLabel);
+      if (isNarrativeTextField(normalizedOpValue, sourceMap)) {
+        return { ok: false, reason: `field "${normalizedOpValue}" is a narrative text source and cannot be used as an arithmetic operand`, nullReason: "unstructured guidance operand" };
       }
-      const rawVal = resolveFromMap(opValue, sourceMap);
+      const rawVal = resolveFromMap(normalizedOpValue, sourceMap);
       if (rawVal === null || rawVal === undefined) {
-        return { ok: false, reason: `field "${opValue}" resolved to null (missing dependency)`, nullReason: "missing dependency" };
+        return { ok: false, reason: `field "${normalizedOpValue}" resolved to null (missing dependency)`, nullReason: "missing dependency" };
       }
       const coerced = safeNumericCoerce(rawVal);
       if (!coerced.ok) return { ok: false, reason: coerced.reason, nullReason: "unsafe coercion" };
-      const sk = determineSourceKind(opValue, sourceMap);
-      inputsUsed[opLabel || opValue] = { value: rawVal, sourceKind: sk };
+      const sk = determineSourceKind(normalizedOpValue, sourceMap);
+      inputsUsed[opLabel || normalizedOpValue] = { value: rawVal, sourceKind: sk };
       return { ok: true, num: coerced.value };
     }
     return { ok: false, reason: "unknown operand configuration", nullReason: "incompatible formula/type" };
   }
 
-  const fieldA = config.fieldA as string | undefined;
+  const rawFieldA = config.fieldA as string | undefined;
   const fieldALabel = config.fieldALabel as string | undefined;
   const operator1 = config.operator1 as string | undefined;
   const operandBType = config.operandBType as string | undefined;
-  const operandBValue = config.operandBValue as string | undefined;
+  const rawOperandBValue = config.operandBValue as string | undefined;
   const operandBLabel = config.operandBLabel as string | undefined;
   const operator2 = config.operator2 as string | undefined;
   const operandCType = config.operandCType as string | undefined;
-  const operandCValue = config.operandCValue as string | undefined;
+  const rawOperandCValue = config.operandCValue as string | undefined;
   const operandCLabel = config.operandCLabel as string | undefined;
+
+  // Normalize field operands from stored format (may be numeric ID or label) to canonical label.
+  // Constants (operandBType/CType === "constant") are NOT normalized — their values are numerics.
+  const fieldA = rawFieldA ? normalizeFieldRef(rawFieldA, idToLabel) : undefined;
+  const operandBValue = (operandBType === "field" && rawOperandBValue)
+    ? normalizeFieldRef(rawOperandBValue, idToLabel)
+    : rawOperandBValue;
+  const operandCValue = (operandCType === "field" && rawOperandCValue)
+    ? normalizeFieldRef(rawOperandCValue, idToLabel)
+    : rawOperandCValue;
 
   if (!fieldA) return { value: null, nullReason: "incompatible formula/type", warningMessage: "fieldA not configured", inputsUsed };
 
@@ -189,11 +224,12 @@ type LogicalEvalResult =
 function evaluateLogicalCondition(
   condition: AnyCondition,
   sourceMap: Record<string, unknown>,
-  inputsUsed: DerivedFieldTrace["inputs_used"]
+  inputsUsed: DerivedFieldTrace["inputs_used"],
+  idToLabel: Map<string, string>
 ): LogicalEvalResult {
   if ("conditions" in condition && Array.isArray(condition.conditions)) {
     const group = condition as { operator: string; conditions: AnyCondition[] };
-    const results = group.conditions.map(c => evaluateLogicalCondition(c, sourceMap, inputsUsed));
+    const results = group.conditions.map(c => evaluateLogicalCondition(c, sourceMap, inputsUsed, idToLabel));
 
     if (results.some(r => r.kind === "narrative")) return { kind: "narrative" };
 
@@ -211,7 +247,8 @@ function evaluateLogicalCondition(
   }
 
   const leaf = condition as { field: string; operator: string; value?: unknown; fieldType?: string };
-  const fieldKey = leaf.field;
+  // Normalize the stored field reference (may be a numeric ID or already a label) to its label.
+  const fieldKey = normalizeFieldRef(leaf.field, idToLabel);
 
   if (isNarrativeTextField(fieldKey, sourceMap)) {
     inputsUsed[fieldKey] = { value: null, sourceKind: undefined };
@@ -285,12 +322,12 @@ function resolveFromMap(fieldId: string, sourceMap: Record<string, unknown>): un
 }
 
 function determineSourceKind(
-  fieldId: string,
+  fieldKey: string,
   sourceMap: Record<string, unknown>
 ): "source_field" | "business_field" | "derived_field" | undefined {
   const meta = getSourceMapMeta(sourceMap);
   if (!meta) return undefined;
-  const lower = fieldId.toLowerCase();
+  const lower = fieldKey.toLowerCase();
   if (Object.keys(meta.sourceFields).some(k => k.toLowerCase() === lower)) return "source_field";
   if (Object.keys(meta.businessFields).some(k => k.toLowerCase() === lower)) return "business_field";
   if (Object.keys(meta.derivedFields).some(k => k.toLowerCase() === lower)) return "derived_field";
@@ -374,24 +411,36 @@ function partitionCyclicNodes(unsortedNodes: FieldNode[]): {
 /**
  * Compute all derived fields in dependency order.
  *
- * @param derivedFields       Derived PolicyFieldRecords from the policy configuration.
- * @param resolvedSourceFields Scalar values resolved from structured source fields.
- * @param businessFields       Scalar AI-inferred business field values.
- * @param narrativeTextFieldIds Optional map of field IDs/labels that carry raw narrative text
- *                              (compliance rulebook sections, knowledge-base guidance, etc.)
- *                              and must NOT be used as formula operands. The caller is responsible
- *                              for declaring these accurately. Any operand matching a key in this
- *                              map produces nullReason = "unstructured guidance operand".
+ * @param derivedFields        Derived PolicyFieldRecords from the policy configuration.
+ * @param resolvedSourceFields  Scalar values resolved from structured source fields (keyed by label).
+ * @param businessFields        Scalar AI-inferred business field values (keyed by label).
+ * @param narrativeTextFieldIds Optional map of field identifiers that carry raw narrative text and
+ *                              must NOT be used as formula operands.
+ * @param allPolicyFields       Full set of PolicyFieldRecords for the current decision run (source +
+ *                              business + derived). Used to build the ID→label normalization map so
+ *                              that derivation configs storing numeric DB IDs resolve correctly.
+ *                              See `normalizeFieldRef` for the label-uniqueness assumption.
  */
 export function computeDerivedFields(
   derivedFields: PolicyFieldRecord[],
   resolvedSourceFields: Record<string, unknown>,
   businessFields: Record<string, unknown>,
-  narrativeTextFieldIds: Record<string, boolean> = {}
+  narrativeTextFieldIds: Record<string, boolean> = {},
+  allPolicyFields: PolicyFieldRecord[] = []
 ): DerivedFieldTrace[] {
+  // Build a map from numeric DB ID string → field label. This is the only place ID→label
+  // translation is performed. It is generic: it covers source, business, and derived fields
+  // so that any cross-type field reference resolves correctly.
+  // ASSUMPTION: field labels are unique within the set of allPolicyFields provided here
+  // (i.e., within one policy pack's field set for a single decision run). A DB-level
+  // UNIQUE constraint on (policy_pack_id, label) is a recommended follow-up.
+  const idToLabel = new Map<string, string>(
+    allPolicyFields.map(f => [String(f.id), f.label])
+  );
+
   const fieldNodes = derivedFields.map(f => ({
     fieldName: f.label,
-    dependsOn: extractDependencies(f.derivationConfig as Record<string, unknown> | null),
+    dependsOn: extractDependencies(f.derivationConfig as Record<string, unknown> | null, idToLabel),
   }));
 
   const { sorted: topoSorted, cyclic: topoUnsorted } = topologicalSort(fieldNodes);
@@ -411,6 +460,7 @@ export function computeDerivedFields(
     const config = (field.derivationConfig || {}) as Record<string, unknown>;
     traces.push({
       field_id: String(field.id),
+      field_label: field.label,
       formula: field.derivationSummary || JSON.stringify(config),
       inputs_used: {},
       output_value: null,
@@ -451,7 +501,8 @@ export function computeDerivedFields(
     let nullReason: string | null = null;
     let warningMessage: string | null = null;
 
-    const deps = extractDependencies(config);
+    const rawDeps = extractDependencies(config, idToLabel);
+    const deps = rawDeps;
     let hasMissingDep = false;
     for (const dep of deps) {
       const depLower = dep.toLowerCase();
@@ -481,8 +532,21 @@ export function computeDerivedFields(
 
     if (hasMissingDep) {
       nullReason = "missing dependency";
+      console.warn(
+        "[derived-field-engine] missing dependency",
+        JSON.stringify({
+          field_label: field.label,
+          raw_config: config,
+          deps_normalized: deps,
+          source_keys: Object.keys(resolvedSourceFields),
+          business_keys: Object.keys(businessFields),
+          computed_keys: Object.keys(computedValues),
+          warning: warningMessage,
+        })
+      );
       traces.push({
         field_id: String(field.id),
+        field_label: field.label,
         formula: formulaStr,
         inputs_used: inputsUsed,
         output_value: null,
@@ -500,7 +564,7 @@ export function computeDerivedFields(
     const configType = config.type as string | undefined;
 
     if (!configType || configType === "arithmetic") {
-      const arithResult = evaluateArithmetic(config, currentSourceMap);
+      const arithResult = evaluateArithmetic(config, currentSourceMap, idToLabel);
       Object.assign(inputsUsed, arithResult.inputsUsed);
       if (arithResult.nullReason) {
         nullReason = arithResult.nullReason;
@@ -509,7 +573,7 @@ export function computeDerivedFields(
         outputValue = arithResult.value;
       }
     } else if (configType === "logical") {
-      const logicalResult = evaluateLogicalCondition(config as AnyCondition, currentSourceMap, inputsUsed);
+      const logicalResult = evaluateLogicalCondition(config as AnyCondition, currentSourceMap, inputsUsed, idToLabel);
       if (logicalResult.kind === "narrative") {
         nullReason = "unstructured guidance operand";
         warningMessage = "logical condition references a narrative text field that cannot be used as an operand";
@@ -544,6 +608,7 @@ export function computeDerivedFields(
 
     traces.push({
       field_id: String(field.id),
+      field_label: field.label,
       formula: formulaStr,
       inputs_used: inputsUsed,
       output_value: outputValue !== null ? outputValue : null,
@@ -568,28 +633,39 @@ function checkTypeMatch(outputType: string, configuredType: string): boolean {
   return true;
 }
 
-function extractDependencies(config: Record<string, unknown> | null): string[] {
+/**
+ * Extract all field dependencies from a derivation config, normalizing any stored field reference
+ * (numeric DB ID or label) to its canonical label using `idToLabel`.
+ *
+ * For arithmetic configs: fieldA, operandBValue (when operandBType === "field"), operandCValue
+ * (when operandCType === "field") are extracted and normalized.
+ *
+ * For logical configs: all leaf `field` values are extracted and normalized recursively.
+ *
+ * Constants are never normalized — only field-typed operands are.
+ */
+function extractDependencies(config: Record<string, unknown> | null, idToLabel: Map<string, string>): string[] {
   if (!config) return [];
   const deps: string[] = [];
   const type = config.type as string | undefined;
 
   if (!type || type === "arithmetic") {
-    if (config.fieldA) deps.push(String(config.fieldA));
-    if (config.operandBType === "field" && config.operandBValue) deps.push(String(config.operandBValue));
-    if (config.operandCType === "field" && config.operandCValue) deps.push(String(config.operandCValue));
+    if (config.fieldA) deps.push(normalizeFieldRef(String(config.fieldA), idToLabel));
+    if (config.operandBType === "field" && config.operandBValue) deps.push(normalizeFieldRef(String(config.operandBValue), idToLabel));
+    if (config.operandCType === "field" && config.operandCValue) deps.push(normalizeFieldRef(String(config.operandCValue), idToLabel));
   } else if (type === "logical") {
     const conditions = config.conditions as AnyCondition[] | undefined;
-    if (conditions) extractConditionDeps(conditions, deps);
+    if (conditions) extractConditionDeps(conditions, deps, idToLabel);
   }
   return Array.from(new Set(deps));
 }
 
-function extractConditionDeps(conditions: AnyCondition[], out: string[]): void {
+function extractConditionDeps(conditions: AnyCondition[], out: string[], idToLabel: Map<string, string>): void {
   for (const c of conditions) {
     if ("conditions" in c && Array.isArray(c.conditions)) {
-      extractConditionDeps(c.conditions as AnyCondition[], out);
+      extractConditionDeps(c.conditions as AnyCondition[], out, idToLabel);
     } else if ("field" in c && typeof c.field === "string") {
-      out.push(c.field);
+      out.push(normalizeFieldRef(c.field, idToLabel));
     }
   }
 }

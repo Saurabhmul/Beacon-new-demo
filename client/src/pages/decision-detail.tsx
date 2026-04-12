@@ -486,7 +486,7 @@ export default function DecisionDetailPage() {
                       return (
                       <TableRow key={i} data-testid={`row-derived-field-${i}`}>
                         <TableCell className="text-sm font-medium">
-                          {String(df["field_id"] ?? "")}
+                          {String(df["field_label"] ?? df["field_id"] ?? "")}
                           {df["typeMismatchWarning"] === true && (
                             <Badge variant="outline" className="ml-2 text-xs text-yellow-600 border-yellow-400">
                               Type mismatch risk
