@@ -2374,6 +2374,33 @@ export async function registerRoutes(
           const businessFieldDefs = allPolicyFields.filter(f => f.sourceType === "business_field");
           const derivedFieldDefs = allPolicyFields.filter(f => f.sourceType === "derived_field");
 
+          const compliancePolicyRules: unknown[] = [];
+          if (policyConfig) {
+            if (policyConfig.vulnerabilityDefinition) {
+              compliancePolicyRules.push({ id: "vulnerability_definition", title: "Vulnerability Definition", text: policyConfig.vulnerabilityDefinition });
+            }
+            if (Array.isArray(policyConfig.affordabilityRules) && policyConfig.affordabilityRules.length > 0) {
+              for (const rule of policyConfig.affordabilityRules) {
+                const r = rule as Record<string, unknown>;
+                compliancePolicyRules.push({ id: `affordability_${r["name"] ?? compliancePolicyRules.length}`, title: `Affordability Rule: ${r["name"] ?? ""}`, text: r["rule"] ?? r["name"] ?? "" });
+              }
+            }
+            if (Array.isArray(policyConfig.decisionRules) && policyConfig.decisionRules.length > 0) {
+              for (const rule of policyConfig.decisionRules) {
+                const r = rule as Record<string, unknown>;
+                compliancePolicyRules.push({ id: `decision_${r["id"] ?? compliancePolicyRules.length}`, title: `Decision Rule: ${r["name"] ?? r["condition"] ?? ""}`, text: r["action"] ?? r["description"] ?? r["name"] ?? "" });
+              }
+            }
+            if (policyConfig.compiledPolicy && typeof policyConfig.compiledPolicy === "object") {
+              const compiled = policyConfig.compiledPolicy as Record<string, string>;
+              for (const [key, val] of Object.entries(compiled)) {
+                if (val && typeof val === "string" && val.length > 0) {
+                  compliancePolicyRules.push({ id: `policy_${key}`, title: key, text: val });
+                }
+              }
+            }
+          }
+
           const policyPack = await storage.getPolicyPack(companyId);
           const packedTreatments: DecisionPacketTreatment[] = policyPack
             ? (await storage.getTreatmentsWithRules(policyPack.id)).map(t => ({
@@ -2406,6 +2433,9 @@ export async function registerRoutes(
               if (data.income) contextSections.incomeEmploymentData = data.income;
               if (rulebookGuidanceItems.length > 0) {
                 contextSections.knowledgeBaseAgentGuidance = rulebookGuidanceItems;
+              }
+              if (compliancePolicyRules.length > 0) {
+                contextSections.compliancePolicyInternalRules = compliancePolicyRules;
               }
 
               const businessFieldMetas = businessFieldDefs.map(f => ({
