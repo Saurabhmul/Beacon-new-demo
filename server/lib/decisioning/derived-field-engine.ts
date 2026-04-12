@@ -82,11 +82,13 @@ function getSourceMapMeta(sourceMap: Record<string, unknown>): SourceMapMeta | u
  * This is the single canonical place where ID→label normalization occurs. It is intentionally
  * generic: no customer-specific, field-name-specific, or company-specific logic lives here.
  *
- * NOTE: This function (and the `idToLabel` map it consumes) assumes that `label` is unique
- * within the scope of the policy field set passed to `computeDerivedFields` (i.e., within a
- * single policy pack's fields for one decision run). A DB-level UNIQUE constraint on
- * (policy_pack_id, label) is a recommended follow-up to enforce this assumption. If two fields
- * share a label, `idToLabel` will keep only the last entry for that label during construction.
+ * NOTE: The runtime source maps (`resolvedSourceFields`, `businessFields`, `computedValues`)
+ * are all keyed by `field.label`. This means that if two fields in `allPolicyFields` share the
+ * same label within a policy pack, only one value for that label will exist in the source maps,
+ * making lookups for either field ambiguous. `idToLabel` itself is keyed by ID so its
+ * construction is safe even with duplicate labels — but the downstream label-keyed lookup is
+ * not. A DB-level UNIQUE constraint on (policy_pack_id, label) is a recommended follow-up to
+ * enforce the uniqueness assumption and make this safe at the data level.
  */
 function normalizeFieldRef(ref: string, idToLabel: Map<string, string>): string {
   return idToLabel.get(ref) ?? ref;
@@ -501,8 +503,8 @@ export function computeDerivedFields(
     let nullReason: string | null = null;
     let warningMessage: string | null = null;
 
-    const rawDeps = extractDependencies(config, idToLabel);
-    const deps = rawDeps;
+    const depsRaw = extractDependencies(config, new Map());
+    const deps = extractDependencies(config, idToLabel);
     let hasMissingDep = false;
     for (const dep of deps) {
       const depLower = dep.toLowerCase();
@@ -537,6 +539,7 @@ export function computeDerivedFields(
         JSON.stringify({
           field_label: field.label,
           raw_config: config,
+          deps_raw: depsRaw,
           deps_normalized: deps,
           source_keys: Object.keys(resolvedSourceFields),
           business_keys: Object.keys(businessFields),
