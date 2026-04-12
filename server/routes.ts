@@ -458,11 +458,13 @@ export async function registerRoutes(
       const clientConfig = await storage.getClientConfig(companyId);
 
       if (req.body.categoryData && typeof req.body.categoryData === "object") {
-        for (const catEntry of Object.values(req.body.categoryData) as any[]) {
-          if (!catEntry || !Array.isArray(catEntry.fieldAnalysis)) continue;
-          for (const field of catEntry.fieldAnalysis) {
-            if (Array.isArray(field.sampleValues)) {
-              field.sampleValues = normalizeSampleValues(field.sampleValues);
+        for (const catEntry of Object.values(req.body.categoryData)) {
+          if (!catEntry || typeof catEntry !== "object") continue;
+          const entry = catEntry as Record<string, unknown>;
+          if (!Array.isArray(entry["fieldAnalysis"])) continue;
+          for (const field of entry["fieldAnalysis"] as Record<string, unknown>[]) {
+            if (Array.isArray(field["sampleValues"])) {
+              field["sampleValues"] = normalizeSampleValues(field["sampleValues"] as unknown[]);
             }
           }
         }
@@ -484,11 +486,13 @@ export async function registerRoutes(
     try {
       const companyId = getCompanyId(req);
       if (req.body.categoryData && typeof req.body.categoryData === "object") {
-        for (const catEntry of Object.values(req.body.categoryData) as any[]) {
-          if (!catEntry || !Array.isArray(catEntry.fieldAnalysis)) continue;
-          for (const field of catEntry.fieldAnalysis) {
-            if (Array.isArray(field.sampleValues)) {
-              field.sampleValues = normalizeSampleValues(field.sampleValues);
+        for (const catEntry of Object.values(req.body.categoryData)) {
+          if (!catEntry || typeof catEntry !== "object") continue;
+          const entry = catEntry as Record<string, unknown>;
+          if (!Array.isArray(entry["fieldAnalysis"])) continue;
+          for (const field of entry["fieldAnalysis"] as Record<string, unknown>[]) {
+            if (Array.isArray(field["sampleValues"])) {
+              field["sampleValues"] = normalizeSampleValues(field["sampleValues"] as unknown[]);
             }
           }
         }
@@ -2286,14 +2290,27 @@ export async function registerRoutes(
       const conversationUpload = await storage.getUploadByCategory(companyId, "conversation_history");
       const conversationRecords = (conversationUpload?.uploadedData || []) as Record<string, unknown>[];
 
+      const bureauUpload = await storage.getUploadByCategory(companyId, "credit_bureau");
+      const bureauRecords = (bureauUpload?.uploadedData || []) as Record<string, unknown>[];
+
+      const incomeUpload = await storage.getUploadByCategory(companyId, "income_employment");
+      const incomeRecords = (incomeUpload?.uploadedData || []) as Record<string, unknown>[];
+
+      const allRulebooks = await storage.getRulebooks(companyId);
+      const rulebookGuidanceItems: unknown[] = allRulebooks.map(rb => ({
+        id: String(rb.id),
+        title: rb.title,
+        text: rb.extractedText || rb.sopText || "",
+      })).filter((rb) => (rb as Record<string, unknown>)["text"]);
+
       const customerIdField = "customer / account / loan id";
-      const customerMap = new Map<string, { loan: Record<string, unknown>; payments: Record<string, unknown>[]; conversations: Record<string, unknown>[] }>();
+      const customerMap = new Map<string, { loan: Record<string, unknown>; payments: Record<string, unknown>[]; conversations: Record<string, unknown>[]; bureau: Record<string, unknown> | null; income: Record<string, unknown> | null }>();
 
       for (const loan of loanRecords) {
         const custId = String(loan[customerIdField] || "").trim();
         if (!custId) continue;
         if (!customerMap.has(custId)) {
-          customerMap.set(custId, { loan, payments: [], conversations: [] });
+          customerMap.set(custId, { loan, payments: [], conversations: [], bureau: null, income: null });
         }
       }
 
@@ -2308,6 +2325,20 @@ export async function registerRoutes(
         const custId = String(conv[customerIdField] || "").trim();
         if (custId && customerMap.has(custId)) {
           customerMap.get(custId)!.conversations.push(conv);
+        }
+      }
+
+      for (const bureau of bureauRecords) {
+        const custId = String(bureau[customerIdField] || "").trim();
+        if (custId && customerMap.has(custId) && !customerMap.get(custId)!.bureau) {
+          customerMap.get(custId)!.bureau = bureau;
+        }
+      }
+
+      for (const income of incomeRecords) {
+        const custId = String(income[customerIdField] || "").trim();
+        if (custId && customerMap.has(custId) && !customerMap.get(custId)!.income) {
+          customerMap.get(custId)!.income = income;
         }
       }
 
@@ -2371,6 +2402,11 @@ export async function registerRoutes(
               contextSections.paymentData = data.payments;
               contextSections.conversationData = data.conversations;
               contextSections.resolvedSourceFields = resolvedSourceFields;
+              if (data.bureau) contextSections.bureauData = data.bureau;
+              if (data.income) contextSections.incomeEmploymentData = data.income;
+              if (rulebookGuidanceItems.length > 0) {
+                contextSections.knowledgeBaseAgentGuidance = rulebookGuidanceItems;
+              }
 
               const businessFieldMetas = businessFieldDefs.map(f => ({
                 id: String(f.id),
@@ -2493,9 +2529,10 @@ export async function registerRoutes(
                 customerSituation = String(finalParsed.customer_situation || "");
                 treatmentEligibilityExplanation = String(finalParsed.treatment_eligibility_explanation || "");
                 structuredAssessments = Array.isArray(finalParsed.structured_assessments)
-                  ? (finalParsed.structured_assessments as any[]).filter(
-                      a => a && typeof a.name === "string" && typeof a.reason === "string"
-                    ).map(a => ({ name: a.name, value: a.value ?? null, reason: a.reason }))
+                  ? (finalParsed.structured_assessments as unknown[]).filter(
+                      (a): a is Record<string, unknown> =>
+                        a !== null && typeof a === "object" && typeof (a as Record<string, unknown>)["name"] === "string" && typeof (a as Record<string, unknown>)["reason"] === "string"
+                    ).map(a => ({ name: String(a["name"]), value: a["value"] ?? null, reason: String(a["reason"]) }))
                   : [];
                 proposedEmail = String(finalParsed.proposed_email_to_customer || "NO_ACTION");
                 internalAction = String(finalParsed.internal_action || "");
@@ -2514,7 +2551,7 @@ export async function registerRoutes(
                 final_status: (attempt1Passed || attempt2Passed) ? "passed" : "failed",
               };
               if (!attempt1Passed) {
-                (validationTrace as any).attempt_2 = {
+                validationTrace["attempt_2"] = {
                   passed: attempt2Passed,
                   errors: attempt2Errors,
                   raw_response: attempt2RawText.substring(0, 3000),

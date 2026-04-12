@@ -119,7 +119,10 @@ function truncateHistory(
   const flaggedOlder = older.filter(isFlagged);
   const kept = [...latestN, ...flaggedOlder];
   const droppedCount = older.length - flaggedOlder.length;
-  const summaryStr = `[${droppedCount} older ${sectionName} item(s) summarized — not flagged for retention]`;
+  if (droppedCount === 0) {
+    return { items: kept, originalCount, retainedCount: kept.length, truncated: true, summarizationUsed: false };
+  }
+  const summaryStr = `[${droppedCount} older ${sectionName} item(s) omitted — not flagged for retention]`;
   const final: ContextDataArray = [...kept, summaryStr];
   return {
     items: final,
@@ -255,6 +258,8 @@ function parseAndNormalizeEvidence(parsed: Record<string, unknown>): BusinessFie
   return normalized;
 }
 
+const INSUFFICIENT_EVIDENCE_CONFIDENCE_THRESHOLD = 0.4;
+
 function enforceConfidencePolicy(
   confidence: number | null,
   evidence: BusinessFieldEvidenceItem[],
@@ -267,6 +272,21 @@ function enforceConfidencePolicy(
   if (retryCount > 0 && evidence.length < 2 && c > 0.7) c = 0.7;
   if (c > 0.8 && evidence.length < 2) c = 0.8;
   return c;
+}
+
+function applyInsufficientEvidenceNormalization(result: SingleFieldResult): SingleFieldResult {
+  if (result.value === null) return result;
+  const confidence = result.confidence;
+  if (confidence !== null && confidence < INSUFFICIENT_EVIDENCE_CONFIDENCE_THRESHOLD) {
+    return {
+      ...result,
+      value: null,
+      null_reason: "insufficient evidence",
+      confidence: Math.min(confidence, 0.1),
+      rationale: result.rationale,
+    };
+  }
+  return result;
 }
 
 function extractFieldResult(
@@ -392,8 +412,8 @@ export async function inferBusinessFields(
       let firstResult: { rawText: string; parsed: Record<string, unknown> | null };
       try {
         firstResult = await Promise.race([firstCallPromise, timeoutPromise]);
-      } catch (err: any) {
-        if (String(err?.message).includes("TIMEOUT")) {
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("TIMEOUT")) {
           result = {
             value: null,
             confidence: null,
@@ -424,8 +444,8 @@ export async function inferBusinessFields(
         let retryResult: { rawText: string; parsed: Record<string, unknown> | null };
         try {
           retryResult = await Promise.race([retryCallPromise, retryTimeoutPromise]);
-        } catch (err: any) {
-          if (String(err?.message).includes("TIMEOUT")) {
+        } catch (err) {
+          if (err instanceof Error && err.message.includes("TIMEOUT")) {
             result = {
               value: null,
               confidence: null,
@@ -456,10 +476,10 @@ export async function inferBusinessFields(
             rawAiResponse: rawText,
           };
         } else {
-          result = extractFieldResult(parsed, field, 1, rawText, false);
+          result = applyInsufficientEvidenceNormalization(extractFieldResult(parsed, field, 1, rawText, false));
         }
       } else {
-        result = extractFieldResult(parsed, field, 0, rawText, false);
+        result = applyInsufficientEvidenceNormalization(extractFieldResult(parsed, field, 0, rawText, false));
       }
     } catch (err) {
       console.error(`[business-field-engine] Error inferring field "${field.label}":`, err);
