@@ -1,0 +1,66 @@
+Please investigate a bug in the Beacon demo related to derived fields in Review Queue for Prodigy Finance.
+
+Problem observed:
+
+In the decision detail page, the “Derived Fields” table shows field labels as 2, 3, 4 instead of human-readable names.
+All derived fields are evaluating to missing dependency.
+
+Likely root causes:
+
+UI bug
+In client/src/pages/decision-detail.tsx, the Derived Fields table appears to render df["field_id"] in the “Field Label” column.
+It should display the actual field label or display name instead.
+Backend identifier mismatch
+In server/lib/decisioning/derived-field-engine.ts, dependency resolution seems to use raw identifiers from derivationConfig.
+But the source/business field maps are keyed by labels, while saved configs appear to contain mixed identifiers such as:
+source:amount_due
+source:minimum_due
+numeric ids like 1 for business fields
+This likely causes false missing dependency errors.
+
+What I need you to check:
+
+Trace how derivationConfig.fieldA, operandBValue, and operandCValue are stored when a derived field is created/edited.
+Confirm whether the app is storing:
+source field ids like source:amount_due
+business/derived field numeric ids
+labels
+Confirm what computeDerivedFields() expects during resolution.
+Confirm what keys exist in:
+resolvedSourceFields
+businessFields
+computedValues
+
+Please inspect these files first:
+
+client/src/pages/decision-detail.tsx
+client/src/pages/client-setup.tsx
+server/lib/decisioning/derived-field-engine.ts
+any related route/storage code that builds derived_fields_trace
+
+Please also verify against the Prodigy records in policy_fields:
+
+id 2 = Total arrears
+id 3 = six months of surplus repayment capacity above minimum due
+id 4 = affordability as a percentage of minimum due
+
+Expected fixes:
+
+Decision detail page should show derived field label/display name, not field_id.
+Derived field evaluation should resolve dependencies consistently using one canonical format.
+Either convert all stored references to canonical field ids and resolve by id everywhere,
+or normalize stored ids back to labels before evaluation.
+Add a temporary debug log for one affected customer showing:
+derived field label
+raw derivation config
+extracted dependencies
+available source/business/computed keys
+exact reason dependency resolution failed
+
+Please return:
+
+root cause
+exact files changed
+proposed fix
+whether existing saved derived fields need a migration/backfill
+one test case proving the Prodigy derived fields now resolve correctly

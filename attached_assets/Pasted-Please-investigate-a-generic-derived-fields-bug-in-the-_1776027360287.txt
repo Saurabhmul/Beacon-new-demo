@@ -1,0 +1,96 @@
+Please investigate a **generic derived-fields bug** in the Beacon demo.
+
+Important:
+
+* This is **not a Prodigy-only fix**.
+* We are currently seeing the issue with **Prodigy Finance data**, but I want the root cause fixed **generically across the platform**.
+* **Do not hardcode any logic, mappings, field names, company names, policy pack ids, or special-case handling for Prodigy Finance.**
+* The solution must work for any customer, any company, any policy pack, and any valid derived-field configuration.
+
+Problem observed:
+
+* In the decision detail / review queue output, the “Derived Fields” table shows field labels as `2`, `3`, `4` instead of human-readable names.
+* Derived field values are showing `missing dependency`.
+
+Current dataset where this is visible:
+
+* Prodigy Finance
+* But treat this only as an example dataset that exposed the bug.
+
+What I need investigated:
+
+1. **UI issue**
+
+   * Find why the table is displaying numeric identifiers instead of the actual derived field label/display name.
+   * The UI should always show a user-friendly field name, regardless of customer/company.
+
+2. **Evaluation / dependency-resolution issue**
+
+   * Find why derived fields are resolving to `missing dependency`.
+   * Check whether the system is inconsistently mixing:
+
+     * database ids
+     * source-prefixed ids like `source:amount_due`
+     * labels / field names
+     * display names
+   * Confirm whether field references are stored in one format but resolved in another.
+
+Please trace the full lifecycle generically:
+
+* how source/business/derived field references are stored
+* how they are passed into derivation configs
+* how they are resolved at runtime
+* how the result is written into review queue / decision detail output
+
+Please inspect these areas first:
+
+* `client/src/pages/decision-detail.tsx`
+* `client/src/pages/client-setup.tsx`
+* `server/lib/decisioning/derived-field-engine.ts`
+* any route / storage / serializer code involved in saving derived fields
+* any code building the `derived_fields_trace` payload
+
+What to verify:
+
+* What is stored in derivation config for operands and dependencies
+* What `computeDerivedFields()` expects
+* What keys are available at runtime in:
+
+  * source field maps
+  * business field maps
+  * computed derived field maps
+* Whether there is a mismatch between stored identifiers and lookup keys
+
+Prodigy Finance can be used only as a debugging example:
+
+* reproduce with the current Prodigy data
+* inspect the affected derived fields there
+* but the final fix must be generic and must not depend on Prodigy-specific values
+
+Expected outcome:
+
+1. “Field Label” should show the correct human-readable derived field name.
+2. Derived field dependency resolution should work using a **single canonical identifier strategy** across all customers.
+3. Any normalization should be generic and centralized, not done in customer-specific conditionals.
+4. If old saved configs are in an outdated format, tell me whether we need:
+
+   * a migration/backfill, or
+   * a backward-compatible resolver layer
+
+Please add temporary debug output for one failing case showing:
+
+* derived field label
+* raw derivation config
+* extracted dependencies
+* available runtime keys
+* exact dependency lookup failure reason
+
+Please return:
+
+* root cause
+* whether this is UI-only, backend-only, or both
+* exact files changed
+* proposed generic fix
+* whether historical data needs migration
+* one test proving this now works for Prodigy data
+* confirmation that no customer-specific hardcoding was introduced
