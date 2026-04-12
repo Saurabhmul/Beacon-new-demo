@@ -68,7 +68,7 @@ export default function ReviewQueuePage() {
   const filteredDecisions = currentDecisions.filter((d) => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    const treatment = (d as any).recommendedTreatmentName || d.proposedSolution || "";
+    const treatment = d.recommendedTreatmentName || d.proposedSolution || "";
     return (
       d.customerGuid.toLowerCase().includes(q) ||
       treatment.toLowerCase().includes(q)
@@ -309,7 +309,7 @@ export default function ReviewQueuePage() {
                       <TableCell>
                         <span className="text-sm line-clamp-1" data-testid={`text-recommended-treatment-${d.id}`}>
                           {(() => {
-                            const t = (d as any).recommendedTreatmentName || d.proposedSolution || "Unknown";
+                            const t = d.recommendedTreatmentName || d.proposedSolution || "Unknown";
                             return t.length > 80 ? t.substring(0, 80) + "..." : t;
                           })()}
                         </span>

@@ -77,17 +77,18 @@ export function validateFinalDecisionOutput(
   } else {
     const validItems: unknown[] = [];
     for (const item of parsed.structured_assessments as unknown[]) {
-      if (
-        item &&
-        typeof item === "object" &&
-        "name" in (item as object) &&
-        "value" in (item as object) &&
-        "reason" in (item as object) &&
-        typeof (item as any).name === "string" &&
-        (typeof (item as any).value === "string" || (item as any).value === null) &&
-        typeof (item as any).reason === "string"
-      ) {
-        validItems.push(item);
+      if (item && typeof item === "object") {
+        const obj = item as Record<string, unknown>;
+        if (
+          "name" in obj &&
+          "value" in obj &&
+          "reason" in obj &&
+          typeof obj["name"] === "string" &&
+          (typeof obj["value"] === "string" || obj["value"] === null) &&
+          typeof obj["reason"] === "string"
+        ) {
+          validItems.push(item);
+        }
       }
     }
     parsed.structured_assessments = validItems;

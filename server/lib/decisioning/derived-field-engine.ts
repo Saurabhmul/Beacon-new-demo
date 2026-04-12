@@ -3,6 +3,12 @@
 import type { PolicyFieldRecord } from "@shared/schema";
 import { topologicalSort } from "../derivation-config";
 
+interface SourceMapMeta {
+  sourceFields: Record<string, boolean>;
+  businessFields: Record<string, boolean>;
+  derivedFields: Record<string, boolean>;
+}
+
 export interface DerivedFieldTrace {
   field_id: string;
   formula: string;
@@ -80,7 +86,7 @@ function evaluateArithmetic(
       const coerced = safeNumericCoerce(rawVal);
       if (!coerced.ok) return { ok: false, reason: coerced.reason };
       const sk = determineSourceKind(opValue, sourceMap);
-      inputsUsed[opLabel || opValue] = { value: rawVal, sourceKind: sk as any };
+      inputsUsed[opLabel || opValue] = { value: rawVal, sourceKind: sk };
       return { ok: true, num: coerced.value, sourceKey: opValue };
     }
     return { ok: false, reason: "unknown operand configuration" };
@@ -108,7 +114,7 @@ function evaluateArithmetic(
     return { value: null, nullReason: "unsafe coercion", warningMessage: coercedA.reason || "coercion failed", inputsUsed };
   }
   const skA = determineSourceKind(fieldA, sourceMap);
-  inputsUsed[fieldALabel || fieldA] = { value: rawA, sourceKind: skA as any };
+  inputsUsed[fieldALabel || fieldA] = { value: rawA, sourceKind: skA };
 
   const resolvedB = resolveOperand(operandBType, operandBValue, operandBLabel, "B");
   if (!resolvedB.ok) {
@@ -173,7 +179,7 @@ function evaluateLogicalCondition(
   const fieldKey = leaf.field;
   const rawVal = resolveFromMap(fieldKey, sourceMap);
   const sk = determineSourceKind(fieldKey, sourceMap);
-  inputsUsed[fieldKey] = { value: rawVal, sourceKind: sk as any };
+  inputsUsed[fieldKey] = { value: rawVal, sourceKind: sk };
 
   if (rawVal === null || rawVal === undefined) return null;
 
@@ -236,7 +242,7 @@ function determineSourceKind(
   fieldId: string,
   sourceMap: Record<string, unknown>
 ): "source_field" | "business_field" | "derived_field" | undefined {
-  const meta = (sourceMap as any).__meta;
+  const meta = sourceMap["__meta"] as SourceMapMeta | undefined;
   if (!meta) return undefined;
   if (meta.sourceFields && fieldId in meta.sourceFields) return "source_field";
   if (meta.businessFields && fieldId in meta.businessFields) return "business_field";
@@ -364,7 +370,7 @@ export function computeDerivedFields(
         warningMessage,
       });
       computedValues[field.label] = null;
-      (sourceMap.__meta as any).derivedFields[field.label] = true;
+      (sourceMap["__meta"] as SourceMapMeta).derivedFields[field.label] = true;
       continue;
     }
 
@@ -406,7 +412,7 @@ export function computeDerivedFields(
     }
 
     computedValues[field.label] = outputValue;
-    (sourceMap.__meta as any).derivedFields[field.label] = true;
+    (sourceMap["__meta"] as SourceMapMeta).derivedFields[field.label] = true;
 
     traces.push({
       field_id: String(field.id),

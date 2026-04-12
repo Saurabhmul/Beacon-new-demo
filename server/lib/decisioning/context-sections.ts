@@ -9,11 +9,13 @@ export const SECTION_PRIOR_BUSINESS_FIELDS = "priorBusinessFields";
 export const SECTION_COMPLIANCE_POLICY_INTERNAL_RULES = "compliancePolicyInternalRules";
 export const SECTION_KNOWLEDGE_BASE_AGENT_GUIDANCE = "knowledgeBaseAgentGuidance";
 
+export type ContextDataArray = (Record<string, unknown> | string)[];
+
 export type ContextSections = {
   [SECTION_CUSTOMER_PROFILE]: Record<string, unknown>;
   [SECTION_LOAN_DATA]: Record<string, unknown>;
-  [SECTION_PAYMENT_DATA]: Record<string, unknown>[];
-  [SECTION_CONVERSATION_DATA]: Record<string, unknown>[];
+  [SECTION_PAYMENT_DATA]: ContextDataArray;
+  [SECTION_CONVERSATION_DATA]: ContextDataArray;
   [SECTION_BUREAU_DATA]: Record<string, unknown>;
   [SECTION_INCOME_EMPLOYMENT_DATA]: Record<string, unknown>;
   [SECTION_RESOLVED_SOURCE_FIELDS]: Record<string, unknown>;

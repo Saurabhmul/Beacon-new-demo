@@ -47,13 +47,12 @@ function formatDate(date: string | Date | null | undefined): string {
 }
 
 function getCustomerId(decision: Decision): string {
-  const d = decision as any;
-  return d.customerGuid || d.customer_guid || (d.customerData && (d.customerData.customer_guid || d.customerData.legacy_id)) || "Unknown";
+  const cdata = decision.customerData as Record<string, unknown> | null | undefined;
+  return decision.customerGuid || String(cdata?.["customer_guid"] ?? cdata?.["legacy_id"] ?? "Unknown");
 }
 
 function getRecommendedTreatment(decision: Decision): string {
-  const d = decision as any;
-  return d.recommendedTreatmentName || decision.proposedSolution || "Unknown";
+  return decision.recommendedTreatmentName || decision.proposedSolution || "Unknown";
 }
 
 function statusBadgeVariant(status: string) {
@@ -234,42 +233,67 @@ export default function DecisionDetailPage() {
     );
   }
 
-  const d = decision as any;
-  const hasTrace = Boolean(d.decisionTraceJson);
-  const trace = hasTrace ? (d.decisionTraceJson as Record<string, unknown>) : null;
-  const packet = trace?.decision_packet as Record<string, unknown> | undefined;
-  const groupedSourceData = (packet?.customer as any)?.groupedSourceData as Record<string, unknown> | undefined;
-  const businessFieldsTrace = (trace?.business_fields_trace as unknown[]) || [];
-  const derivedFieldsTrace = (trace?.derived_fields_trace as unknown[]) || [];
-  const finalAiOutput = trace?.final_ai_output as Record<string, unknown> | undefined;
+  const traceJson = decision.decisionTraceJson ?? null;
+  const hasTrace = Boolean(traceJson);
+  const trace: Record<string, unknown> | null = traceJson && typeof traceJson === "object" ? traceJson as Record<string, unknown> : null;
 
+  function asRecord(val: unknown): Record<string, unknown> | undefined {
+    if (val && typeof val === "object" && !Array.isArray(val)) return val as Record<string, unknown>;
+    return undefined;
+  }
+  function asArray(val: unknown): unknown[] {
+    return Array.isArray(val) ? val : [];
+  }
+  function asString(val: unknown): string | undefined {
+    return typeof val === "string" ? val : undefined;
+  }
+  function asNumber(val: unknown): number | undefined {
+    return typeof val === "number" ? val : undefined;
+  }
+  function asBoolean(val: unknown): boolean | undefined {
+    return typeof val === "boolean" ? val : undefined;
+  }
+  function asStringArray(val: unknown): string[] | undefined {
+    if (!Array.isArray(val)) return undefined;
+    const strs = val.filter((v): v is string => typeof v === "string");
+    return strs.length > 0 ? strs : undefined;
+  }
+
+  const packet = asRecord(trace?.["decision_packet"]);
+  const packetCustomer = asRecord(packet?.["customer"]);
+  const groupedSourceData = asRecord(packetCustomer?.["groupedSourceData"]);
+  const businessFieldsTrace = asArray(trace?.["business_fields_trace"]);
+  const derivedFieldsTrace = asArray(trace?.["derived_fields_trace"]);
+  const finalAiOutput = asRecord(trace?.["final_ai_output"]);
+
+  const customerData = asRecord(decision.customerData) ?? {};
   const customerId = getCustomerId(decision);
-  const recommendedTreatment = (d.recommendedTreatmentName as string) || decision.proposedSolution || "Unknown";
-  const recommendedCode = (d.recommendedTreatmentCode as string) || "";
-  const customerSituation = (d.customerSituation as string) || decision.problemDescription || "";
-  const treatmentExplanation = (d.treatmentEligibilityExplanation as string) || decision.solutionEvidence || "";
-  const structuredAssessments = (d.structuredAssessments as Array<{ name: string; value: string | null; reason: string }>) || [];
+  const recommendedTreatment = decision.recommendedTreatmentName || decision.proposedSolution || "Unknown";
+  const recommendedCode = decision.recommendedTreatmentCode || "";
+  const customerSituation = decision.customerSituation || decision.problemDescription || "";
+  const treatmentExplanation = decision.treatmentEligibilityExplanation || decision.solutionEvidence || "";
+  const structuredAssessments = decision.structuredAssessments || [];
   const proposedEmail = decision.proposedEmailToCustomer || "NO_ACTION";
   const internalAction = decision.internalAction || "";
 
-  const situationConfidence = finalAiOutput?.customer_situation_confidence_score as number | undefined;
-  const requiresAgentReview = finalAiOutput?.requires_agent_review as boolean | undefined;
-  const usedFields = finalAiOutput?.used_fields as string[] | undefined;
-  const usedRules = finalAiOutput?.used_rules as string[] | undefined;
-  const missingInfo = finalAiOutput?.missing_information as string[] | undefined;
-  const keyFactors = finalAiOutput?.key_factors_considered as string[] | undefined;
-  const blockedConditions = finalAiOutput?.blocked_conditions as string[] | undefined;
-  const paymentSummary = finalAiOutput?.recent_payment_history_summary as string | undefined;
-  const convSummary = finalAiOutput?.conversation_summary as string | undefined;
+  const situationConfidence = asNumber(finalAiOutput?.["customer_situation_confidence_score"]);
+  const requiresAgentReview = asBoolean(finalAiOutput?.["requires_agent_review"]);
+  const usedFields = asStringArray(finalAiOutput?.["used_fields"]);
+  const usedRules = asStringArray(finalAiOutput?.["used_rules"]);
+  const missingInfo = asStringArray(finalAiOutput?.["missing_information"]);
+  const keyFactors = asStringArray(finalAiOutput?.["key_factors_considered"]);
+  const blockedConditions = asStringArray(finalAiOutput?.["blocked_conditions"]);
+  const paymentSummary = asString(finalAiOutput?.["recent_payment_history_summary"]);
+  const convSummary = asString(finalAiOutput?.["conversation_summary"]);
 
-  const loanData = groupedSourceData?.loanData ?? d.customerData ?? {};
-  const paymentData = groupedSourceData?.paymentData ?? d._payments ?? [];
-  const conversationData = groupedSourceData?.conversationData ?? d._conversations ?? [];
-  const bureauData = groupedSourceData?.bureauData ?? {};
-  const incomeEmploymentData = groupedSourceData?.incomeEmploymentData ?? {};
+  const loanData = groupedSourceData?.["loanData"] ?? customerData;
+  const paymentData = asArray(groupedSourceData?.["paymentData"] ?? customerData["_payments"]);
+  const conversationData = asArray(groupedSourceData?.["conversationData"] ?? customerData["_conversations"]);
+  const bureauData = asRecord(groupedSourceData?.["bureauData"]) ?? {};
+  const incomeEmploymentData = asRecord(groupedSourceData?.["incomeEmploymentData"]) ?? {};
 
-  const complianceRules = (packet?.policy as any)?.compliancePolicyInternalRules as unknown[] | undefined;
-  const kbGuidance = (packet?.guidance as any)?.knowledgeBaseAgentGuidance as unknown[] | undefined;
+  const complianceRules = asArray(asRecord(packet?.["policy"])?.["compliancePolicyInternalRules"]);
+  const kbGuidance = asArray(asRecord(packet?.["guidance"])?.["knowledgeBaseAgentGuidance"]);
 
   const isPending = decision.status === "pending";
 
@@ -405,22 +429,25 @@ export default function DecisionDetailPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(businessFieldsTrace as any[]).map((bf: any, i: number) => (
+                    {businessFieldsTrace.map((bfRaw, i) => {
+                      const bf = bfRaw as Record<string, unknown>;
+                      return (
                       <TableRow key={i} data-testid={`row-business-field-${i}`}>
-                        <TableCell className="text-sm font-medium">{bf.field_label}</TableCell>
+                        <TableCell className="text-sm font-medium">{String(bf["field_label"] ?? "")}</TableCell>
                         <TableCell className="text-sm">
-                          {bf.value !== null && bf.value !== undefined ? String(bf.value) : (
-                            <span className="text-muted-foreground text-xs">{bf.null_reason || "null"}</span>
+                          {bf["value"] !== null && bf["value"] !== undefined ? String(bf["value"]) : (
+                            <span className="text-muted-foreground text-xs">{String(bf["null_reason"] ?? "null")}</span>
                           )}
                         </TableCell>
                         <TableCell className="text-sm">
-                          {bf.confidence !== null && bf.confidence !== undefined
-                            ? `${(bf.confidence * 100).toFixed(0)}%`
+                          {typeof bf["confidence"] === "number"
+                            ? `${(bf["confidence"] * 100).toFixed(0)}%`
                             : "—"}
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground max-w-xs">{bf.rationale || "—"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-xs">{String(bf["rationale"] ?? "—") || "—"}</TableCell>
                       </TableRow>
-                    ))}
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -455,25 +482,28 @@ export default function DecisionDetailPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(derivedFieldsTrace as any[]).map((df: any, i: number) => (
+                    {derivedFieldsTrace.map((dfRaw, i) => {
+                      const df = dfRaw as Record<string, unknown>;
+                      return (
                       <TableRow key={i} data-testid={`row-derived-field-${i}`}>
                         <TableCell className="text-sm font-medium">
-                          {df.field_id}
-                          {df.typeMismatchWarning && (
+                          {String(df["field_id"] ?? "")}
+                          {df["typeMismatchWarning"] === true && (
                             <Badge variant="outline" className="ml-2 text-xs text-yellow-600 border-yellow-400">
                               Type mismatch risk
                             </Badge>
                           )}
                         </TableCell>
                         <TableCell className="text-sm">
-                          {df.output_value !== null && df.output_value !== undefined
-                            ? String(df.output_value)
-                            : <span className="text-muted-foreground text-xs">{df.nullReason || "null"}</span>}
+                          {df["output_value"] !== null && df["output_value"] !== undefined
+                            ? String(df["output_value"])
+                            : <span className="text-muted-foreground text-xs">{String(df["nullReason"] ?? "null")}</span>}
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground max-w-xs truncate">{df.formula || "—"}</TableCell>
-                        <TableCell className="text-xs">{df.output_type}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground max-w-xs truncate">{String(df["formula"] ?? "—") || "—"}</TableCell>
+                        <TableCell className="text-xs">{String(df["output_type"] ?? "")}</TableCell>
                       </TableRow>
-                    ))}
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -647,10 +677,11 @@ export default function DecisionDetailPage() {
                     ...(kbGuidance || []),
                   ];
 
-                  for (const rule of usedRules!) {
+                  for (const rule of usedRules) {
                     const byId = allPolicyItems.find(item => {
                       if (!item || typeof item !== "object") return false;
-                      return String((item as any).id) === rule;
+                      const obj = item as Record<string, unknown>;
+                      return String(obj["id"] ?? "") === rule;
                     });
                     if (byId) {
                       const m = matchItem(byId);

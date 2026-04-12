@@ -17,6 +17,7 @@ import {
   SECTION_COMPLIANCE_POLICY_INTERNAL_RULES,
   SECTION_KNOWLEDGE_BASE_AGENT_GUIDANCE,
   type ContextSections,
+  type ContextDataArray,
 } from "./context-sections";
 
 const ai = new GoogleGenAI({
@@ -87,8 +88,8 @@ function isConversationFlagged(item: Record<string, unknown>): boolean {
   return FLAGGED_CONVERSATION_PATTERNS.some(p => p.test(combined));
 }
 
-interface TruncationResult<T> {
-  items: T[];
+interface TruncationResult {
+  items: ContextDataArray;
   originalCount: number;
   retainedCount: number;
   truncated: boolean;
@@ -96,22 +97,30 @@ interface TruncationResult<T> {
   summaryLine?: string;
 }
 
-function truncateHistory<T extends Record<string, unknown>>(
-  items: T[],
-  isFlagged: (item: T) => boolean,
+function truncateHistory(
+  items: Record<string, unknown>[],
+  isFlagged: (item: Record<string, unknown>) => boolean,
   sectionName: string
-): TruncationResult<T> {
+): TruncationResult {
   const originalCount = items.length;
   if (originalCount <= HISTORY_KEEP_LATEST) {
     return { items, originalCount, retainedCount: originalCount, truncated: false, summarizationUsed: false };
   }
-  const latestN = items.slice(0, HISTORY_KEEP_LATEST);
-  const older = items.slice(HISTORY_KEEP_LATEST);
+  const sorted = [...items].sort((a, b) => {
+    const aDate = String(a["date_of_payment"] || a["date"] || a["created_at"] || a["timestamp"] || "");
+    const bDate = String(b["date_of_payment"] || b["date"] || b["created_at"] || b["timestamp"] || "");
+    if (!aDate && !bDate) return 0;
+    if (!aDate) return 1;
+    if (!bDate) return -1;
+    return bDate.localeCompare(aDate);
+  });
+  const latestN = sorted.slice(0, HISTORY_KEEP_LATEST);
+  const older = sorted.slice(HISTORY_KEEP_LATEST);
   const flaggedOlder = older.filter(isFlagged);
   const kept = [...latestN, ...flaggedOlder];
   const droppedCount = older.length - flaggedOlder.length;
   const summaryStr = `[${droppedCount} older ${sectionName} item(s) summarized — not flagged for retention]`;
-  const final = [...kept, summaryStr as unknown as T];
+  const final: ContextDataArray = [...kept, summaryStr];
   return {
     items: final,
     originalCount,
@@ -233,13 +242,14 @@ function parseAndNormalizeEvidence(parsed: Record<string, unknown>): BusinessFie
   const normalized: BusinessFieldEvidenceItem[] = [];
   for (const item of parsed.evidence) {
     if (!item || typeof item !== "object") continue;
-    const rawType = String((item as any).type || "");
+    const obj = item as Record<string, unknown>;
+    const rawType = String(obj["type"] || "");
     const canonicalType = normalizeEvidenceType(rawType);
     if (!canonicalType) continue;
     normalized.push({
       type: canonicalType,
-      source: String((item as any).source || ""),
-      snippet: String((item as any).snippet || ""),
+      source: String(obj["source"] || ""),
+      snippet: String(obj["snippet"] || ""),
     });
   }
   return normalized;
@@ -254,7 +264,7 @@ function enforceConfidencePolicy(
   if (confidence === null) return null;
   let c = confidence;
   if (value === null && c > 0.1) c = 0.1;
-  if (retryCount > 0 && c > 0.7) c = 0.7;
+  if (retryCount > 0 && evidence.length < 2 && c > 0.7) c = 0.7;
   if (c > 0.8 && evidence.length < 2) c = 0.8;
   return c;
 }
@@ -321,8 +331,12 @@ export async function inferBusinessFields(
 ): Promise<BusinessFieldTrace[]> {
   const traces: BusinessFieldTrace[] = [];
 
-  const paymentItems = context[SECTION_PAYMENT_DATA] as Record<string, unknown>[];
-  const conversationItems = context[SECTION_CONVERSATION_DATA] as Record<string, unknown>[];
+  const paymentItems = context[SECTION_PAYMENT_DATA].filter(
+    (item): item is Record<string, unknown> => typeof item === "object" && item !== null
+  );
+  const conversationItems = context[SECTION_CONVERSATION_DATA].filter(
+    (item): item is Record<string, unknown> => typeof item === "object" && item !== null
+  );
 
   const paymentTrunc = truncateHistory(paymentItems, isPaymentFlagged, "payment");
   const convTrunc = truncateHistory(conversationItems, isConversationFlagged, "conversation");
