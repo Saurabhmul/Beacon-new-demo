@@ -470,10 +470,5 @@ export function buildResolvedSourceFieldsMap(
     const val = customerData[field.label] ?? customerData[field.label.toLowerCase()];
     if (val !== undefined) result[field.label] = val;
   }
-  for (const [k, v] of Object.entries(customerData)) {
-    if (k.startsWith("_")) continue;
-    if (typeof v === "object") continue;
-    if (!(k in result)) result[k] = v;
-  }
   return result;
 }

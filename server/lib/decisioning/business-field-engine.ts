@@ -110,17 +110,15 @@ function truncateHistory<T extends Record<string, unknown>>(
   const flaggedOlder = older.filter(isFlagged);
   const kept = [...latestN, ...flaggedOlder];
   const droppedCount = older.length - flaggedOlder.length;
-  const summaryLine: Record<string, unknown> = {
-    _summary: `[${droppedCount} older ${sectionName} item(s) summarized — not flagged for retention]`,
-  };
-  const final = [...kept, summaryLine as T];
+  const summaryStr = `[${droppedCount} older ${sectionName} item(s) summarized — not flagged for retention]`;
+  const final = [...kept, summaryStr as unknown as T];
   return {
     items: final,
     originalCount,
     retainedCount: kept.length,
     truncated: true,
     summarizationUsed: true,
-    summaryLine: summaryLine._summary as string,
+    summaryLine: summaryStr,
   };
 }
 
@@ -156,6 +154,12 @@ function tryParseJson(text: string): Record<string, unknown> | null {
   }
 }
 
+export interface BusinessFieldEvidenceItem {
+  type: string;
+  source: string;
+  snippet: string;
+}
+
 export interface BusinessFieldTrace {
   field_id: string;
   field_label: string;
@@ -163,6 +167,7 @@ export interface BusinessFieldTrace {
   confidence: number | null;
   rationale: string;
   null_reason: string | null;
+  evidence: BusinessFieldEvidenceItem[];
   retry_count: number;
   raw_ai_response: string;
   included_context_sections: string[];
@@ -174,11 +179,26 @@ export interface BusinessFieldTrace {
   summarization_used: boolean;
 }
 
+const STANDARD_NULL_REASONS = new Set([
+  "insufficient evidence",
+  "schema validation failed after retry",
+  "field inference timeout",
+  "ai call error",
+]);
+
+function normalizeNullReason(aiReason: string | null | undefined): string {
+  if (!aiReason) return "insufficient evidence";
+  const trimmed = aiReason.trim().toLowerCase();
+  if (STANDARD_NULL_REASONS.has(trimmed)) return trimmed;
+  return "insufficient evidence";
+}
+
 interface SingleFieldResult {
   value: string | number | boolean | null;
   confidence: number | null;
   rationale: string;
   null_reason: string | null;
+  evidence: BusinessFieldEvidenceItem[];
   retryCount: number;
   rawAiResponse: string;
 }
@@ -208,6 +228,37 @@ async function callAIForField(
   return { rawText, parsed };
 }
 
+function parseAndNormalizeEvidence(parsed: Record<string, unknown>): BusinessFieldEvidenceItem[] {
+  if (!Array.isArray(parsed.evidence)) return [];
+  const normalized: BusinessFieldEvidenceItem[] = [];
+  for (const item of parsed.evidence) {
+    if (!item || typeof item !== "object") continue;
+    const rawType = String((item as any).type || "");
+    const canonicalType = normalizeEvidenceType(rawType);
+    if (!canonicalType) continue;
+    normalized.push({
+      type: canonicalType,
+      source: String((item as any).source || ""),
+      snippet: String((item as any).snippet || ""),
+    });
+  }
+  return normalized;
+}
+
+function enforceConfidencePolicy(
+  confidence: number | null,
+  evidence: BusinessFieldEvidenceItem[],
+  value: unknown,
+  retryCount: number
+): number | null {
+  if (confidence === null) return null;
+  let c = confidence;
+  if (value === null && c > 0.1) c = 0.1;
+  if (retryCount > 0 && c > 0.7) c = 0.7;
+  if (c > 0.8 && evidence.length < 2) c = 0.8;
+  return c;
+}
+
 function extractFieldResult(
   parsed: Record<string, unknown> | null,
   field: BusinessFieldMeta,
@@ -220,8 +271,9 @@ function extractFieldResult(
     return {
       value: null,
       confidence: null,
-      rationale: forceNullReason === "field inference timeout" || forceNullReason === "ai call error" ? "" : "",
+      rationale: "",
       null_reason: forceNullReason || "ai call error",
+      evidence: [],
       retryCount,
       rawAiResponse: rawText,
     };
@@ -244,17 +296,12 @@ function extractFieldResult(
     if (!isNaN(n)) confidence = Math.max(0, Math.min(1, n));
   }
 
-  if (value === null && confidence !== null && confidence > 0.1) {
-    confidence = 0.1;
-  }
-
-  if (retryCount > 0 && confidence !== null && confidence > 0.7) {
-    confidence = 0.7;
-  }
+  const evidence = parseAndNormalizeEvidence(parsed);
+  confidence = enforceConfidencePolicy(confidence, evidence, value, retryCount);
 
   const rationale = typeof parsed.rationale === "string" ? parsed.rationale : "";
   const null_reason = value === null
-    ? (typeof parsed.null_reason === "string" && parsed.null_reason ? parsed.null_reason : "insufficient evidence")
+    ? normalizeNullReason(typeof parsed.null_reason === "string" ? parsed.null_reason : null)
     : null;
 
   return {
@@ -262,6 +309,7 @@ function extractFieldResult(
     confidence,
     rationale,
     null_reason,
+    evidence,
     retryCount,
     rawAiResponse: rawText,
   };
@@ -337,6 +385,7 @@ export async function inferBusinessFields(
             confidence: null,
             rationale: "",
             null_reason: "field inference timeout",
+            evidence: [],
             retryCount: 0,
             rawAiResponse: "",
           };
@@ -368,6 +417,7 @@ export async function inferBusinessFields(
               confidence: null,
               rationale: "",
               null_reason: "field inference timeout",
+              evidence: [],
               retryCount: 1,
               rawAiResponse: rawText,
             };
@@ -387,6 +437,7 @@ export async function inferBusinessFields(
             confidence: null,
             rationale: "",
             null_reason: "schema validation failed after retry",
+            evidence: [],
             retryCount: 1,
             rawAiResponse: rawText,
           };
@@ -403,6 +454,7 @@ export async function inferBusinessFields(
         confidence: null,
         rationale: "",
         null_reason: "ai call error",
+        evidence: [],
         retryCount: 0,
         rawAiResponse: "",
       };
@@ -470,6 +522,7 @@ function buildTrace(
     confidence: result.confidence,
     rationale: result.rationale,
     null_reason: result.null_reason,
+    evidence: result.evidence,
     retry_count: result.retryCount,
     raw_ai_response: result.rawAiResponse.substring(0, 2000),
     included_context_sections: includedContextSections,
