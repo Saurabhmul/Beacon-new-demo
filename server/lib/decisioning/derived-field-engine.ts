@@ -1,7 +1,7 @@
 // This engine is deterministic. Do not add AI calls here.
 
 import type { PolicyFieldRecord } from "@shared/schema";
-import { topologicalSort } from "../derivation-config";
+import { topologicalSort, type FieldNode } from "../derivation-config";
 
 interface SourceMapMeta {
   sourceFields: Record<string, boolean>;
@@ -22,6 +22,10 @@ export interface DerivedFieldTrace {
   nullReason: string | null;
   warningMessage: string | null;
 }
+
+// Any string value longer than this threshold is treated as narrative text, regardless of metadata.
+// Scalar field values (names, numbers, dates, statuses) are never this long.
+const NARRATIVE_TEXT_LENGTH_THRESHOLD = 500;
 
 const SAFE_BOOLEAN_STRINGS: Record<string, boolean> = {
   "true": true, "yes": true, "1": true,
@@ -70,11 +74,23 @@ function getSourceMapMeta(sourceMap: Record<string, unknown>): SourceMapMeta | u
   return undefined;
 }
 
+/**
+ * Returns true if the field is tagged as a narrative text source in the meta OR
+ * if its resolved value is a suspiciously long string (> NARRATIVE_TEXT_LENGTH_THRESHOLD chars),
+ * indicating it is a narrative/guidance blob and not a scalar field value.
+ */
 function isNarrativeTextField(fieldId: string, sourceMap: Record<string, unknown>): boolean {
   const meta = getSourceMapMeta(sourceMap);
-  if (!meta) return false;
-  return fieldId in meta.narrativeTextFields ||
-    Object.keys(meta.narrativeTextFields).some(k => k.toLowerCase() === fieldId.toLowerCase());
+  if (meta) {
+    if (fieldId in meta.narrativeTextFields) return true;
+    if (Object.keys(meta.narrativeTextFields).some(k => k.toLowerCase() === fieldId.toLowerCase())) return true;
+  }
+  // Length-based heuristic: catch narrative blobs that arrive without provenance metadata
+  const resolvedVal = resolveFromMap(fieldId, sourceMap);
+  if (typeof resolvedVal === "string" && resolvedVal.trim().length > NARRATIVE_TEXT_LENGTH_THRESHOLD) {
+    return true;
+  }
+  return false;
 }
 
 function evaluateArithmetic(
@@ -298,32 +314,84 @@ function makeSourceMapMeta(
   };
 }
 
+/**
+ * Among the nodes that Kahn's algorithm could not sort (because their in-degree never
+ * reaches 0), identify which ones are truly IN a cycle (i.e. can reach themselves via
+ * a directed path within the unsorted subgraph). The remainder are merely downstream-
+ * blocked: they depend on a cyclic node but are not themselves part of any cycle.
+ */
+function partitionCyclicNodes(unsortedNodes: FieldNode[]): {
+  trulyCyclic: FieldNode[];
+  downstreamBlocked: FieldNode[];
+} {
+  const unsortedSet = new Set(unsortedNodes.map(n => n.fieldName.toLowerCase()));
+
+  // Build adjacency list restricted to the unsorted subgraph
+  const adj = new Map<string, string[]>();
+  for (const node of unsortedNodes) {
+    const key = node.fieldName.toLowerCase();
+    adj.set(
+      key,
+      node.dependsOn.map(d => d.toLowerCase()).filter(d => unsortedSet.has(d))
+    );
+  }
+
+  // DFS self-reachability: a node is truly cyclic if it can reach itself
+  const trulyCyclicSet = new Set<string>();
+  for (const node of unsortedNodes) {
+    const start = node.fieldName.toLowerCase();
+    if (trulyCyclicSet.has(start)) continue;
+    const visited = new Set<string>();
+    const stack = [...(adj.get(start) ?? [])];
+    outer: while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (cur === start) {
+        trulyCyclicSet.add(start);
+        break outer;
+      }
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      for (const next of (adj.get(cur) ?? [])) {
+        stack.push(next);
+      }
+    }
+  }
+
+  return {
+    trulyCyclic: unsortedNodes.filter(n => trulyCyclicSet.has(n.fieldName.toLowerCase())),
+    downstreamBlocked: unsortedNodes.filter(n => !trulyCyclicSet.has(n.fieldName.toLowerCase())),
+  };
+}
+
 export function computeDerivedFields(
   derivedFields: PolicyFieldRecord[],
   resolvedSourceFields: Record<string, unknown>,
-  businessFields: Record<string, unknown>
+  businessFields: Record<string, unknown>,
+  narrativeTextFieldIds: Record<string, boolean> = {}
 ): DerivedFieldTrace[] {
   const fieldNodes = derivedFields.map(f => ({
     fieldName: f.label,
     dependsOn: extractDependencies(f.derivationConfig as Record<string, unknown> | null),
   }));
 
-  const { sorted, cyclic } = topologicalSort(fieldNodes);
+  const { sorted: topoSorted, cyclic: topoUnsorted } = topologicalSort(fieldNodes);
 
-  const cyclicNames = new Set(cyclic.map(c => c.fieldName.toLowerCase()));
-  const cyclicGroup = cyclic.map(c => c.fieldName).join(", ");
+  // Separate truly cyclic nodes (in a cycle) from downstream-blocked nodes (depend on a cycle)
+  // Only truly cyclic nodes get nullReason = "cycle detected".
+  // Downstream-blocked nodes are appended to the evaluation pass and naturally resolve
+  // to nullReason = "missing dependency" when their cyclic upstream evaluates to null.
+  const { trulyCyclic, downstreamBlocked } = partitionCyclicNodes(topoUnsorted);
+  const cyclicNames = new Set(trulyCyclic.map(c => c.fieldName.toLowerCase()));
+  const cyclicGroup = trulyCyclic.map(c => c.fieldName).join(", ");
 
   const traces: DerivedFieldTrace[] = [];
   const computedValues: Record<string, unknown> = {};
 
-  // Narrative text fields are not passed into the derived-field engine; this set is
-  // always empty by construction. The guard below ensures that if a future code path
-  // ever routes narrative text here, it is rejected at evaluation time.
-  const narrativeTextFields: Record<string, boolean> = {};
-
   const fieldByName = new Map(derivedFields.map(f => [f.label.toLowerCase(), f]));
 
-  for (const node of cyclic) {
+  // Emit cycle-detected traces first; register null values so downstream fields
+  // can propagate correctly via the hasMissingDep check.
+  for (const node of trulyCyclic) {
     const field = fieldByName.get(node.fieldName.toLowerCase());
     if (!field) continue;
     const config = (field.derivationConfig || {}) as Record<string, unknown>;
@@ -337,12 +405,16 @@ export function computeDerivedFields(
       deduced_type: deduceType(config),
       typeMismatchWarning: false,
       nullReason: "cycle detected",
-      warningMessage: `Dependency cycle detected involving: ${cyclicGroup}`,
+      warningMessage: cyclicGroup ? `Dependency cycle detected involving: ${cyclicGroup}` : "Dependency cycle detected",
     });
     computedValues[field.label] = null;
   }
 
-  for (const node of sorted) {
+  // Evaluate topo-sorted fields first, then downstream-blocked fields.
+  // Downstream-blocked fields will naturally fail via null propagation.
+  const evalOrder = [...topoSorted, ...downstreamBlocked];
+
+  for (const node of evalOrder) {
     const field = fieldByName.get(node.fieldName.toLowerCase());
     if (!field) continue;
 
@@ -355,7 +427,7 @@ export function computeDerivedFields(
       ...resolvedSourceFields,
       ...businessFields,
       ...computedValues,
-      __meta: makeSourceMapMeta(resolvedSourceFields, businessFields, computedValues, narrativeTextFields),
+      __meta: makeSourceMapMeta(resolvedSourceFields, businessFields, computedValues, narrativeTextFieldIds),
     };
 
     const inputsUsed: DerivedFieldTrace["inputs_used"] = {};
@@ -368,13 +440,14 @@ export function computeDerivedFields(
     for (const dep of deps) {
       const depLower = dep.toLowerCase();
 
+      // Direct cycle membership
       if (cyclicNames.has(depLower)) {
         hasMissingDep = true;
         warningMessage = `dependency "${dep}" is in a cycle and could not be computed`;
         break;
       }
 
-      // Explicit check: upstream derived field evaluated to null propagates as missing dependency
+      // Upstream derived field that evaluated to null propagates as missing dependency
       const computedDepKey = Object.keys(computedValues).find(k => k.toLowerCase() === depLower);
       if (computedDepKey !== undefined && computedValues[computedDepKey] === null) {
         hasMissingDep = true;
@@ -382,6 +455,7 @@ export function computeDerivedFields(
         break;
       }
 
+      // Completely unknown field (not in source, business, or any computed map)
       const inSource = dep in resolvedSourceFields || Object.keys(resolvedSourceFields).some(k => k.toLowerCase() === depLower);
       const inBusiness = dep in businessFields || Object.keys(businessFields).some(k => k.toLowerCase() === depLower);
       const inComputed = computedDepKey !== undefined;
@@ -440,12 +514,15 @@ export function computeDerivedFields(
     const outputType = classifyOutputType(outputValue);
     let typeMismatchWarning = false;
 
-    if (outputValue !== null && configuredType) {
-      const typeMatch = checkTypeMatch(outputType, configuredType);
+    // Check mismatch against configured type; fall back to deduced type when no override is set.
+    const effectiveType = configuredType ?? deducedType;
+    if (outputValue !== null && effectiveType) {
+      const typeMatch = checkTypeMatch(outputType, effectiveType);
       if (!typeMatch) {
         typeMismatchWarning = true;
         if (!warningMessage) {
-          warningMessage = `configured type "${configuredType}" does not match computed type "${outputType}"`;
+          const src = configuredType ? "configured" : "deduced";
+          warningMessage = `${src} type "${effectiveType}" does not match computed type "${outputType}"`;
         }
       }
     }
