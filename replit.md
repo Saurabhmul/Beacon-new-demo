@@ -130,7 +130,22 @@ Project Beacon is a B2B web application for lenders to upload CSV/JSON customer 
 - **PATCH /api/policy-fields/:id**: Accepts dataType, allowedValues, defaultValue, businessMeaning
 - **POST /api/policy-fields**: Accepts dataType, allowedValues, defaultValue, businessMeaning
 
+## Decisioning Pipeline v2.1 (Tasks #43–#46)
+- **Context Sections** (`server/lib/decisioning/context-sections.ts`): 10 named sections + `emptyContextSections()`. Sections: customerProfile, loanData, paymentData, conversationData, bureauData, incomeEmploymentData, resolvedSourceFields, priorBusinessFields, compliancePolicyInternalRules, knowledgeBaseAgentGuidance.
+- **Business Field Engine** (`server/lib/decisioning/business-field-engine.ts`): `inferBusinessFields()` — sequential field inference using Gemini 2.5 Pro with truncation of large histories, flagged item detection, prior-field accumulation per field, retry logic, and per-field trace output.
+- **Business Field Prompt** (`server/lib/decisioning/prompts/business-field-prompt.ts`): 13-rule system prompt, per-field user prompt, retry suffix with validation error feedback.
+- **Derived Field Engine** (`server/lib/decisioning/derived-field-engine.ts`): `computeDerivedFields()` — deterministic topo-sorted execution with cycle detection, safe type coercion, null propagation, and per-field trace. Also exports `buildResolvedSourceFieldsMap()`.
+- **Decision Packet** (`server/lib/decisioning/decision-packet.ts`): `DecisionPacket` type + `buildDecisionPacket()` — structured packet containing customer data, grouped source data (loanData, paymentData, conversationData, bureauData, incomeEmploymentData), business fields, derived fields, treatments and policy rules.
+- **Final Decision Prompt** (`server/lib/decisioning/prompts/final-decision-prompt.ts`): 18-rule system prompt with JSON output schema, user prompt from packet, retry suffix.
+- **Decision Validator** (`server/lib/decisioning/decision-validator.ts`): validates AI output against required fields and output schema.
+- **New DB columns on decisions**: `recommended_treatment_name`, `recommended_treatment_code`, `customer_situation`, `treatment_eligibility_explanation`, `structured_assessments` (jsonb), `decision_trace_json` (jsonb) — all nullable.
+- **Review Queue (Task #46)**: Column renamed from "Proposed Action" to "Recommended Treatment". Shows `recommendedTreatmentName` (falls back to `proposedSolution`). Search updated.
+- **Decision Detail v2.1 (Task #46)**: 5-section layout: (1) Decision Summary — customer ID, status, recommended treatment, situation confidence, customer situation; (2) Source Data — grouped data cards for all data categories; (3) Business Fields — collapsible table from `decisionTraceJson`; (4) Derived Fields — collapsible table from trace; (5) Treatment Decision — structured assessments, decision factors, treatment rationale, internal action, email draft, policy/guidance used, agent review.
+- Legacy decisions (no `decisionTraceJson`) show: `"This decision was generated before v2.1 detail tracing was available."` in sections 3 and 4.
+- `/api/analyze` route fully replaced with new pipeline: build context sections → inferBusinessFields → computeDerivedFields → buildDecisionPacket → final AI decision.
+
 ## Recent Changes
+- 2026-04-12: Decisioning pipeline v2.1 (Tasks #43–#46) — new business field inference, derived field computation, structured decision packet, final AI decision prompt/schema, review queue and decision detail UI updated
 - 2026-04-11: Field Metadata Extraction & Editing (Task #42) — AI extracts data_type/allowed_values/default_value for source fields; editable in Data Config; business/derived field modal has full metadata inputs; derived field type deduction + mismatch warnings; safe coercion helpers; PATCH/POST endpoints extended
 - 2026-04-08: SOP multi-PDF upload → Gemini AI treatment draft generation (Task #16) — full end-to-end flow with confidence badges, field tab panels, overwrite modal, AI review banner
 - 2026-04-06: Upload Data tab now uses saved Data Configuration as source of truth — tabs shown only for configured tabular categories (loan_account→loan_data, payment_history, conversation_history, income_employment, credit_bureau); document-only categories (compliance_policy, knowledge_base) excluded; sample CSV generated from saved field analysis (active/non-ignored fields only); falls back to hardcoded defaults if no Data Config saved yet

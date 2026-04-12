@@ -22,31 +22,17 @@ import {
   ArrowLeft,
   CheckCircle2,
   XCircle,
-  Brain,
   AlertTriangle,
   Loader2,
-  Shield,
-  DollarSign,
-  Calendar,
-  HelpCircle,
-  ThumbsUp,
-  ThumbsDown,
-  CircleDot,
-  MessageSquare,
-  CreditCard,
-  ShieldAlert,
-  TrendingUp,
-  Heart,
+  ChevronDown,
+  ChevronRight,
   Mail,
-  BarChart3,
+  Brain,
+  Database,
 } from "lucide-react";
 import type { Decision } from "@shared/schema";
 
-function parseEvidence(evidence: string | null | undefined): string[] {
-  if (!evidence) return [];
-  const lines = evidence.split(/[\n;•·]/);
-  return lines.map((l) => l.trim()).filter((l) => l.length > 0);
-}
+const LEGACY_FALLBACK_MSG = "This decision was generated before v2.1 detail tracing was available.";
 
 function formatDate(date: string | Date | null | undefined): string {
   if (!date) return "N/A";
@@ -60,32 +46,128 @@ function formatDate(date: string | Date | null | undefined): string {
   });
 }
 
-function extractCustomerMetrics(decision: Decision) {
-  const data = decision.customerData || {};
-
-  const findValue = (keys: string[]) => {
-    for (const key of keys) {
-      const lowerKey = key.toLowerCase();
-      for (const [k, v] of Object.entries(data)) {
-        if (k.startsWith("_")) continue;
-        if (k.toLowerCase().includes(lowerKey) && v != null && v !== "") {
-          return String(v);
-        }
-      }
-    }
-    return null;
-  };
-
-  return {
-    totalDue: findValue(["amount_due", "total_due", "outstanding", "balance"]),
-    dpdBucket: findValue(["dpd_bucket", "dpd", "days_past_due"]),
-    minimumDue: findValue(["minimum_due", "min_due"]),
-    dueDate: findValue(["due_date", "duedate", "payment_due"]),
-  };
+function getCustomerId(decision: Decision): string {
+  const d = decision as any;
+  return d.customerGuid || d.customer_guid || (d.customerData && (d.customerData.customer_guid || d.customerData.legacy_id)) || "Unknown";
 }
 
-function getRaw(decision: Decision): Record<string, unknown> {
-  return (decision.aiRawOutput || {}) as Record<string, unknown>;
+function getRecommendedTreatment(decision: Decision): string {
+  const d = decision as any;
+  return d.recommendedTreatmentName || decision.proposedSolution || "Unknown";
+}
+
+function statusBadgeVariant(status: string) {
+  if (status === "approved") return "default" as const;
+  if (status === "rejected") return "destructive" as const;
+  if (status === "needs_review") return "secondary" as const;
+  return "outline" as const;
+}
+
+function statusLabel(status: string): string {
+  if (status === "approved") return "Approved";
+  if (status === "rejected") return "Rejected";
+  if (status === "needs_review") return "Needs Review";
+  return "Pending Review";
+}
+
+function isNonEmptyValue(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  if (typeof val === "string") return val.length > 0;
+  if (Array.isArray(val)) return val.length > 0;
+  if (typeof val === "object") return Object.keys(val as object).length > 0;
+  return true;
+}
+
+function CollapsibleSection({ title, children, defaultOpen }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen ?? true);
+  return (
+    <div className="border rounded-lg">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between p-4 text-left hover:bg-muted/30 transition-colors"
+        data-testid={`section-toggle-${title.toLowerCase().replace(/\s+/g, "-")}`}
+      >
+        <span className="font-medium text-sm">{title}</span>
+        {open ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+      </button>
+      {open && <div className="px-4 pb-4">{children}</div>}
+    </div>
+  );
+}
+
+function StringList({ items, emptyText = "None" }: { items: unknown; emptyText?: string }) {
+  const arr = Array.isArray(items) ? items : [];
+  if (arr.length === 0) return <span className="text-sm text-muted-foreground">{emptyText}</span>;
+  return (
+    <ul className="list-disc list-inside space-y-1">
+      {arr.map((item, i) => (
+        <li key={i} className="text-sm">{String(item)}</li>
+      ))}
+    </ul>
+  );
+}
+
+function SourceDataCard({ title, content, extra }: { title: string; content: unknown; extra?: string }) {
+  if (!isNonEmptyValue(content)) return null;
+
+  let rows: Array<[string, string]> = [];
+
+  if (Array.isArray(content)) {
+    return (
+      <Card className="overflow-hidden">
+        <CardHeader className="py-3 px-4 bg-muted/30">
+          <CardTitle className="text-sm font-semibold">{title}</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {extra && <p className="text-sm px-4 pt-3 pb-1 text-muted-foreground italic">{extra}</p>}
+          <div className="overflow-x-auto max-h-56 overflow-y-auto">
+            <Table>
+              <TableBody>
+                {(content as Record<string, unknown>[]).slice(0, 20).map((row, i) => (
+                  Object.entries(row).map(([k, v]) => (
+                    <TableRow key={`${i}-${k}`}>
+                      <TableCell className="text-xs font-medium text-muted-foreground w-40">{k}</TableCell>
+                      <TableCell className="text-xs">{String(v ?? "")}</TableCell>
+                    </TableRow>
+                  ))
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (typeof content === "object" && content !== null) {
+    rows = Object.entries(content as Record<string, unknown>)
+      .filter(([, v]) => v !== null && v !== undefined && String(v).length > 0)
+      .map(([k, v]) => [k, String(v)]);
+  }
+
+  if (rows.length === 0) return null;
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader className="py-3 px-4 bg-muted/30">
+        <CardTitle className="text-sm font-semibold">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        {extra && <p className="text-sm px-4 pt-3 pb-1 text-muted-foreground italic">{extra}</p>}
+        <Table>
+          <TableBody>
+            {rows.map(([k, v]) => (
+              <TableRow key={k}>
+                <TableCell className="text-xs font-medium text-muted-foreground w-40">{k}</TableCell>
+                <TableCell className="text-xs">{v}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function DecisionDetailPage() {
@@ -97,12 +179,6 @@ export default function DecisionDetailPage() {
 
   const [agentReason, setAgentReason] = useState("");
   const [showRejectForm, setShowRejectForm] = useState(false);
-  const [atpFeedback, setAtpFeedback] = useState<"correct" | "incorrect" | "undetermined" | null>(null);
-  const [atpComment, setAtpComment] = useState("");
-  const [solutionFeedback, setSolutionFeedback] = useState<"agree" | "disagree" | null>(null);
-  const [solutionComment, setSolutionComment] = useState("");
-  const [emailFeedback, setEmailFeedback] = useState<"agree" | "disagree" | null>(null);
-  const [emailComment, setEmailComment] = useState("");
 
   const { data: decision, isLoading } = useQuery<Decision>({
     queryKey: ["/api/decisions", params.id],
@@ -125,17 +201,27 @@ export default function DecisionDetailPage() {
     },
   });
 
+  const emailMutation = useMutation({
+    mutationFn: async (data: { emailAccepted: boolean; emailRejectReason?: string }) => {
+      const res = await apiRequest("PATCH", `/api/decisions/${params.id}/email-review`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/decisions", params.id] });
+      toast({ title: "Email review saved" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save email review.", variant: "destructive" });
+    },
+  });
+
   if (isLoading) {
     return (
-      <div className="p-6 space-y-6">
+      <div className="p-6 space-y-6 max-w-5xl mx-auto">
         <Skeleton className="h-8 w-48" />
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <Skeleton className="h-64" />
-          <div className="lg:col-span-2 space-y-4">
-            <Skeleton className="h-48" />
-            <Skeleton className="h-48" />
-          </div>
-        </div>
+        <Skeleton className="h-40" />
+        <Skeleton className="h-64" />
+        <Skeleton className="h-48" />
       </div>
     );
   }
@@ -148,31 +234,47 @@ export default function DecisionDetailPage() {
     );
   }
 
+  const d = decision as any;
+  const hasTrace = Boolean(d.decisionTraceJson);
+  const trace = hasTrace ? (d.decisionTraceJson as Record<string, unknown>) : null;
+  const packet = trace?.decision_packet as Record<string, unknown> | undefined;
+  const groupedSourceData = (packet?.customer as any)?.groupedSourceData as Record<string, unknown> | undefined;
+  const businessFieldsTrace = (trace?.business_fields_trace as unknown[]) || [];
+  const derivedFieldsTrace = (trace?.derived_fields_trace as unknown[]) || [];
+  const finalAiOutput = trace?.final_ai_output as Record<string, unknown> | undefined;
+
+  const customerId = getCustomerId(decision);
+  const recommendedTreatment = (d.recommendedTreatmentName as string) || decision.proposedSolution || "Unknown";
+  const recommendedCode = (d.recommendedTreatmentCode as string) || "";
+  const customerSituation = (d.customerSituation as string) || decision.problemDescription || "";
+  const treatmentExplanation = (d.treatmentEligibilityExplanation as string) || decision.solutionEvidence || "";
+  const structuredAssessments = (d.structuredAssessments as Array<{ name: string; value: string | null; reason: string }>) || [];
+  const proposedEmail = decision.proposedEmailToCustomer || "NO_ACTION";
+  const internalAction = decision.internalAction || "";
+
+  const situationConfidence = finalAiOutput?.customer_situation_confidence_score as number | undefined;
+  const requiresAgentReview = finalAiOutput?.requires_agent_review as boolean | undefined;
+  const usedFields = finalAiOutput?.used_fields as string[] | undefined;
+  const usedRules = finalAiOutput?.used_rules as string[] | undefined;
+  const missingInfo = finalAiOutput?.missing_information as string[] | undefined;
+  const keyFactors = finalAiOutput?.key_factors_considered as string[] | undefined;
+  const blockedConditions = finalAiOutput?.blocked_conditions as string[] | undefined;
+  const paymentSummary = finalAiOutput?.recent_payment_history_summary as string | undefined;
+  const convSummary = finalAiOutput?.conversation_summary as string | undefined;
+
+  const loanData = groupedSourceData?.loanData ?? d.customerData ?? {};
+  const paymentData = groupedSourceData?.paymentData ?? d._payments ?? [];
+  const conversationData = groupedSourceData?.conversationData ?? d._conversations ?? [];
+  const bureauData = groupedSourceData?.bureauData ?? {};
+  const incomeEmploymentData = groupedSourceData?.incomeEmploymentData ?? {};
+
+  const complianceRules = (packet?.policy as any)?.compliancePolicyInternalRules as unknown[] | undefined;
+  const kbGuidance = (packet?.guidance as any)?.knowledgeBaseAgentGuidance as unknown[] | undefined;
+
   const isPending = decision.status === "pending";
-  const metrics = extractCustomerMetrics(decision);
-  const raw = getRaw(decision);
-  const problemBullets = parseEvidence(decision.problemEvidence);
-  const solutionBullets = parseEvidence(decision.solutionEvidence);
-
-  const paymentHistory = String(raw.payment_history || "");
-  const conversationSummary = String(raw.conversation || "");
-  const vulnerability = raw.vulnerability === true || raw.vulnerability === "true";
-  const reasonForVulnerability = String(raw.reason_for_vulnerability || "");
-  const affordability = String(raw.affordability || "not sure");
-  const reasonForAffordability = String(raw.reason_for_affordability || "");
-  const willingness = String(raw.willingness || "not sure");
-  const reasonForWillingness = String(raw.reason_for_willingness || "");
-
-  const levelBadgeVariant = (level: string) => {
-    const l = level.toLowerCase();
-    if (l === "high") return "default" as const;
-    if (l === "medium") return "secondary" as const;
-    if (l === "low" || l === "very low") return "destructive" as const;
-    return "outline" as const;
-  };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <Button
         variant="ghost"
         onClick={() => setLocation("/review")}
@@ -183,573 +285,487 @@ export default function DecisionDetailPage() {
         Back to Queue
       </Button>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="space-y-4">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Customer Info</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Customer ID</p>
-                <p className="text-sm font-mono break-all" data-testid="text-customer-guid">{decision.customerGuid}</p>
-              </div>
-              <Separator />
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Status</p>
-                <Badge
-                  variant={decision.status === "pending" ? "outline" : decision.agentAgreed ? "default" : "destructive"}
-                  data-testid="badge-status"
-                >
-                  {decision.status === "pending" ? "Pending Review" : decision.agentAgreed ? "Approved" : "Rejected"}
-                </Badge>
-              </div>
-              {metrics.totalDue && (
-                <>
-                  <Separator />
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Amount Due</p>
-                    <p className="text-sm font-semibold" data-testid="text-total-due">{metrics.totalDue}</p>
-                  </div>
-                </>
-              )}
-              {metrics.dpdBucket && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">DPD Bucket</p>
-                  <p className="text-sm" data-testid="text-dpd-bucket">{metrics.dpdBucket}</p>
-                </div>
-              )}
-              {metrics.minimumDue && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Minimum Due</p>
-                  <p className="text-sm" data-testid="text-minimum-due">{metrics.minimumDue}</p>
-                </div>
-              )}
-              {metrics.dueDate && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Due Date</p>
-                  <p className="text-sm" data-testid="text-due-date">{metrics.dueDate}</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="lg:col-span-2 space-y-4">
-
-          {paymentHistory && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <CreditCard className="w-4 h-4" />
-                  Payment History
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm leading-relaxed whitespace-pre-line" data-testid="text-payment-history">{paymentHistory}</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {conversationSummary && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4" />
-                  Conversation Summary
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm leading-relaxed whitespace-pre-line" data-testid="text-conversation-summary">{conversationSummary}</p>
-              </CardContent>
-            </Card>
-          )}
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4" />
-                Vulnerability
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Badge variant={vulnerability ? "destructive" : "default"} data-testid="badge-vulnerability">
-                {vulnerability ? "Vulnerable" : "Not Vulnerable"}
+      {/* SECTION 1 — Top Summary */}
+      <Card data-testid="section-top-summary">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Brain className="w-4 h-4" />
+            Decision Summary
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Customer ID</p>
+              <p className="text-sm font-mono break-all" data-testid="text-customer-guid">{customerId}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Status</p>
+              <Badge variant={statusBadgeVariant(decision.status)} data-testid="badge-status">
+                {statusLabel(decision.status)}
               </Badge>
-              {vulnerability && reasonForVulnerability && (
-                <p className="text-sm text-muted-foreground leading-relaxed mt-2" data-testid="text-vulnerability-reason">{reasonForVulnerability}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Last AI Run Date</p>
+              <p className="text-sm text-muted-foreground" data-testid="text-run-date">{formatDate(decision.createdAt)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Requires Agent Review</p>
+              {requiresAgentReview !== undefined ? (
+                <Badge variant={requiresAgentReview ? "destructive" : "default"} data-testid="badge-agent-review">
+                  {requiresAgentReview ? "Yes" : "No"}
+                </Badge>
+              ) : (
+                <span className="text-sm text-muted-foreground">—</span>
               )}
-            </CardContent>
-          </Card>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4" />
-                  Affordability
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <Badge variant={levelBadgeVariant(affordability)} className="capitalize" data-testid="badge-affordability">
-                  {affordability}
-                </Badge>
-                {reasonForAffordability && (
-                  <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-affordability-reason">{reasonForAffordability}</p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Heart className="w-4 h-4" />
-                  Willingness
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <Badge variant={levelBadgeVariant(willingness)} className="capitalize" data-testid="badge-willingness">
-                  {willingness}
-                </Badge>
-                {reasonForWillingness && (
-                  <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-willingness-reason">{reasonForWillingness}</p>
-                )}
-              </CardContent>
-            </Card>
+            </div>
           </div>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <DollarSign className="w-4 h-4" />
-                Ability to Pay
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-4 flex-wrap">
-                <div className="text-3xl font-bold" data-testid="text-atp-value">
-                  {decision.abilityToPay != null ? decision.abilityToPay.toFixed(2) : "N/A"}
-                </div>
-                {decision.reasonForAbilityToPay && (
-                  <p className="text-sm text-muted-foreground flex-1" data-testid="text-atp-reason">
-                    {decision.reasonForAbilityToPay}
-                  </p>
+          <Separator />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Recommended Treatment</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold" data-testid="text-recommended-treatment">{recommendedTreatment}</p>
+                {recommendedCode && (
+                  <Badge variant="outline" className="text-xs font-mono">{recommendedCode}</Badge>
                 )}
               </div>
-              <Separator />
+            </div>
+            {situationConfidence !== undefined && (
               <div>
-                <p className="text-xs text-muted-foreground mb-2">Is this assessment accurate?</p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className={`gap-1.5 ${atpFeedback === "correct" ? "border-primary bg-primary/10" : ""}`}
-                    onClick={() => setAtpFeedback(atpFeedback === "correct" ? null : "correct")}
-                    data-testid="button-atp-correct"
-                  >
-                    <ThumbsUp className="w-3.5 h-3.5" />
-                    Correct
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className={`gap-1.5 ${atpFeedback === "incorrect" ? "border-destructive bg-destructive/10" : ""}`}
-                    onClick={() => setAtpFeedback(atpFeedback === "incorrect" ? null : "incorrect")}
-                    data-testid="button-atp-incorrect"
-                  >
-                    <ThumbsDown className="w-3.5 h-3.5" />
-                    Incorrect
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className={`gap-1.5 ${atpFeedback === "undetermined" ? "border-muted-foreground bg-muted" : ""}`}
-                    onClick={() => setAtpFeedback(atpFeedback === "undetermined" ? null : "undetermined")}
-                    data-testid="button-atp-undetermined"
-                  >
-                    <HelpCircle className="w-3.5 h-3.5" />
-                    Cannot Determine
-                  </Button>
-                </div>
-                {atpFeedback && (
-                  <Textarea
-                    value={atpComment}
-                    onChange={(e) => setAtpComment(e.target.value)}
-                    placeholder="Add optional comments about this assessment..."
-                    className="mt-3 min-h-[80px]"
-                    data-testid="textarea-atp-comment"
-                  />
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Situation Confidence</p>
+                <p className="text-sm" data-testid="text-situation-confidence">{situationConfidence}/10</p>
+              </div>
+            )}
+          </div>
+
+          {customerSituation && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Customer Situation</p>
+              <p className="text-sm leading-relaxed" data-testid="text-customer-situation">{customerSituation}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SECTION 2 — Source Data */}
+      <Card data-testid="section-source-data">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Database className="w-4 h-4" />
+            Source Data
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {(() => {
+            const cards = [
+              { title: "Loan Data", content: loanData, extra: undefined },
+              { title: "Payment History", content: paymentData, extra: paymentSummary },
+              { title: "Conversations", content: conversationData, extra: convSummary },
+              { title: "Income & Employment", content: incomeEmploymentData, extra: undefined },
+              { title: "Bureau", content: bureauData, extra: undefined },
+            ].filter(c => isNonEmptyValue(c.content));
+
+            if (cards.length === 0) {
+              return <p className="text-sm text-muted-foreground" data-testid="text-no-source-data">No source data available</p>;
+            }
+
+            return cards.map(c => (
+              <SourceDataCard key={c.title} title={c.title} content={c.content} extra={c.extra} />
+            ));
+          })()}
+        </CardContent>
+      </Card>
+
+      {/* SECTION 3 — Business Fields */}
+      <Card data-testid="section-business-fields">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Business Fields</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!hasTrace ? (
+            <p className="text-sm text-muted-foreground italic">{LEGACY_FALLBACK_MSG}</p>
+          ) : businessFieldsTrace.length === 0 ? (
+            <p className="text-sm text-muted-foreground" data-testid="text-no-business-fields">No business fields available</p>
+          ) : (
+            <CollapsibleSection
+              title={`Business Fields (${businessFieldsTrace.length})`}
+              defaultOpen={businessFieldsTrace.length <= 5}
+            >
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Field Label</TableHead>
+                      <TableHead>Inferred Value</TableHead>
+                      <TableHead>Confidence</TableHead>
+                      <TableHead>Rationale</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(businessFieldsTrace as any[]).map((bf: any, i: number) => (
+                      <TableRow key={i} data-testid={`row-business-field-${i}`}>
+                        <TableCell className="text-sm font-medium">{bf.field_label}</TableCell>
+                        <TableCell className="text-sm">
+                          {bf.value !== null && bf.value !== undefined ? String(bf.value) : (
+                            <span className="text-muted-foreground text-xs">{bf.null_reason || "null"}</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {bf.confidence !== null && bf.confidence !== undefined
+                            ? `${(bf.confidence * 100).toFixed(0)}%`
+                            : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-xs">{bf.rationale || "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CollapsibleSection>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SECTION 4 — Derived Fields */}
+      <Card data-testid="section-derived-fields">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Derived Fields</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!hasTrace ? (
+            <p className="text-sm text-muted-foreground italic">{LEGACY_FALLBACK_MSG}</p>
+          ) : derivedFieldsTrace.length === 0 ? (
+            <p className="text-sm text-muted-foreground" data-testid="text-no-derived-fields">No derived fields available</p>
+          ) : (
+            <CollapsibleSection
+              title={`Derived Fields (${derivedFieldsTrace.length})`}
+              defaultOpen={derivedFieldsTrace.length <= 5}
+            >
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Field Label</TableHead>
+                      <TableHead>Value</TableHead>
+                      <TableHead>Formula</TableHead>
+                      <TableHead>Type</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(derivedFieldsTrace as any[]).map((df: any, i: number) => (
+                      <TableRow key={i} data-testid={`row-derived-field-${i}`}>
+                        <TableCell className="text-sm font-medium">
+                          {df.field_id}
+                          {df.typeMismatchWarning && (
+                            <Badge variant="outline" className="ml-2 text-xs text-yellow-600 border-yellow-400">
+                              Type mismatch risk
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {df.output_value !== null && df.output_value !== undefined
+                            ? String(df.output_value)
+                            : <span className="text-muted-foreground text-xs">{df.nullReason || "null"}</span>}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground max-w-xs truncate">{df.formula || "—"}</TableCell>
+                        <TableCell className="text-xs">{df.output_type}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CollapsibleSection>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SECTION 5 — Treatment Decision / Validation / Email */}
+      <Card data-testid="section-treatment-decision">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Treatment Decision</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+
+          {/* Structured Assessments */}
+          <div>
+            <h3 className="text-sm font-semibold mb-3">Structured Assessments</h3>
+            {structuredAssessments.length === 0 ? (
+              <p className="text-sm text-muted-foreground" data-testid="text-no-assessments">No assessments available</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Assessment</TableHead>
+                    <TableHead>Value</TableHead>
+                    <TableHead>Reason</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {structuredAssessments.map((a, i) => (
+                    <TableRow key={i} data-testid={`row-assessment-${i}`}>
+                      <TableCell className="text-sm font-medium">{a.name}</TableCell>
+                      <TableCell className="text-sm">
+                        {a.value !== null && a.value !== undefined ? a.value : "—"}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{a.reason}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+
+          <Separator />
+
+          {/* Decision Factors */}
+          {(usedFields || usedRules || missingInfo || keyFactors) && (
+            <div>
+              <h3 className="text-sm font-semibold mb-3">Decision Factors</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {usedFields && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Fields Used</p>
+                    <StringList items={usedFields} />
+                  </div>
+                )}
+                {usedRules && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Rules Applied</p>
+                    <StringList items={usedRules} />
+                  </div>
+                )}
+                {missingInfo && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Missing Information</p>
+                    <StringList items={missingInfo} />
+                  </div>
+                )}
+                {keyFactors && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Key Factors</p>
+                    <StringList items={keyFactors} />
+                  </div>
                 )}
               </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Brain className="w-4 h-4" />
-                Problem Customer is Facing
-              </CardTitle>
-              <div className="flex items-center gap-1.5 text-muted-foreground shrink-0">
-                <Calendar className="w-3.5 h-3.5" />
-                <span className="text-xs" data-testid="text-analyzed-date">Analyzed {formatDate(decision.createdAt)}</span>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {decision.problemDescription && (
-                <div>
-                  <p className="text-sm leading-relaxed" data-testid="text-problem-desc">{decision.problemDescription}</p>
-                  {decision.problemConfidenceScore != null && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-xs text-muted-foreground">Confidence:</span>
-                      <Badge
-                        variant={
-                          decision.problemConfidenceScore >= 7 ? "destructive" :
-                          decision.problemConfidenceScore >= 4 ? "secondary" : "default"
-                        }
-                        data-testid="badge-problem-confidence"
-                      >
-                        {decision.problemConfidenceScore}/10
-                      </Badge>
-                    </div>
-                  )}
-                </div>
-              )}
-              {problemBullets.length > 0 && (
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Evidence</p>
-                  <ul className="space-y-1.5" data-testid="list-problem-evidence">
-                    {problemBullets.map((bullet, i) => (
-                      <li key={i} className="flex items-start gap-2 text-sm">
-                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
-                        <span>{bullet}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Shield className="w-4 h-4" />
-                Proposed Solution
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {decision.internalAction && (
-                <div className="flex flex-wrap gap-2">
-                  <p className="text-sm leading-relaxed break-words" data-testid="text-internal-action">
-                    <span className="font-medium">Internal Action: </span>{decision.internalAction}
-                  </p>
-                </div>
-              )}
-              {decision.proposedSolution && (
-                <div>
-                  <p className="text-sm leading-relaxed" data-testid="text-proposed-solution">{decision.proposedSolution}</p>
-                  {decision.solutionConfidenceScore != null && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-xs text-muted-foreground">Confidence:</span>
-                      <Badge
-                        variant={
-                          decision.solutionConfidenceScore >= 7 ? "default" :
-                          decision.solutionConfidenceScore >= 4 ? "secondary" : "destructive"
-                        }
-                        data-testid="badge-solution-confidence"
-                      >
-                        {decision.solutionConfidenceScore}/10
-                      </Badge>
-                    </div>
-                  )}
-                </div>
-              )}
-              {solutionBullets.length > 0 && (
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Evidence</p>
-                  <ul className="space-y-1.5" data-testid="list-solution-evidence">
-                    {solutionBullets.map((bullet, i) => (
-                      <li key={i} className="flex items-start gap-2 text-sm">
-                        <CircleDot className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
-                        <span>{bullet}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <Separator />
-              <div>
-                <p className="text-xs text-muted-foreground mb-2">Do you agree with this proposed solution?</p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className={`gap-1.5 ${solutionFeedback === "agree" ? "border-primary bg-primary/10" : ""}`}
-                    onClick={() => setSolutionFeedback(solutionFeedback === "agree" ? null : "agree")}
-                    data-testid="button-solution-agree"
-                  >
-                    <ThumbsUp className="w-3.5 h-3.5" />
-                    Agree
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className={`gap-1.5 ${solutionFeedback === "disagree" ? "border-destructive bg-destructive/10" : ""}`}
-                    onClick={() => setSolutionFeedback(solutionFeedback === "disagree" ? null : "disagree")}
-                    data-testid="button-solution-disagree"
-                  >
-                    <ThumbsDown className="w-3.5 h-3.5" />
-                    Disagree
-                  </Button>
-                </div>
-                {solutionFeedback === "disagree" && (
-                  <Textarea
-                    value={solutionComment}
-                    onChange={(e) => setSolutionComment(e.target.value)}
-                    placeholder="Please explain why you disagree with the proposed solution..."
-                    className="mt-3 min-h-[80px]"
-                    data-testid="textarea-solution-comment"
-                  />
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          {raw.arrears_clearance_plan && typeof raw.arrears_clearance_plan === 'object' && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <BarChart3 className="w-4 h-4" />
-                  Arrears Clearance Plan
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {(() => {
-                  const plan = raw.arrears_clearance_plan as {
-                    monthly_payment_recommended?: number;
-                    surplus_above_mad?: number;
-                    total_arrears?: number;
-                    months_to_clear?: number;
-                    projected_timeline?: Array<{ month: number; payment: number; remaining_arrears: number }>;
-                  };
-                  return (
-                    <>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="bg-muted/50 rounded-md p-3">
-                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Monthly Payment</p>
-                          <p className="text-lg font-semibold" data-testid="text-cap-monthly-payment">
-                            {plan.monthly_payment_recommended != null ? plan.monthly_payment_recommended.toLocaleString() : 'N/A'}
-                          </p>
-                        </div>
-                        <div className="bg-muted/50 rounded-md p-3">
-                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Surplus Above Minimum Due</p>
-                          <p className="text-lg font-semibold" data-testid="text-cap-surplus">
-                            {plan.surplus_above_mad != null ? plan.surplus_above_mad.toLocaleString() : 'N/A'}
-                          </p>
-                        </div>
-                        <div className="bg-muted/50 rounded-md p-3">
-                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Total Arrears</p>
-                          <p className="text-lg font-semibold" data-testid="text-cap-total-arrears">
-                            {plan.total_arrears != null ? plan.total_arrears.toLocaleString() : 'N/A'}
-                          </p>
-                        </div>
-                        <div className="bg-muted/50 rounded-md p-3">
-                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Months to Clear</p>
-                          <p className="text-lg font-semibold" data-testid="text-cap-months">
-                            {plan.months_to_clear ?? 'N/A'}
-                          </p>
-                        </div>
-                      </div>
-                      {plan.projected_timeline && plan.projected_timeline.length > 0 && (
-                        <div>
-                          <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Projected Timeline</p>
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Month</TableHead>
-                                <TableHead className="text-right">Payment</TableHead>
-                                <TableHead className="text-right">Remaining Arrears</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {plan.projected_timeline.map((row, i) => (
-                                <TableRow key={i}>
-                                  <TableCell className="font-medium" data-testid={`text-cap-timeline-month-${i}`}>Month {row.month}</TableCell>
-                                  <TableCell className="text-right" data-testid={`text-cap-timeline-payment-${i}`}>{row.payment?.toLocaleString()}</TableCell>
-                                  <TableCell className="text-right" data-testid={`text-cap-timeline-remaining-${i}`}>{row.remaining_arrears?.toLocaleString()}</TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-              </CardContent>
-            </Card>
+              <Separator className="mt-4" />
+            </div>
           )}
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Mail className="w-4 h-4" />
-                Proposed Email to Customer
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {decision.proposedEmailToCustomer === "NO_ACTION" || !decision.proposedEmailToCustomer ? (
-                <div className="text-center py-4">
-                  <Mail className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                  <p className="text-sm text-muted-foreground">AI recommended no email action for this customer.</p>
-                </div>
-              ) : (
-                <>
-                  <div className="bg-muted/50 rounded-md p-4" data-testid="text-proposed-email">
-                    {(() => {
-                      let emailText = decision.proposedEmailToCustomer || "";
-                      if (typeof emailText === "object") {
-                        const obj = emailText as any;
-                        emailText = obj.description || obj.text || obj.body || obj.content || JSON.stringify(emailText);
-                      }
-                      if (typeof emailText === "string" && emailText.startsWith("{")) {
-                        try {
-                          const obj = JSON.parse(emailText);
-                          emailText = obj.description || obj.text || obj.body || obj.content || emailText;
-                        } catch {}
-                      }
-                      emailText = String(emailText).replace(/\\n/g, "\n");
-                      const subjectMatch = emailText.match(/^Subject:\s*(.+?)(?:\n|$)/im);
-                      const bodyMatch = emailText.match(/(?:^|\n)Body:\s*([\s\S]*)/im);
-                      if (subjectMatch && bodyMatch) {
-                        return (
-                          <div className="space-y-3">
-                            <div>
-                              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Subject</span>
-                              <p className="text-sm font-semibold mt-1">{subjectMatch[1].trim()}</p>
-                            </div>
-                            <Separator />
-                            <div>
-                              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Body</span>
-                              <div className="text-sm mt-1 space-y-2">
-                                {bodyMatch[1].trim().split(/\n\n+/).map((para, i) => (
-                                  <p key={i}>{para.replace(/\n/g, " ").trim()}</p>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div className="text-sm space-y-2">
-                          {emailText.split(/\n\n+/).map((para, i) => (
-                            <p key={i}>{para.replace(/\n/g, " ").trim()}</p>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  <Separator />
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2">Do you agree with this proposed email?</p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={`gap-1.5 ${emailFeedback === "agree" ? "border-primary bg-primary/10" : ""}`}
-                        onClick={() => setEmailFeedback(emailFeedback === "agree" ? null : "agree")}
-                        data-testid="button-email-agree"
-                      >
-                        <ThumbsUp className="w-3.5 h-3.5" />
-                        Agree
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={`gap-1.5 ${emailFeedback === "disagree" ? "border-destructive bg-destructive/10" : ""}`}
-                        onClick={() => setEmailFeedback(emailFeedback === "disagree" ? null : "disagree")}
-                        data-testid="button-email-disagree"
-                      >
-                        <ThumbsDown className="w-3.5 h-3.5" />
-                        Disagree
-                      </Button>
-                    </div>
-                    {emailFeedback === "disagree" && (
-                      <Textarea
-                        value={emailComment}
-                        onChange={(e) => setEmailComment(e.target.value)}
-                        placeholder="Please explain why you disagree with this email..."
-                        className="mt-3 min-h-[80px]"
-                        data-testid="textarea-email-comment"
-                      />
-                    )}
-                  </div>
-                </>
+          {/* Treatment Rationale */}
+          {(treatmentExplanation || (blockedConditions && blockedConditions.length > 0)) && (
+            <div>
+              <h3 className="text-sm font-semibold mb-3">Treatment Rationale</h3>
+              {treatmentExplanation && (
+                <p className="text-sm leading-relaxed mb-2" data-testid="text-treatment-explanation">{treatmentExplanation}</p>
               )}
-            </CardContent>
-          </Card>
+              {blockedConditions && blockedConditions.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Blocked Conditions</p>
+                  <StringList items={blockedConditions} />
+                </div>
+              )}
+              <Separator className="mt-4" />
+            </div>
+          )}
 
-          {isPending && !isSuperAdmin && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Your Decision</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {showRejectForm ? (
-                  <div className="space-y-3">
-                    <Textarea
-                      value={agentReason}
-                      onChange={(e) => setAgentReason(e.target.value)}
-                      placeholder="Please explain why you disagree with the AI recommendation..."
-                      className="min-h-[100px]"
-                      data-testid="textarea-reject-reason"
-                    />
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Button
-                        variant="destructive"
-                        onClick={() => reviewMutation.mutate({ agentAgreed: false, agentReason })}
-                        disabled={!agentReason.trim() || reviewMutation.isPending}
-                        data-testid="button-confirm-reject"
-                      >
-                        {reviewMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
-                        Submit Rejection
-                      </Button>
-                      <Button variant="outline" onClick={() => setShowRejectForm(false)} data-testid="button-cancel-reject">
-                        Cancel
-                      </Button>
-                    </div>
+          {/* Internal Action */}
+          {internalAction && (
+            <div>
+              <h3 className="text-sm font-semibold mb-2">Internal Action</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-internal-action">{internalAction}</p>
+              <Separator className="mt-4" />
+            </div>
+          )}
+
+          {/* Email Draft */}
+          <div>
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <Mail className="w-4 h-4" />
+              Email Draft
+            </h3>
+            {!proposedEmail || proposedEmail === "NO_ACTION" ? (
+              <p className="text-sm text-muted-foreground" data-testid="text-no-email">No email draft generated</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="bg-muted/40 rounded p-3">
+                  <p className="text-sm whitespace-pre-line leading-relaxed" data-testid="text-email-draft">{proposedEmail}</p>
+                </div>
+                {!isSuperAdmin && decision.emailAccepted === null && !decision.reviewedAt && (
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => emailMutation.mutate({ emailAccepted: true })}
+                      disabled={emailMutation.isPending}
+                      data-testid="button-accept-email"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Accept Email
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => emailMutation.mutate({ emailAccepted: false })}
+                      disabled={emailMutation.isPending}
+                      data-testid="button-reject-email"
+                    >
+                      <XCircle className="w-3.5 h-3.5 mr-1" /> Reject Email
+                    </Button>
                   </div>
-                ) : (
-                  <div className="flex items-center gap-3 flex-wrap">
+                )}
+                {decision.emailAccepted !== null && decision.emailAccepted !== undefined && (
+                  <Badge variant={decision.emailAccepted ? "default" : "destructive"} data-testid="badge-email-decision">
+                    {decision.emailAccepted ? "Email Accepted" : "Email Rejected"}
+                  </Badge>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Policy & Guidance Used */}
+          {hasTrace && usedRules && usedRules.length > 0 && (
+            <>
+              <Separator />
+              <CollapsibleSection title="Policy & Guidance Used" defaultOpen={false}>
+                {(() => {
+                  const matched: Array<{ title: string; text: string }> = [];
+
+                  const matchItem = (item: unknown): { title: string; text: string } | null => {
+                    if (!item || typeof item !== "object") return null;
+                    const obj = item as Record<string, unknown>;
+                    const id = String(obj.id || "");
+                    const label = String(obj.label || obj.title || obj.name || "");
+                    const text = String(obj.text || obj.content || obj.description || label);
+                    if (!label) return null;
+                    return { title: label, text };
+                  };
+
+                  const allPolicyItems = [
+                    ...(complianceRules || []),
+                    ...(kbGuidance || []),
+                  ];
+
+                  for (const rule of usedRules!) {
+                    const byId = allPolicyItems.find(item => {
+                      if (!item || typeof item !== "object") return false;
+                      return String((item as any).id) === rule;
+                    });
+                    if (byId) {
+                      const m = matchItem(byId);
+                      if (m) { matched.push(m); continue; }
+                    }
+                    const byLabel = allPolicyItems.find(item => {
+                      if (!item || typeof item !== "object") return false;
+                      const obj = item as Record<string, unknown>;
+                      const label = String(obj.label || obj.title || obj.name || "");
+                      return label === rule;
+                    });
+                    if (byLabel) {
+                      const m = matchItem(byLabel);
+                      if (m) matched.push(m);
+                    }
+                  }
+
+                  if (matched.length === 0) {
+                    return <p className="text-sm text-muted-foreground">No policy or guidance items were used</p>;
+                  }
+
+                  return (
+                    <div className="space-y-2">
+                      {matched.map((item, i) => (
+                        <div key={i} className="border rounded p-3">
+                          <p className="text-xs font-medium mb-1">{item.title}</p>
+                          <p className="text-xs text-muted-foreground">{item.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </CollapsibleSection>
+            </>
+          )}
+
+          <Separator />
+
+          {/* Agent Review Form */}
+          {!isSuperAdmin && isPending && (
+            <div data-testid="section-agent-review">
+              <h3 className="text-sm font-semibold mb-3">Agent Review</h3>
+              <div className="space-y-3">
+                {!showRejectForm ? (
+                  <div className="flex gap-3">
                     <Button
                       onClick={() => reviewMutation.mutate({ agentAgreed: true })}
                       disabled={reviewMutation.isPending}
                       data-testid="button-approve"
                     >
-                      {reviewMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-                      Agree with AI
+                      {reviewMutation.isPending ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-4 h-4 mr-2" />
+                      )}
+                      Approve
                     </Button>
-                    <Button variant="outline" onClick={() => setShowRejectForm(true)} data-testid="button-disagree">
+                    <Button
+                      variant="destructive"
+                      onClick={() => setShowRejectForm(true)}
+                      disabled={reviewMutation.isPending}
+                      data-testid="button-show-reject"
+                    >
                       <XCircle className="w-4 h-4 mr-2" />
-                      Disagree
+                      Reject
                     </Button>
                   </div>
+                ) : (
+                  <div className="space-y-3">
+                    <Textarea
+                      placeholder="Reason for rejection (optional)"
+                      value={agentReason}
+                      onChange={(e) => setAgentReason(e.target.value)}
+                      rows={3}
+                      data-testid="textarea-reject-reason"
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        variant="destructive"
+                        onClick={() => reviewMutation.mutate({ agentAgreed: false, agentReason })}
+                        disabled={reviewMutation.isPending}
+                        data-testid="button-confirm-reject"
+                      >
+                        {reviewMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                        Confirm Rejection
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => { setShowRejectForm(false); setAgentReason(""); }}
+                        disabled={reviewMutation.isPending}
+                        data-testid="button-cancel-reject"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           )}
 
-          {!isPending && decision.agentReason && (
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Agent's Reason for Rejection</p>
-                <p className="text-sm" data-testid="text-agent-reason">{decision.agentReason}</p>
-              </CardContent>
-            </Card>
+          {!isPending && (
+            <div className="flex items-center gap-2 py-2">
+              {decision.agentAgreed ? (
+                <><CheckCircle2 className="w-4 h-4 text-green-600" /><span className="text-sm font-medium text-green-700">Approved</span></>
+              ) : (
+                <><XCircle className="w-4 h-4 text-destructive" /><span className="text-sm font-medium text-destructive">Rejected</span></>
+              )}
+              {decision.agentReason && (
+                <span className="text-sm text-muted-foreground ml-2">— {decision.agentReason}</span>
+              )}
+            </div>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

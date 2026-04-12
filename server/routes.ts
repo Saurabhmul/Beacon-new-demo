@@ -22,6 +22,18 @@ import { assemblePrompt, assemblePreview, formatCustomerData, clearTemplateCache
 import { seedDatabase } from "./seed";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { inferBusinessFields } from "./lib/decisioning/business-field-engine";
+import { computeDerivedFields, buildResolvedSourceFieldsMap } from "./lib/decisioning/derived-field-engine";
+import { buildDecisionPacket, type DecisionPacketTreatment } from "./lib/decisioning/decision-packet";
+import { buildFinalDecisionSystemPrompt, buildFinalDecisionUserPrompt, buildFinalDecisionRetryPrompt } from "./lib/decisioning/prompts/final-decision-prompt";
+import { validateFinalDecisionOutput, tryParseDecisionJson } from "./lib/decisioning/decision-validator";
+import { emptyContextSections } from "./lib/decisioning/context-sections";
+import { GoogleGenAI } from "@google/genai";
+
+const decisionAI = new GoogleGenAI({
+  apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
+  httpOptions: { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL },
+});
 
 function normalizeSampleValues(input: unknown[]): string[] {
   const seen = new Set<string>();
@@ -2326,16 +2338,20 @@ export async function registerRoutes(
           let failed = 0;
 
           clearTemplateCache();
-          const dpdStagesData = await storage.getDpdStages(companyId);
-          const compiled = compilePolicyPrompt({
-            dpdStages: dpdStagesData.map(s => ({ name: s.name, fromDays: s.fromDays, toDays: s.toDays })),
-            vulnerabilityDefinition: policyConfig?.vulnerabilityDefinition,
-            affordabilityRules: policyConfig?.affordabilityRules,
-            treatments: policyConfig?.availableTreatments,
-            decisionRules: policyConfig?.decisionRules,
-            escalationRules: policyConfig?.escalationRules,
-          });
-          const compiledPolicy = compiled as unknown as Record<string, string>;
+
+          const allPolicyFields = await storage.getPolicyFields(companyId);
+          const businessFieldDefs = allPolicyFields.filter(f => f.sourceType === "business_field");
+          const derivedFieldDefs = allPolicyFields.filter(f => f.sourceType === "derived_field");
+
+          const policyPack = await storage.getPolicyPack(companyId);
+          const packedTreatments: DecisionPacketTreatment[] = policyPack
+            ? (await storage.getTreatmentsWithRules(policyPack.id)).map(t => ({
+                name: t.name,
+                code: t.name.toUpperCase().replace(/\s+/g, "_"),
+                description: t.shortDescription || undefined,
+                enabled: t.enabled,
+              }))
+            : [];
 
           for (const [custId, data] of customers) {
             try {
@@ -2347,38 +2363,191 @@ export async function registerRoutes(
                 _conversation_count: data.conversations.length,
               };
 
-              const assembledPrompt = assemblePrompt(
-                compiledPolicy,
-                combinedData,
-                dataConfig?.outputFormat || undefined
-              );
+              const resolvedSourceFields = buildResolvedSourceFieldsMap(combinedData, allPolicyFields);
 
-              const result = await analyzeCustomer(
-                combinedData,
-                assembledPrompt
-              );
+              const contextSections = emptyContextSections();
+              contextSections.customerProfile = resolvedSourceFields;
+              contextSections.loanData = data.loan;
+              contextSections.paymentData = data.payments;
+              contextSections.conversationData = data.conversations;
+              contextSections.resolvedSourceFields = resolvedSourceFields;
+
+              const businessFieldMetas = businessFieldDefs.map(f => ({
+                id: String(f.id),
+                label: f.label,
+                description: f.description,
+                dataType: f.dataType,
+                allowedValues: f.allowedValues,
+                defaultValue: f.defaultValue,
+                businessMeaning: f.businessMeaning,
+              }));
+
+              const businessFieldTraces = await inferBusinessFields(businessFieldMetas, contextSections);
+
+              const businessFieldsMap: Record<string, unknown> = {};
+              for (const trace of businessFieldTraces) {
+                if (trace.value !== null) businessFieldsMap[trace.field_label] = trace.value;
+              }
+
+              const derivedFieldTraces = computeDerivedFields(derivedFieldDefs, resolvedSourceFields, businessFieldsMap);
+
+              const derivedFieldsMap: Record<string, unknown> = {};
+              for (const trace of derivedFieldTraces) {
+                if (trace.output_value !== null) derivedFieldsMap[trace.field_id] = trace.output_value;
+              }
+
+              const packet = buildDecisionPacket({
+                customerId: custId,
+                resolvedSourceFields,
+                businessFields: businessFieldsMap,
+                derivedFields: derivedFieldsMap,
+                loanData: data.loan,
+                paymentData: data.payments,
+                conversationData: data.conversations,
+                treatments: packedTreatments,
+              });
+
+              const systemPrompt = buildFinalDecisionSystemPrompt();
+              const userPrompt = buildFinalDecisionUserPrompt(packet);
+
+              let attempt1RawText = "";
+              let attempt1Parsed: Record<string, unknown> | null = null;
+              let attempt1Passed = false;
+              let attempt1Errors: string[] = [];
+
+              let finalParsed: Record<string, unknown> | null = null;
+              let attempt2RawText = "";
+              let attempt2Passed = false;
+              let attempt2Errors: string[] = [];
+              let usedFallback = false;
+
+              try {
+                const resp1 = await decisionAI.models.generateContent({
+                  model: "gemini-2.5-pro",
+                  contents: [
+                    { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
+                  ],
+                  config: { maxOutputTokens: 6000 },
+                });
+                attempt1RawText = resp1.text || "";
+                attempt1Parsed = tryParseDecisionJson(attempt1RawText);
+                const v1 = validateFinalDecisionOutput(attempt1Parsed, packet);
+                attempt1Passed = v1.valid;
+                attempt1Errors = v1.errors;
+
+                if (attempt1Passed) {
+                  finalParsed = attempt1Parsed;
+                } else {
+                  const retryPrompt = buildFinalDecisionRetryPrompt(attempt1Errors.join("; "));
+                  const resp2 = await decisionAI.models.generateContent({
+                    model: "gemini-2.5-pro",
+                    contents: [
+                      { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
+                      { role: "model", parts: [{ text: attempt1RawText }] },
+                      { role: "user", parts: [{ text: retryPrompt }] },
+                    ],
+                    config: { maxOutputTokens: 6000 },
+                  });
+                  attempt2RawText = resp2.text || "";
+                  const attempt2Parsed = tryParseDecisionJson(attempt2RawText);
+                  const v2 = validateFinalDecisionOutput(attempt2Parsed, packet);
+                  attempt2Passed = v2.valid;
+                  attempt2Errors = v2.errors;
+                  if (attempt2Passed) {
+                    finalParsed = attempt2Parsed;
+                  } else {
+                    usedFallback = true;
+                    finalParsed = attempt2Parsed || attempt1Parsed;
+                  }
+                }
+              } catch (aiErr) {
+                console.error(`[analyze] AI call error for customer ${custId}:`, aiErr);
+                usedFallback = true;
+              }
+
+              let treatmentName = "Agent Review";
+              let treatmentCode = "AGENT_REVIEW";
+              let customerSituation = "Automated analysis failed — manual review required.";
+              let treatmentEligibilityExplanation = "";
+              let structuredAssessments: Array<{ name: string; value: string | null; reason: string }> = [];
+              let proposedEmail = "NO_ACTION";
+              let internalAction = "";
+              let requiresAgentReview = true;
+
+              if (finalParsed && !usedFallback) {
+                const code = String(finalParsed.recommended_treatment_code || "AGENT_REVIEW");
+                const matchedTreatment = packedTreatments.find(t => t.code === code);
+                if (code === "AGENT_REVIEW") {
+                  treatmentName = "Agent Review";
+                  treatmentCode = "AGENT_REVIEW";
+                } else if (code === "NO_ACTION") {
+                  treatmentName = "No Action";
+                  treatmentCode = "NO_ACTION";
+                } else if (matchedTreatment) {
+                  treatmentName = matchedTreatment.name;
+                  treatmentCode = code;
+                } else {
+                  treatmentName = String(finalParsed.recommended_treatment_name || "Agent Review");
+                  treatmentCode = code;
+                }
+                customerSituation = String(finalParsed.customer_situation || "");
+                treatmentEligibilityExplanation = String(finalParsed.treatment_eligibility_explanation || "");
+                structuredAssessments = Array.isArray(finalParsed.structured_assessments)
+                  ? (finalParsed.structured_assessments as any[]).filter(
+                      a => a && typeof a.name === "string" && typeof a.reason === "string"
+                    ).map(a => ({ name: a.name, value: a.value ?? null, reason: a.reason }))
+                  : [];
+                proposedEmail = String(finalParsed.proposed_email_to_customer || "NO_ACTION");
+                internalAction = String(finalParsed.internal_action || "");
+                requiresAgentReview = Boolean(finalParsed.requires_agent_review);
+              } else if (finalParsed && usedFallback) {
+                customerSituation = String(finalParsed.customer_situation || "Automated analysis failed — manual review required.");
+                treatmentEligibilityExplanation = String(finalParsed.treatment_eligibility_explanation || "");
+              }
+
+              const validationTrace: Record<string, unknown> = {
+                attempt_1: {
+                  passed: attempt1Passed,
+                  errors: attempt1Errors,
+                  raw_response: attempt1RawText.substring(0, 3000),
+                },
+                final_status: (attempt1Passed || attempt2Passed) ? "passed" : "failed",
+              };
+              if (!attempt1Passed) {
+                (validationTrace as any).attempt_2 = {
+                  passed: attempt2Passed,
+                  errors: attempt2Errors,
+                  raw_response: attempt2RawText.substring(0, 3000),
+                };
+              }
+
+              const decisionTraceJson: Record<string, unknown> = {
+                engine_version: "1.0",
+                decision_packet: packet as unknown as Record<string, unknown>,
+                business_fields_trace: businessFieldTraces,
+                derived_fields_trace: derivedFieldTraces,
+                validation: validationTrace,
+                final_ai_output: finalParsed || {},
+              };
 
               await storage.createDecision({
                 clientConfigId: clientConfig?.id ?? null,
                 dataUploadId: loanUpload.id,
                 userId,
                 companyId,
-                customerGuid: result.customer_guid || custId,
+                customerGuid: custId,
                 customerData: combinedData,
-                combinedCmd: result.combined_cmd,
-                problemDescription: result.problem_description,
-                problemConfidenceScore: result.problem_confidence_score,
-                problemEvidence: result.problem_evidence,
-                proposedSolution: result.proposed_solution,
-                solutionConfidenceScore: result.solution_confidence_score,
-                solutionEvidence: result.solution_evidence,
-                internalAction: result.internal_action,
-                abilityToPay: result.ability_to_pay,
-                reasonForAbilityToPay: result.reason_for_ability_to_pay,
-                noOfLatestPaymentsFailed: result.no_of_latest_payments_failed,
-                proposedEmailToCustomer: result.proposed_email_to_customer,
-                aiRawOutput: result as unknown as Record<string, unknown>,
+                proposedSolution: usedFallback ? "Agent Review" : String(finalParsed?.proposed_next_best_action || ""),
+                internalAction: internalAction || (requiresAgentReview ? "Escalate for agent review." : ""),
+                proposedEmailToCustomer: proposedEmail,
+                aiRawOutput: finalParsed as Record<string, unknown> | undefined,
                 status: "pending",
+                recommendedTreatmentName: treatmentName,
+                recommendedTreatmentCode: treatmentCode,
+                customerSituation,
+                treatmentEligibilityExplanation,
+                structuredAssessments,
+                decisionTraceJson,
               });
 
               completed++;

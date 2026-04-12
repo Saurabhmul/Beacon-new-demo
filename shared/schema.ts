@@ -223,6 +223,12 @@ export const decisions = pgTable("decisions", {
   emailRejectReason: text("email_reject_reason"),
   reviewedAt: timestamp("reviewed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  recommendedTreatmentName: text("recommended_treatment_name"),
+  recommendedTreatmentCode: text("recommended_treatment_code"),
+  customerSituation: text("customer_situation"),
+  treatmentEligibilityExplanation: text("treatment_eligibility_explanation"),
+  structuredAssessments: jsonb("structured_assessments").$type<Array<{ name: string; value: string | null; reason: string }>>(),
+  decisionTraceJson: jsonb("decision_trace_json").$type<Record<string, unknown>>(),
 });
 
 // Migration note (Task #22): company_id was added in two SQL phases:
