@@ -2501,7 +2501,7 @@ export async function registerRoutes(
                   contents: [
                     { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
                   ],
-                  config: { maxOutputTokens: 6000 },
+                  config: { maxOutputTokens: 16000 },
                 });
                 attempt1RawText = resp1.text || "";
                 attempt1Parsed = tryParseDecisionJson(attempt1RawText);
@@ -2520,7 +2520,7 @@ export async function registerRoutes(
                       { role: "model", parts: [{ text: attempt1RawText }] },
                       { role: "user", parts: [{ text: retryPrompt }] },
                     ],
-                    config: { maxOutputTokens: 6000 },
+                    config: { maxOutputTokens: 16000 },
                   });
                   attempt2RawText = resp2.text || "";
                   const attempt2Parsed = tryParseDecisionJson(attempt2RawText);
