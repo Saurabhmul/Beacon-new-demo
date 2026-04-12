@@ -7,6 +7,7 @@ interface SourceMapMeta {
   sourceFields: Record<string, boolean>;
   businessFields: Record<string, boolean>;
   derivedFields: Record<string, boolean>;
+  narrativeTextFields: Record<string, boolean>;
 }
 
 export interface DerivedFieldTrace {
@@ -61,6 +62,21 @@ function safeBooleanCoerce(val: unknown): { ok: boolean; value?: boolean; reason
   return { ok: false, reason: "unsafe coercion to boolean" };
 }
 
+function getSourceMapMeta(sourceMap: Record<string, unknown>): SourceMapMeta | undefined {
+  const raw = sourceMap["__meta"];
+  if (raw !== null && raw !== undefined && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as SourceMapMeta;
+  }
+  return undefined;
+}
+
+function isNarrativeTextField(fieldId: string, sourceMap: Record<string, unknown>): boolean {
+  const meta = getSourceMapMeta(sourceMap);
+  if (!meta) return false;
+  return fieldId in meta.narrativeTextFields ||
+    Object.keys(meta.narrativeTextFields).some(k => k.toLowerCase() === fieldId.toLowerCase());
+}
+
 function evaluateArithmetic(
   config: Record<string, unknown>,
   sourceMap: Record<string, unknown>
@@ -71,25 +87,27 @@ function evaluateArithmetic(
     opType: string | undefined,
     opValue: string | undefined,
     opLabel: string | undefined,
-    kind: string
-  ): { ok: boolean; num?: number; reason?: string; sourceKey?: string } {
+  ): { ok: boolean; num?: number; reason?: string; nullReason?: string } {
     if (opType === "constant") {
       const n = parseFloat(String(opValue ?? ""));
-      if (isNaN(n)) return { ok: false, reason: `constant "${opValue}" is not a valid number` };
+      if (isNaN(n)) return { ok: false, reason: `constant "${opValue}" is not a valid number`, nullReason: "invalid arithmetic input" };
       return { ok: true, num: n };
     }
     if (opType === "field" && opValue) {
+      if (isNarrativeTextField(opValue, sourceMap)) {
+        return { ok: false, reason: `field "${opValue}" is a narrative text source and cannot be used as an arithmetic operand`, nullReason: "unstructured guidance operand" };
+      }
       const rawVal = resolveFromMap(opValue, sourceMap);
       if (rawVal === null || rawVal === undefined) {
-        return { ok: false, reason: `field "${opValue}" resolved to null (missing dependency)` };
+        return { ok: false, reason: `field "${opValue}" resolved to null (missing dependency)`, nullReason: "missing dependency" };
       }
       const coerced = safeNumericCoerce(rawVal);
-      if (!coerced.ok) return { ok: false, reason: coerced.reason };
+      if (!coerced.ok) return { ok: false, reason: coerced.reason, nullReason: "unsafe coercion" };
       const sk = determineSourceKind(opValue, sourceMap);
       inputsUsed[opLabel || opValue] = { value: rawVal, sourceKind: sk };
-      return { ok: true, num: coerced.value, sourceKey: opValue };
+      return { ok: true, num: coerced.value };
     }
-    return { ok: false, reason: "unknown operand configuration" };
+    return { ok: false, reason: "unknown operand configuration", nullReason: "incompatible formula/type" };
   }
 
   const fieldA = config.fieldA as string | undefined;
@@ -105,6 +123,10 @@ function evaluateArithmetic(
 
   if (!fieldA) return { value: null, nullReason: "incompatible formula/type", warningMessage: "fieldA not configured", inputsUsed };
 
+  if (isNarrativeTextField(fieldA, sourceMap)) {
+    return { value: null, nullReason: "unstructured guidance operand", warningMessage: `field "${fieldA}" is a narrative text source and cannot be used as an arithmetic operand`, inputsUsed };
+  }
+
   const rawA = resolveFromMap(fieldA, sourceMap);
   if (rawA === null || rawA === undefined) {
     return { value: null, nullReason: "missing dependency", warningMessage: `field "${fieldA}" is null or unresolved`, inputsUsed };
@@ -116,10 +138,9 @@ function evaluateArithmetic(
   const skA = determineSourceKind(fieldA, sourceMap);
   inputsUsed[fieldALabel || fieldA] = { value: rawA, sourceKind: skA };
 
-  const resolvedB = resolveOperand(operandBType, operandBValue, operandBLabel, "B");
+  const resolvedB = resolveOperand(operandBType, operandBValue, operandBLabel);
   if (!resolvedB.ok) {
-    const nr = resolvedB.reason?.includes("null") ? "missing dependency" : "invalid arithmetic input";
-    return { value: null, nullReason: nr, warningMessage: resolvedB.reason || "operand B failed", inputsUsed };
+    return { value: null, nullReason: resolvedB.nullReason || "invalid arithmetic input", warningMessage: resolvedB.reason || "operand B failed", inputsUsed };
   }
 
   let result = applyOperator(coercedA.value!, resolvedB.num!, operator1 || "+");
@@ -128,10 +149,9 @@ function evaluateArithmetic(
   }
 
   if (operator2 && operandCType) {
-    const resolvedC = resolveOperand(operandCType, operandCValue, operandCLabel, "C");
+    const resolvedC = resolveOperand(operandCType, operandCValue, operandCLabel);
     if (!resolvedC.ok) {
-      const nr = resolvedC.reason?.includes("null") ? "missing dependency" : "invalid arithmetic input";
-      return { value: null, nullReason: nr, warningMessage: resolvedC.reason || "operand C failed", inputsUsed };
+      return { value: null, nullReason: resolvedC.nullReason || "invalid arithmetic input", warningMessage: resolvedC.reason || "operand C failed", inputsUsed };
     }
     const r2 = applyOperator(result, resolvedC.num!, operator2);
     if (r2 === null) {
@@ -160,10 +180,11 @@ function evaluateLogicalCondition(
   condition: AnyCondition,
   sourceMap: Record<string, unknown>,
   inputsUsed: DerivedFieldTrace["inputs_used"]
-): boolean | null {
+): boolean | null | "unstructured_guidance" {
   if ("conditions" in condition && Array.isArray(condition.conditions)) {
     const group = condition as { operator: string; conditions: AnyCondition[] };
     const results = group.conditions.map(c => evaluateLogicalCondition(c, sourceMap, inputsUsed));
+    if (results.some(r => r === "unstructured_guidance")) return "unstructured_guidance";
     if (group.operator === "AND") {
       if (results.some(r => r === false)) return false;
       if (results.some(r => r === null)) return null;
@@ -177,6 +198,12 @@ function evaluateLogicalCondition(
 
   const leaf = condition as { field: string; operator: string; value?: unknown; fieldType?: string };
   const fieldKey = leaf.field;
+
+  if (isNarrativeTextField(fieldKey, sourceMap)) {
+    inputsUsed[fieldKey] = { value: null, sourceKind: undefined };
+    return "unstructured_guidance";
+  }
+
   const rawVal = resolveFromMap(fieldKey, sourceMap);
   const sk = determineSourceKind(fieldKey, sourceMap);
   inputsUsed[fieldKey] = { value: rawVal, sourceKind: sk };
@@ -242,7 +269,7 @@ function determineSourceKind(
   fieldId: string,
   sourceMap: Record<string, unknown>
 ): "source_field" | "business_field" | "derived_field" | undefined {
-  const meta = sourceMap["__meta"] as SourceMapMeta | undefined;
+  const meta = getSourceMapMeta(sourceMap);
   if (!meta) return undefined;
   if (meta.sourceFields && fieldId in meta.sourceFields) return "source_field";
   if (meta.businessFields && fieldId in meta.businessFields) return "business_field";
@@ -255,6 +282,20 @@ function deduceType(config: Record<string, unknown>): string | null {
   if (!type || type === "arithmetic") return "number";
   if (type === "logical") return "boolean";
   return null;
+}
+
+function makeSourceMapMeta(
+  resolvedSourceFields: Record<string, unknown>,
+  businessFields: Record<string, unknown>,
+  computedValues: Record<string, unknown>,
+  narrativeTextFields: Record<string, boolean>
+): SourceMapMeta {
+  return {
+    sourceFields: Object.fromEntries(Object.keys(resolvedSourceFields).map(k => [k, true])),
+    businessFields: Object.fromEntries(Object.keys(businessFields).map(k => [k, true])),
+    derivedFields: Object.fromEntries(Object.keys(computedValues).map(k => [k, true])),
+    narrativeTextFields,
+  };
 }
 
 export function computeDerivedFields(
@@ -275,15 +316,10 @@ export function computeDerivedFields(
   const traces: DerivedFieldTrace[] = [];
   const computedValues: Record<string, unknown> = {};
 
-  const sourceMap: Record<string, unknown> = {
-    ...resolvedSourceFields,
-    ...businessFields,
-    __meta: {
-      sourceFields: Object.fromEntries(Object.keys(resolvedSourceFields).map(k => [k, true])),
-      businessFields: Object.fromEntries(Object.keys(businessFields).map(k => [k, true])),
-      derivedFields: {} as Record<string, boolean>,
-    },
-  };
+  // Narrative text fields are not passed into the derived-field engine; this set is
+  // always empty by construction. The guard below ensures that if a future code path
+  // ever routes narrative text here, it is rejected at evaluation time.
+  const narrativeTextFields: Record<string, boolean> = {};
 
   const fieldByName = new Map(derivedFields.map(f => [f.label.toLowerCase(), f]));
 
@@ -303,6 +339,7 @@ export function computeDerivedFields(
       nullReason: "cycle detected",
       warningMessage: `Dependency cycle detected involving: ${cyclicGroup}`,
     });
+    computedValues[field.label] = null;
   }
 
   for (const node of sorted) {
@@ -318,11 +355,7 @@ export function computeDerivedFields(
       ...resolvedSourceFields,
       ...businessFields,
       ...computedValues,
-      __meta: {
-        sourceFields: Object.fromEntries(Object.keys(resolvedSourceFields).map(k => [k, true])),
-        businessFields: Object.fromEntries(Object.keys(businessFields).map(k => [k, true])),
-        derivedFields: Object.fromEntries(Object.keys(computedValues).map(k => [k, true])),
-      },
+      __meta: makeSourceMapMeta(resolvedSourceFields, businessFields, computedValues, narrativeTextFields),
     };
 
     const inputsUsed: DerivedFieldTrace["inputs_used"] = {};
@@ -334,23 +367,27 @@ export function computeDerivedFields(
     let hasMissingDep = false;
     for (const dep of deps) {
       const depLower = dep.toLowerCase();
-      const inSource = dep in resolvedSourceFields || Object.keys(resolvedSourceFields).some(k => k.toLowerCase() === depLower);
-      const inBusiness = dep in businessFields || Object.keys(businessFields).some(k => k.toLowerCase() === depLower);
-      const inComputed = dep in computedValues || Object.keys(computedValues).some(k => k.toLowerCase() === depLower);
-      if (!inSource && !inBusiness && !inComputed && !cyclicNames.has(depLower)) {
-        const resolved = resolveFromMap(dep, currentSourceMap);
-        if (resolved === null || resolved === undefined) {
-          const computedDep = Object.keys(computedValues).find(k => k.toLowerCase() === depLower);
-          if (computedDep !== undefined && computedValues[computedDep] === null) {
-            hasMissingDep = true;
-            warningMessage = `upstream derived field "${dep}" evaluated to null`;
-            break;
-          }
-        }
-      }
+
       if (cyclicNames.has(depLower)) {
         hasMissingDep = true;
         warningMessage = `dependency "${dep}" is in a cycle and could not be computed`;
+        break;
+      }
+
+      // Explicit check: upstream derived field evaluated to null propagates as missing dependency
+      const computedDepKey = Object.keys(computedValues).find(k => k.toLowerCase() === depLower);
+      if (computedDepKey !== undefined && computedValues[computedDepKey] === null) {
+        hasMissingDep = true;
+        warningMessage = `upstream derived field "${dep}" evaluated to null`;
+        break;
+      }
+
+      const inSource = dep in resolvedSourceFields || Object.keys(resolvedSourceFields).some(k => k.toLowerCase() === depLower);
+      const inBusiness = dep in businessFields || Object.keys(businessFields).some(k => k.toLowerCase() === depLower);
+      const inComputed = computedDepKey !== undefined;
+      if (!inSource && !inBusiness && !inComputed) {
+        hasMissingDep = true;
+        warningMessage = `field "${dep}" not found in any source, business, or computed fields`;
         break;
       }
     }
@@ -370,7 +407,6 @@ export function computeDerivedFields(
         warningMessage,
       });
       computedValues[field.label] = null;
-      (sourceMap["__meta"] as SourceMapMeta).derivedFields[field.label] = true;
       continue;
     }
 
@@ -387,7 +423,10 @@ export function computeDerivedFields(
       }
     } else if (configType === "logical") {
       const logicalResult = evaluateLogicalCondition(config as AnyCondition, currentSourceMap, inputsUsed);
-      if (logicalResult === null) {
+      if (logicalResult === "unstructured_guidance") {
+        nullReason = "unstructured guidance operand";
+        warningMessage = "logical condition references a narrative text field that cannot be used as an operand";
+      } else if (logicalResult === null) {
         nullReason = "missing dependency";
         warningMessage = "logical condition could not be evaluated — one or more operands are null";
       } else {
@@ -412,7 +451,6 @@ export function computeDerivedFields(
     }
 
     computedValues[field.label] = outputValue;
-    (sourceMap["__meta"] as SourceMapMeta).derivedFields[field.label] = true;
 
     traces.push({
       field_id: String(field.id),
@@ -446,14 +484,14 @@ function extractDependencies(config: Record<string, unknown> | null): string[] {
   const type = config.type as string | undefined;
 
   if (!type || type === "arithmetic") {
+    if (config.fieldA) deps.push(String(config.fieldA));
     if (config.operandBType === "field" && config.operandBValue) deps.push(String(config.operandBValue));
     if (config.operandCType === "field" && config.operandCValue) deps.push(String(config.operandCValue));
-    if (config.fieldA) deps.push(String(config.fieldA));
   } else if (type === "logical") {
     const conditions = config.conditions as AnyCondition[] | undefined;
     if (conditions) extractConditionDeps(conditions, deps);
   }
-  return [...new Set(deps)];
+  return Array.from(new Set(deps));
 }
 
 function extractConditionDeps(conditions: AnyCondition[], out: string[]): void {
