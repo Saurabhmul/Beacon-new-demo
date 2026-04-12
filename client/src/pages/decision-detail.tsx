@@ -255,8 +255,7 @@ export default function DecisionDetailPage() {
   }
   function asStringArray(val: unknown): string[] | undefined {
     if (!Array.isArray(val)) return undefined;
-    const strs = val.filter((v): v is string => typeof v === "string");
-    return strs.length > 0 ? strs : undefined;
+    return val.filter((v): v is string => typeof v === "string");
   }
 
   const packet = asRecord(trace?.["decision_packet"]);

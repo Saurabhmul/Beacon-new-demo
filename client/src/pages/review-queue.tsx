@@ -230,7 +230,7 @@ export default function ReviewQueuePage() {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
-                placeholder="Search by Customer ID or Proposed Action..."
+                placeholder="Search by Customer ID or Recommended Treatment..."
                 value={searchQuery}
                 onChange={(e) => { setSearchQuery(e.target.value); setPage(1); clearSelection(); }}
                 className="pl-9"
