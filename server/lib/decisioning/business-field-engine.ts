@@ -30,7 +30,19 @@ const ai = new GoogleGenAI({
 });
 
 const HISTORY_KEEP_LATEST = 10;
-const FIELD_TIMEOUT_MS = 30000;
+
+/**
+ * Thrown when an individual generateContent call inside callAIForField exceeds
+ * the configured per-call timeout. Propagates out of inferBusinessFields so
+ * the caller (processCustomer in routes.ts) can count the customer as failed.
+ * callWithBackoff in routes.ts will NOT retry this error.
+ */
+class FieldCallTimeoutError extends Error {
+  constructor(fieldLabel: string, ms: number) {
+    super(`Business-field AI call timed out after ${ms / 1000}s (field: "${fieldLabel}")`);
+    this.name = "FieldCallTimeoutError";
+  }
+}
 
 const FLAGGED_PAYMENT_PATTERNS = [
   /missed/i,
@@ -216,13 +228,20 @@ interface SingleFieldResult {
   rawAiResponse: string;
 }
 
+/**
+ * Makes one generateContent call for a single business field.
+ * If callTimeoutMs is provided, an AbortController is used to enforce a per-call
+ * timeout; on expiry FieldCallTimeoutError is thrown (propagated to fail the customer).
+ * 429 / 5xx errors are re-thrown as-is so callWithBackoff in routes.ts can retry.
+ */
 async function callAIForField(
   field: BusinessFieldMeta,
   context: ContextSections,
   isRetry: boolean,
   previousRawResponse?: string,
   validationError?: string,
-  retryPromptOverride?: string
+  retryPromptOverride?: string,
+  callTimeoutMs?: number
 ): Promise<{ rawText: string; parsed: Record<string, unknown> | null }> {
   const systemPrompt = buildBusinessFieldSystemPrompt();
   let userPrompt = buildBusinessFieldUserPrompt(field, context);
@@ -232,17 +251,30 @@ async function callAIForField(
     userPrompt += "\n\n" + buildBusinessFieldRetryPrompt(validationError);
   }
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-pro",
-    contents: [
-      { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
-    ],
-    config: { maxOutputTokens: 8000 },
-  });
+  const controller = new AbortController();
+  let timerId: ReturnType<typeof setTimeout> | undefined;
+  if (callTimeoutMs && callTimeoutMs > 0) {
+    timerId = setTimeout(() => controller.abort(), callTimeoutMs);
+  }
 
-  const rawText = response.text || "";
-  const parsed = tryParseJson(rawText);
-  return { rawText, parsed };
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }],
+      config: { maxOutputTokens: 8000 },
+      abortSignal: controller.signal,
+    });
+    const rawText = response.text || "";
+    const parsed = tryParseJson(rawText);
+    return { rawText, parsed };
+  } catch (err: unknown) {
+    if (controller.signal.aborted) {
+      throw new FieldCallTimeoutError(field.label, callTimeoutMs ?? 0);
+    }
+    throw err;
+  } finally {
+    if (timerId !== undefined) clearTimeout(timerId);
+  }
 }
 
 function parseAndNormalizeEvidence(parsed: Record<string, unknown>): BusinessFieldEvidenceItem[] {
@@ -356,7 +388,8 @@ function extractFieldResult(
 
 export async function inferBusinessFields(
   fields: BusinessFieldMeta[],
-  context: ContextSections
+  context: ContextSections,
+  callTimeoutMs?: number
 ): Promise<BusinessFieldTrace[]> {
   const traces: BusinessFieldTrace[] = [];
 
@@ -411,32 +444,11 @@ export async function inferBusinessFields(
     try {
       let rawText = "";
       let parsed: Record<string, unknown> | null = null;
-      let retryCount = 0;
 
-      const firstCallPromise = callAIForField(field, fieldContext, false);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("TIMEOUT")), FIELD_TIMEOUT_MS)
-      );
-
-      let firstResult: { rawText: string; parsed: Record<string, unknown> | null };
-      try {
-        firstResult = await Promise.race([firstCallPromise, timeoutPromise]);
-      } catch (err) {
-        if (err instanceof Error && err.message.includes("TIMEOUT")) {
-          result = {
-            value: null,
-            confidence: null,
-            rationale: "",
-            null_reason: "field inference timeout",
-            evidence: [],
-            retryCount: 0,
-            rawAiResponse: "",
-          };
-          traces.push(buildTrace(field, result, includedContextSections, truncatedSections, truncationMetrics, summarizationUsed));
-          continue;
-        }
-        throw err;
-      }
+      // Each callAIForField call has its own AbortController + configurable timeout
+      // (callTimeoutMs). FieldCallTimeoutError propagates out to fail the customer.
+      const firstResult = await callAIForField(field, fieldContext, false,
+        undefined, undefined, undefined, callTimeoutMs);
 
       rawText = firstResult.rawText;
       parsed = firstResult.parsed;
@@ -444,31 +456,8 @@ export async function inferBusinessFields(
       const validation = validateAfterParse(parsed, field.allowedValues);
 
       if (!validation.valid) {
-        retryCount = 1;
-        const retryCallPromise = callAIForField(field, fieldContext, true, rawText, validation.reason);
-        const retryTimeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("TIMEOUT")), FIELD_TIMEOUT_MS)
-        );
-
-        let retryResult: { rawText: string; parsed: Record<string, unknown> | null };
-        try {
-          retryResult = await Promise.race([retryCallPromise, retryTimeoutPromise]);
-        } catch (err) {
-          if (err instanceof Error && err.message.includes("TIMEOUT")) {
-            result = {
-              value: null,
-              confidence: null,
-              rationale: "",
-              null_reason: "field inference timeout",
-              evidence: [],
-              retryCount: 1,
-              rawAiResponse: rawText,
-            };
-            traces.push(buildTrace(field, result, includedContextSections, truncatedSections, truncationMetrics, summarizationUsed));
-            continue;
-          }
-          throw err;
-        }
+        const retryResult = await callAIForField(field, fieldContext, true,
+          rawText, validation.reason, undefined, callTimeoutMs);
 
         rawText = retryResult.rawText;
         parsed = retryResult.parsed;
@@ -498,38 +487,10 @@ export async function inferBusinessFields(
           firstExtracted.null_reason === "insufficient evidence";
 
         if (isInsufficientEvidence) {
-          retryCount = 1;
-          const evRetryCallPromise = callAIForField(
-            field,
-            fieldContext,
-            true,
-            rawText,
-            undefined,
-            buildBusinessFieldInsufficientEvidenceRetryPrompt()
+          const evRetryResult = await callAIForField(
+            field, fieldContext, true, rawText, undefined,
+            buildBusinessFieldInsufficientEvidenceRetryPrompt(), callTimeoutMs
           );
-          const evRetryTimeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("TIMEOUT")), FIELD_TIMEOUT_MS)
-          );
-
-          let evRetryResult: { rawText: string; parsed: Record<string, unknown> | null };
-          try {
-            evRetryResult = await Promise.race([evRetryCallPromise, evRetryTimeoutPromise]);
-          } catch (err) {
-            if (err instanceof Error && err.message.includes("TIMEOUT")) {
-              result = {
-                value: null,
-                confidence: null,
-                rationale: "",
-                null_reason: "field inference timeout",
-                evidence: [],
-                retryCount: 1,
-                rawAiResponse: rawText,
-              };
-              traces.push(buildTrace(field, result, includedContextSections, truncatedSections, truncationMetrics, summarizationUsed));
-              continue;
-            }
-            throw err;
-          }
 
           rawText = evRetryResult.rawText;
           parsed = evRetryResult.parsed;
@@ -546,10 +507,14 @@ export async function inferBusinessFields(
         }
       }
     } catch (err: unknown) {
-      // Retryable HTTP errors (429, 5xx, RESOURCE_EXHAUSTED) must propagate so the
-      // caller's backoff wrapper can retry the entire inferBusinessFields invocation.
-      // Non-retryable errors (parse/validation failures, unexpected SDK errors) are
-      // degraded to a null trace so other fields can still be inferred.
+      // FieldCallTimeoutError: individual generateContent call exceeded per-call timeout.
+      // Propagate so processCustomer counts this customer as failed.
+      if (err instanceof FieldCallTimeoutError) {
+        console.warn(`[business-field-engine] ${err.message}`);
+        throw err;
+      }
+      // Retryable HTTP errors (429, 5xx, RESOURCE_EXHAUSTED): propagate so
+      // callWithBackoff in routes.ts can retry the entire inferBusinessFields invocation.
       const anyErr = err as Record<string, unknown>;
       const status = anyErr?.["status"] ?? anyErr?.["statusCode"] ?? anyErr?.["code"];
       const isRetryable =
@@ -560,6 +525,7 @@ export async function inferBusinessFields(
         console.warn(`[business-field-engine] Retryable error (${String(status)}) on field "${field.label}" — propagating for retry`);
         throw err;
       }
+      // Non-retryable, non-timeout: degrade this field to null so other fields can proceed.
       console.error(`[business-field-engine] Error inferring field "${field.label}":`, err);
       result = {
         value: null,

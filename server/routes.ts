@@ -227,6 +227,8 @@ async function callWithBackoff<T>(
     } catch (err: unknown) {
       lastErr = err;
       if (err instanceof AiTimeoutError) throw err;
+      // FieldCallTimeoutError: per-call timeout inside callAIForField — never retry.
+      if (err instanceof Error && err.name === "FieldCallTimeoutError") throw err;
       const anyErr = err as Record<string, unknown>;
       const status =
         anyErr?.["status"] ?? anyErr?.["statusCode"] ?? anyErr?.["code"];
@@ -2748,16 +2750,13 @@ export async function registerRoutes(
             const tCtxMs = Date.now() - tCtxStart;
 
             // Stage: business field inference (AI)
-            // timeout wraps each individual attempt; backoff retries non-timeout failures
-            // inferBusinessFields does not accept AbortSignal so _signal is intentionally unused
+            // Each individual generateContent call inside inferBusinessFields has its own
+            // per-call timeout (aiCallTimeoutMs) via an internal AbortController in
+            // callAIForField. backoff retries non-timeout failures (429/5xx) on the
+            // entire inferBusinessFields invocation.
             const tBizStart = Date.now();
             const businessFieldTraces = await callWithBackoff(
-              () => withAiTimeout(
-                (_signal) => inferBusinessFields(businessFieldMetas, contextSections),
-                custId,
-                "bizFields",
-                aiCallTimeoutMs
-              ),
+              () => inferBusinessFields(businessFieldMetas, contextSections, aiCallTimeoutMs),
               custId,
               "bizFields"
             );
