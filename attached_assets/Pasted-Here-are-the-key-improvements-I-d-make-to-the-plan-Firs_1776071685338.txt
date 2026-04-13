@@ -1,0 +1,134 @@
+Here are the key improvements I’d make to the plan.
+
+First, make the ticket scope explicitly “fix missing treatment context end-to-end.”
+Right now the plan focuses on when-to-offer and blocked-if, which is correct, but the acceptance criteria should verify the full path:
+
+DB fetch returns rule groups
+rule groups survive packing
+field refs are resolved
+prompt contains resolved rules per treatment
+AI output uses one of those treatments, not fallback
+
+That avoids a partial fix where rules are passed into the packet but still not rendered properly in the prompt.
+
+Second, do not make the prompt the only place where rules become human-readable.
+The plan says to resolve fields and serialize rules into the prompt, which is good, but I would require the resolved structure to exist in the packet itself, not just be formatted at render time.
+That gives you:
+
+cleaner debugging
+reusable logging
+easier future move to deterministic evaluation
+less prompt-specific logic leaking into business logic
+
+So each packed treatment should carry already-resolved rules, not raw DB rows.
+
+Third, make rule formatting richer than just { field, operator, value }.
+That shape is a bit too lossy for your current system because you support:
+
+constant comparisons
+field-to-field comparisons
+grouped logic
+left/right references
+
+For Phase 1, I’d suggest a normalized condition like:
+
+leftFieldLabel
+operator
+rightMode
+rightConstantValue
+rightFieldLabel
+
+and then optionally a plainEnglish string for prompt use.
+
+That avoids future confusion where "value" could mean either a constant or another field.
+
+Fourth, add explicit fallback logging.
+This is the biggest practical improvement for debugging.
+If the AI still returns Agent Review after this fix, you want to know whether:
+
+rules were absent
+rules were present but malformed
+rules were present and readable but the AI ignored them
+validator rejected the selected treatment
+
+So for Phase 1, I would add structured logs around:
+
+number of treatments loaded
+number of rule groups per treatment
+resolved field labels
+final packed treatment payload
+final AI-selected treatment code
+validator outcome
+
+Without that, you may fix one bug and still spend hours finding the next one.
+
+Fifth, tighten acceptance criteria around your three known customer cases.
+Replit’s “done looks like” is directionally right, but I’d make it concrete:
+
+Customer 1 should no longer show “no when-to-offer rules configured”
+Customer 3 should no longer show “no when-to-offer rules configured”
+Customer 4 should no longer show “no when-to-offer rules configured”
+Prompt for each of these customers should include the configured rule text for the relevant treatments
+Returned treatment code should be one of the configured treatment codes
+Validator should accept that returned code
+
+That makes the ticket much easier to verify.
+
+Sixth, add defensive handling for unresolved field references.
+This is important in a multi-client product.
+If a rule references a field ID that cannot be resolved, do not silently pass garbage like "4" into the prompt.
+Instead:
+
+mark it as unresolved
+log it
+include a placeholder like [Unresolved field: 4]
+optionally exclude that treatment from AI-visible “configured rules” and note the issue
+
+Silent degradation is what caused this problem to be hard to spot.
+
+Seventh, align code generation in one shared helper.
+Replit mentions replacing the regex everywhere in routes.ts. I’d improve that by creating a single helper like makeTreatmentCode(name) and using it in:
+
+routes
+validator
+any prompt formatting
+any future UI references
+
+That prevents drift later.
+
+Eighth, preserve rule group ordering.
+Since you have treatment priority and grouped conditions, the plan should explicitly preserve:
+
+treatment display/priority order
+group order
+condition sort order
+
+Even in Phase 1, the AI should see the rules in the same order the business user configured them.
+
+Ninth, add one explicit non-goal to avoid accidental overreach.
+I would add:
+
+“This ticket does not change treatment selection logic; it only restores configured treatment context to the AI.”
+
+That helps prevent Replit from trying to sneak in partial deterministic logic during the fix.
+
+Tenth, add a small regression test layer.
+Even if you are not doing full automated evaluation, Phase 1 should still include at least these tests:
+
+unit test for field ref resolution
+unit test for treatment packing preserving rule groups
+prompt snapshot test showing non-empty rules per treatment
+integration test for customer 1/3/4 ensuring prompt contains expected rule text
+
+My recommended upgrades to the Replit ticket in one line:
+make it more explicit, more testable, more observable, and less prompt-fragile.
+
+If I were editing their ticket, I would add these must-haves:
+
+resolved rules live in the packet, not only the prompt
+unresolved field refs are logged loudly
+shared helper for treatment code generation
+concrete acceptance tests for customers 1, 3, and 4
+structured logging for AI fallback and validator rejection
+
+That would make Phase 1 much safer without changing the architecture.
