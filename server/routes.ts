@@ -3228,6 +3228,17 @@ export async function registerRoutes(
       const existing = await storage.getDecision(id);
       if (!existing || existing.companyId !== companyId) return res.status(404).json({ error: "Decision not found" });
       const { agentAgreed, agentReason, agentOverrideTreatment } = req.body;
+      if (agentOverrideTreatment !== undefined) {
+        if (typeof agentOverrideTreatment !== "string" || agentOverrideTreatment.trim() === "") {
+          return res.status(400).json({ error: "agentOverrideTreatment must be a non-empty string" });
+        }
+        const pack = await storage.getPolicyPack(companyId);
+        const allowedNames = pack ? (await storage.getTreatmentsWithRules(pack.id)).map((t) => t.name) : [];
+        allowedNames.push("Agent Review");
+        if (!allowedNames.includes(agentOverrideTreatment)) {
+          return res.status(400).json({ error: "Invalid agentOverrideTreatment value" });
+        }
+      }
       const decision = await storage.updateDecisionReview(id, agentAgreed, agentReason, agentOverrideTreatment);
       res.json(decision);
     } catch (error) {
