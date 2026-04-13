@@ -65,22 +65,20 @@ export function validateFinalDecisionOutput(
     const validCodes = new Set([
       ...packet.policy.treatments.map(t => t.code),
       "AGENT_REVIEW",
-      "NO_ACTION",
     ]);
     if (!validCodes.has(treatmentCode)) {
       errors.push(
-        `recommended_treatment_code "${treatmentCode}" is not a valid configured treatment code, AGENT_REVIEW, or NO_ACTION`
+        `recommended_treatment_code "${treatmentCode}" is not a valid configured treatment code or AGENT_REVIEW`
       );
     } else {
       const treatmentName = parsed.recommended_treatment_name;
       if (typeof treatmentName !== "string") {
         errors.push("recommended_treatment_name must be a string");
       } else {
-        if (treatmentCode === "AGENT_REVIEW" || treatmentCode === "NO_ACTION") {
-          const expectedName = treatmentCode === "AGENT_REVIEW" ? "Agent Review" : "No Action";
-          if (treatmentName !== expectedName) {
+        if (treatmentCode === "AGENT_REVIEW") {
+          if (treatmentName !== "Agent Review") {
             errors.push(
-              `recommended_treatment_name must be "${expectedName}" when code is "${treatmentCode}", got "${treatmentName}"`
+              `recommended_treatment_name must be "Agent Review" when code is "AGENT_REVIEW", got "${treatmentName}"`
             );
           }
         } else {
