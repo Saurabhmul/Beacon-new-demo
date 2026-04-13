@@ -190,7 +190,7 @@ Return exactly this structure:
   "customer_guid": "string",
   "recommended_treatment_name": "string — must exactly match a configured treatment name, or Agent Review",
   "recommended_treatment_code": "string — must exactly match a configured treatment code, or AGENT_REVIEW",
-  "requires_agent_review": "boolean — true only when escalation or fallback requires human review",
+  "requires_agent_review": true,
   "customer_summary": "simple summary of relevant customer context in 3-5 lines",
   "treatment_decision": {
     "selected_treatment": "string",
