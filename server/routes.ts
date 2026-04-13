@@ -2807,11 +2807,19 @@ export async function registerRoutes(
               loanData: data.loan,
               paymentData: data.payments,
               conversationData: data.conversations,
+              bureauData: data.bureau ?? {},
+              incomeEmploymentData: data.income ?? {},
               treatments: frozenTreatments as unknown as DecisionPacketTreatment[],
+              compliancePolicyInternalRules: frozenComplianceRules as unknown[],
+              escalationRules: policyConfig?.escalationRules ? [policyConfig.escalationRules] : [],
             });
 
             const systemPrompt = buildFinalDecisionSystemPrompt();
             const userPrompt = buildFinalDecisionUserPrompt(packet);
+
+            const escCount = packet.policy.escalationRules?.length ?? 0;
+            const compCount = packet.policy.compliancePolicyInternalRules?.length ?? 0;
+            console.log(`[Decisioning] Customer ${custId}: packet escalationRules=${escCount} compliancePolicyInternalRules=${compCount}`);
 
             // Stage: final AI decision — errors propagate so pool counts this customer as failed
             // timeout wraps each individual generateContent attempt; backoff retries non-timeout failures
