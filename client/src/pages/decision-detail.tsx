@@ -278,11 +278,6 @@ export default function DecisionDetailPage() {
   const requiresAgentReview = asBoolean(finalAiOutput?.["requires_agent_review"]);
   const treatmentDecision = asRecord(finalAiOutput?.["treatment_decision"]);
   const decisionFactors = asRecord(finalAiOutput?.["decision_factors"]);
-  const sourceFieldsUsed = asStringArray(decisionFactors?.["source_fields_used"]);
-  const derivedFieldsUsed = asStringArray(decisionFactors?.["derived_fields_used"]);
-  const businessFieldsUsed = asStringArray(decisionFactors?.["business_fields_used"]);
-  const missingInfo = asStringArray(decisionFactors?.["missing_information"]);
-  const keyFactors = asStringArray(decisionFactors?.["key_factors"]);
   const rulesApplied = asStringArray(decisionFactors?.["rules_applied"]);
   const treatmentRationale = asString(treatmentDecision?.["treatment_rationale"]);
   const decisionStatus = asString(treatmentDecision?.["decision_status"]);
@@ -344,29 +339,6 @@ export default function DecisionDetailPage() {
               ) : (
                 <span className="text-sm text-muted-foreground">—</span>
               )}
-            </div>
-          </div>
-
-          <Separator />
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Recommended Treatment</p>
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-sm font-semibold" data-testid="text-recommended-treatment">{recommendedTreatment}</p>
-                {recommendedCode && (
-                  <Badge variant="outline" className="text-xs font-mono">{recommendedCode}</Badge>
-                )}
-                {decisionStatus && (
-                  <Badge
-                    variant={decisionStatus === "AGENT_REVIEW" ? "destructive" : "secondary"}
-                    className="text-xs"
-                    data-testid="badge-decision-status"
-                  >
-                    {decisionStatus}
-                  </Badge>
-                )}
-              </div>
             </div>
           </div>
 
@@ -495,51 +467,27 @@ export default function DecisionDetailPage() {
         </CardHeader>
         <CardContent className="space-y-6">
 
-          {/* Decision Factors — gated on decisionFactors being present (new schema only) */}
-          {decisionFactors && (
-            <div>
-              <h3 className="text-sm font-semibold mb-3">Decision Factors</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {sourceFieldsUsed && sourceFieldsUsed.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Source Fields Used</p>
-                    <StringList items={sourceFieldsUsed} />
-                  </div>
-                )}
-                {derivedFieldsUsed && derivedFieldsUsed.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Derived Fields Used</p>
-                    <StringList items={derivedFieldsUsed} />
-                  </div>
-                )}
-                {businessFieldsUsed && businessFieldsUsed.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Business Fields Used</p>
-                    <StringList items={businessFieldsUsed} />
-                  </div>
-                )}
-                {rulesApplied && rulesApplied.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Rules Applied</p>
-                    <StringList items={rulesApplied} />
-                  </div>
-                )}
-                {missingInfo && missingInfo.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Missing Information</p>
-                    <StringList items={missingInfo} />
-                  </div>
-                )}
-                {keyFactors && keyFactors.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Key Factors</p>
-                    <StringList items={keyFactors} />
-                  </div>
-                )}
-              </div>
-              <Separator className="mt-4" />
+          {/* Recommended Treatment — prominent, moved from top summary */}
+          <div data-testid="text-recommended-treatment-prominent">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Recommended Treatment</p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <p className="text-xl font-bold" data-testid="text-recommended-treatment">{recommendedTreatment}</p>
+              {recommendedCode && (
+                <Badge variant="outline" className="text-xs font-mono">{recommendedCode}</Badge>
+              )}
+              {decisionStatus && (
+                <Badge
+                  variant={decisionStatus === "AGENT_REVIEW" ? "destructive" : "secondary"}
+                  className="text-xs"
+                  data-testid="badge-decision-status"
+                >
+                  {decisionStatus}
+                </Badge>
+              )}
             </div>
-          )}
+          </div>
+
+          <Separator />
 
           {/* Treatment Rationale — prefer new nested treatmentRationale, fall back to DB column */}
           {(treatmentRationale || treatmentExplanation) && (
@@ -557,12 +505,15 @@ export default function DecisionDetailPage() {
             <div>
               <h3 className="text-sm font-semibold mb-2">Internal Action</h3>
               <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-internal-action">{internalAction}</p>
-              {internalActionRationale && (
-                <div className="mt-3">
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Internal Action Rationale</p>
-                  <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-internal-action-rationale">{internalActionRationale}</p>
-                </div>
-              )}
+              <Separator className="mt-4" />
+            </div>
+          )}
+
+          {/* Internal Action Rationale — separate block */}
+          {internalActionRationale && (
+            <div>
+              <h3 className="text-sm font-semibold mb-2">Internal Action Rationale</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-internal-action-rationale">{internalActionRationale}</p>
               <Separator className="mt-4" />
             </div>
           )}
