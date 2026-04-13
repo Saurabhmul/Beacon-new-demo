@@ -248,14 +248,37 @@ ${JSON.stringify(packet.customer.businessFields, null, 2)}`);
   sections.push(`== DERIVED FIELDS ==
 ${JSON.stringify(packet.customer.derivedFields, null, 2)}`);
 
-  sections.push(`== CONFIGURED TREATMENTS ==
-${JSON.stringify(packet.policy.treatments, null, 2)}`);
+  const treatmentText = packet.policy.treatments.map((t, i) => {
+    const lines: string[] = [];
+    lines.push(`Treatment ${i + 1}: ${t.name}`);
+    lines.push(`  Code: ${t.code}`);
+    if (t.priority) lines.push(`  Priority: ${t.priority}`);
+    lines.push(`  Display order: ${t.displayOrder ?? i}`);
+    if (t.description) lines.push(`  Description: ${t.description}`);
 
-  sections.push(`== WHEN TO OFFER RULES ==
-${JSON.stringify(packet.policy.treatmentRules.whenToOffer, null, 2)}`);
+    if (t.whenToOfferRules.length === 0) {
+      lines.push(`  When-to-offer rules: (none configured)`);
+    } else {
+      t.whenToOfferRules.forEach((g, gi) => {
+        lines.push(`  When-to-offer group ${gi + 1} (${g.logic}):`);
+        g.conditions.forEach(c => lines.push(`    - ${c.plainEnglish}`));
+      });
+    }
 
-  sections.push(`== BLOCKED IF RULES ==
-${JSON.stringify(packet.policy.treatmentRules.blockedIf, null, 2)}`);
+    if (t.blockedIfRules.length === 0) {
+      lines.push(`  Blocked-if rules: (none configured)`);
+    } else {
+      t.blockedIfRules.forEach((g, gi) => {
+        lines.push(`  Blocked-if group ${gi + 1} (${g.logic}):`);
+        g.conditions.forEach(c => lines.push(`    - ${c.plainEnglish}`));
+      });
+    }
+
+    return lines.join("\n");
+  }).join("\n\n");
+
+  sections.push(`== CONFIGURED TREATMENTS (in priority / display order) ==
+${packet.policy.treatments.length === 0 ? "(no treatments configured)" : treatmentText}`);
 
   sections.push(`== ESCALATION RULES ==
 ${JSON.stringify(packet.policy.escalationRules, null, 2)}`);

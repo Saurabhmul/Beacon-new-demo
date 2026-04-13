@@ -24,7 +24,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { inferBusinessFields } from "./lib/decisioning/business-field-engine";
 import { computeDerivedFields, buildResolvedSourceFieldsMap } from "./lib/decisioning/derived-field-engine";
-import { buildDecisionPacket, type DecisionPacketTreatment } from "./lib/decisioning/decision-packet";
+import { buildDecisionPacket, type DecisionPacketTreatment, type ResolvedRuleGroup, type ResolvedRuleCondition } from "./lib/decisioning/decision-packet";
 import { buildFinalDecisionSystemPrompt, buildFinalDecisionUserPrompt, buildFinalDecisionRetryPrompt } from "./lib/decisioning/prompts/final-decision-prompt";
 import { validateFinalDecisionOutput, tryParseDecisionJson } from "./lib/decisioning/decision-validator";
 import { emptyContextSections } from "./lib/decisioning/context-sections";
@@ -48,6 +48,113 @@ function normalizeSampleValues(input: unknown[]): string[] {
     if (out.length >= 4) break;
   }
   return out;
+}
+
+/**
+ * Generates a stable, clean treatment code from a treatment name.
+ * All non-alphanumeric characters are replaced with underscores and trimmed.
+ * This is the single canonical place where treatment codes are generated —
+ * used both when building the decision packet and when reading AI output back.
+ */
+export function makeTreatmentCode(name: string): string {
+  return name.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+/**
+ * Resolves a stored field reference to a human-readable label using the same
+ * three-format normalisation as derived-field-engine.ts normalizeFieldRef:
+ *   1. "source:fieldname" prefix → strip prefix → fieldname
+ *   2. Numeric DB ID string → look up in idToLabel map
+ *   3. Plain label → returned as-is
+ * If unresolvable, logs a warning and returns a "[Unresolved field: X]" placeholder.
+ */
+function resolveFieldRefToLabel(ref: string | null | undefined, idToLabel: Map<string, string>, context: string): string {
+  if (!ref) return "[Unknown field]";
+  const bare = ref.startsWith("source:") ? ref.slice(7) : ref;
+  const resolved = idToLabel.get(bare) ?? bare;
+  if (resolved === bare && /^\d+$/.test(bare)) {
+    console.warn(`[Treatment Rules] ${context}: could not resolve field ID "${bare}" — check that allPolicyFields is complete`);
+    return `[Unresolved field: ${bare}]`;
+  }
+  return resolved;
+}
+
+/**
+ * Formats a human-readable plain English string for a single rule condition.
+ */
+function formatConditionPlainEnglish(
+  leftLabel: string,
+  operator: string,
+  rightMode: string | null,
+  rightConstant: string | null,
+  rightLabel: string | null,
+): string {
+  if (operator === "is_true") return `${leftLabel} is true`;
+  if (operator === "is_false") return `${leftLabel} is false`;
+  const opDisplay: Record<string, string> = {
+    "=": "=", "!=": "≠", ">": ">", ">=": "≥", "<": "<", "<=": "≤",
+    "in": "is one of", "not_in": "is not one of",
+    "contains": "contains",
+  };
+  const op = opDisplay[operator] ?? operator;
+  const right = rightMode === "field" && rightLabel ? rightLabel : (rightConstant ?? "?");
+  return `${leftLabel} ${op} ${right}`;
+}
+
+/**
+ * Builds resolved rule groups from a treatment's ruleGroups array.
+ * Separates by ruleType ("when-to-offer" vs "blocked-if"), resolves field refs to labels,
+ * and formats a plain English string per condition. Preserves group order and condition sort order.
+ */
+function buildResolvedRuleGroups(
+  ruleGroups: Array<{
+    ruleType: string;
+    logicOperator: string;
+    groupOrder: number;
+    rules: Array<{
+      fieldName: string;
+      operator: string;
+      value: string | null;
+      leftFieldId: string | null;
+      rightMode: string | null;
+      rightConstantValue: string | null;
+      rightFieldId: string | null;
+      sortOrder: number;
+    }>;
+  }>,
+  ruleType: "when-to-offer" | "blocked-if",
+  idToLabel: Map<string, string>,
+  treatmentName: string,
+): ResolvedRuleGroup[] {
+  return ruleGroups
+    .filter(g => g.ruleType === ruleType)
+    .sort((a, b) => a.groupOrder - b.groupOrder)
+    .map(g => {
+      const conditions: ResolvedRuleCondition[] = g.rules
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map(r => {
+          const leftRef = r.leftFieldId ?? r.fieldName;
+          const leftLabel = resolveFieldRefToLabel(leftRef, idToLabel, `treatment "${treatmentName}" ${ruleType}`);
+          const rightMode = (r.rightMode as "constant" | "field" | null) ?? null;
+          const rightConstantValue = r.rightConstantValue ?? r.value ?? null;
+          const rightFieldLabel = r.rightFieldId
+            ? resolveFieldRefToLabel(r.rightFieldId, idToLabel, `treatment "${treatmentName}" ${ruleType} right-side`)
+            : null;
+          const plainEnglish = formatConditionPlainEnglish(leftLabel, r.operator, rightMode, rightConstantValue, rightFieldLabel);
+          return {
+            leftFieldLabel: leftLabel,
+            operator: r.operator,
+            rightMode,
+            rightConstantValue: rightMode !== "field" ? rightConstantValue : null,
+            rightFieldLabel,
+            plainEnglish,
+          };
+        });
+      return {
+        logic: (g.logicOperator === "OR" ? "OR" : "AND") as "AND" | "OR",
+        conditions,
+      };
+    });
 }
 
 const WORD_TO_UI_OPERATOR: Record<string, string> = {
@@ -2402,14 +2509,42 @@ export async function registerRoutes(
           }
 
           const policyPack = await storage.getPolicyPack(companyId);
-          const packedTreatments: DecisionPacketTreatment[] = policyPack
-            ? (await storage.getTreatmentsWithRules(policyPack.id)).map(t => ({
+
+          const idToLabel = new Map<string, string>(
+            allPolicyFields.map(f => [String(f.id), f.label])
+          );
+
+          const treatmentsWithRules = policyPack
+            ? await storage.getTreatmentsWithRules(policyPack.id)
+            : [];
+
+          const packedTreatments: DecisionPacketTreatment[] = treatmentsWithRules
+            .filter(t => t.enabled)
+            .sort((a, b) => a.displayOrder - b.displayOrder)
+            .map(t => {
+              const whenToOfferRules = buildResolvedRuleGroups(t.ruleGroups, "when-to-offer", idToLabel, t.name);
+              const blockedIfRules = buildResolvedRuleGroups(t.ruleGroups, "blocked-if", idToLabel, t.name);
+              return {
                 name: t.name,
-                code: t.name.toUpperCase().replace(/\s+/g, "_"),
+                code: makeTreatmentCode(t.name),
                 description: t.shortDescription || undefined,
                 enabled: t.enabled,
-              }))
-            : [];
+                priority: t.priority,
+                displayOrder: t.displayOrder,
+                whenToOfferRules,
+                blockedIfRules,
+              };
+            });
+
+          console.log(`[Decisioning] Treatments loaded: ${packedTreatments.length} enabled | ${treatmentsWithRules.length} total`, packedTreatments.map(t => ({
+            name: t.name,
+            code: t.code,
+            whenToOfferGroups: t.whenToOfferRules.length,
+            blockedIfGroups: t.blockedIfRules.length,
+            whenToOfferConditions: t.whenToOfferRules.reduce((s, g) => s + g.conditions.length, 0),
+            blockedIfConditions: t.blockedIfRules.reduce((s, g) => s + g.conditions.length, 0),
+            sample: t.whenToOfferRules[0]?.conditions[0]?.plainEnglish ?? "(no conditions)",
+          })));
 
           for (const [custId, data] of customers) {
             try {
@@ -2469,6 +2604,8 @@ export async function registerRoutes(
               for (const trace of derivedFieldTraces) {
                 if (trace.output_value !== null) derivedFieldsMap[trace.field_label] = trace.output_value;
               }
+
+              console.log(`[Decisioning] Customer ${custId}: starting analysis with ${packedTreatments.length} treatments, ${Object.keys(businessFieldsMap).length} business fields, ${Object.keys(derivedFieldsMap).length} derived fields`);
 
               const packet = buildDecisionPacket({
                 customerId: custId,
@@ -2580,6 +2717,8 @@ export async function registerRoutes(
                   : null;
                 treatmentEligibilityExplanation = String(tdFb?.["treatment_rationale"] || "");
               }
+
+              console.log(`[Decisioning] Customer ${custId}: AI selected treatment "${treatmentName}" (${treatmentCode}) | requires_agent_review=${requiresAgentReview} | validation=${attempt1Passed ? "pass-attempt1" : attempt2Passed ? "pass-attempt2" : "failed"} | fallback=${usedFallback}`);
 
               const validationTrace: Record<string, unknown> = {
                 attempt_1: {

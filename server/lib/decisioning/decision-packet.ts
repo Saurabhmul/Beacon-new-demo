@@ -1,8 +1,26 @@
+export interface ResolvedRuleCondition {
+  leftFieldLabel: string;
+  operator: string;
+  rightMode: "constant" | "field" | null;
+  rightConstantValue: string | null;
+  rightFieldLabel: string | null;
+  plainEnglish: string;
+}
+
+export interface ResolvedRuleGroup {
+  logic: "AND" | "OR";
+  conditions: ResolvedRuleCondition[];
+}
+
 export interface DecisionPacketTreatment {
   name: string;
   code: string;
   description?: string;
   enabled: boolean;
+  priority?: string | null;
+  displayOrder?: number;
+  whenToOfferRules: ResolvedRuleGroup[];
+  blockedIfRules: ResolvedRuleGroup[];
 }
 
 export interface DecisionPacket {
@@ -21,10 +39,6 @@ export interface DecisionPacket {
   };
   policy: {
     treatments: DecisionPacketTreatment[];
-    treatmentRules: {
-      whenToOffer: unknown[];
-      blockedIf: unknown[];
-    };
     escalationRules: unknown[];
     reviewTriggers: unknown[];
     guardrails: unknown[];
@@ -58,8 +72,6 @@ export interface BuildDecisionPacketInput {
   bureauData?: Record<string, unknown>;
   incomeEmploymentData?: Record<string, unknown>;
   treatments?: DecisionPacketTreatment[];
-  whenToOfferRules?: unknown[];
-  blockedIfRules?: unknown[];
   escalationRules?: unknown[];
   reviewTriggers?: unknown[];
   guardrails?: unknown[];
@@ -92,10 +104,6 @@ export function buildDecisionPacket(input: BuildDecisionPacketInput): DecisionPa
     },
     policy: {
       treatments: input.treatments ?? [],
-      treatmentRules: {
-        whenToOffer: input.whenToOfferRules ?? [],
-        blockedIf: input.blockedIfRules ?? [],
-      },
       escalationRules: input.escalationRules ?? [],
       reviewTriggers: input.reviewTriggers ?? [],
       guardrails: input.guardrails ?? [],
