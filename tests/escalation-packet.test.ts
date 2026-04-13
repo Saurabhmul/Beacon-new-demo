@@ -90,4 +90,68 @@ describe("buildFinalDecisionUserPrompt — escalation rules appear non-empty in 
     const escSection = prompt.split("== ESCALATION RULES ==")[1].split("==")[0].trim();
     expect(escSection).toBe("[]");
   });
+
+  it("PATH A — vulnerabilityRules with data-driven conditions flows into == ESCALATION RULES == (Lendable pattern)", () => {
+    const lendableEscalationRule = {
+      vulnerabilityDetected: true as const,
+      legalAction: true,
+      debtDispute: true,
+      balanceAbove: null,
+      dpdAbove: null,
+      managerRequest: false,
+      brokenPtps: null,
+      otherConditions: [],
+      vulnerabilityRules: {
+        rows: [
+          {
+            leftFieldId: "source:vulnerability_rag",
+            operator: "!=",
+            rightConstantValue: "None",
+            rightMode: "constant" as const,
+            rightFieldId: null,
+          },
+        ],
+        logicOperator: "AND" as const,
+      },
+    };
+
+    const packet = buildDecisionPacket({
+      customerId: "CUST-LENDABLE-001",
+      escalationRules: [lendableEscalationRule],
+      compliancePolicyInternalRules: [COMPLIANCE_RULE],
+    });
+
+    const prompt = buildFinalDecisionUserPrompt(packet);
+    const escSection = prompt.split("== ESCALATION RULES ==")[1].split("==")[0].trim();
+
+    expect(escSection).toContain("vulnerabilityRules");
+    expect(escSection).toContain("vulnerability_rag");
+    expect(escSection).toContain("logicOperator");
+  });
+
+  it("PATH B — no vulnerabilityRules in escalation rules (Prodigy Finance pattern) — prompt contains no vulnerabilityRules key", () => {
+    const prodigyEscalationRule = {
+      vulnerabilityDetected: true as const,
+      legalAction: true,
+      debtDispute: true,
+      balanceAbove: null,
+      dpdAbove: null,
+      managerRequest: true,
+      brokenPtps: null,
+      otherConditions: [],
+    };
+
+    const packet = buildDecisionPacket({
+      customerId: "CUST-PRODIGY-001",
+      escalationRules: [prodigyEscalationRule],
+      compliancePolicyInternalRules: [COMPLIANCE_RULE],
+    });
+
+    const prompt = buildFinalDecisionUserPrompt(packet);
+    const escSection = prompt.split("== ESCALATION RULES ==")[1].split("==")[0].trim();
+
+    expect(escSection).toContain("vulnerabilityDetected");
+    expect(escSection).not.toContain("vulnerabilityRules");
+    expect(escSection).not.toContain("vulnerability_rag");
+  });
 });

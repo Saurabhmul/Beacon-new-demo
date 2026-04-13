@@ -71,9 +71,26 @@ Check this BEFORE evaluating any treatment. This is the highest-priority rule.
 You will receive an == ESCALATION RULES == block containing configured conditions.
 Evaluate EVERY condition in that block against the customer's data:
 
-  - vulnerabilityDetected: true  →  review if vulnerability_rag is present and its value
-                                    is not the string "None", not null, and not empty
-                                    (values like "Red", "Amber", or "Green" must trigger review)
+  - vulnerabilityDetected: true  →  how to evaluate depends on the client configuration:
+
+      PATH A — data-driven conditions (the escalation rules block contains a "vulnerabilityRules"
+               key with "rows" and "logicOperator"):
+               Evaluate each row against the customer's source/derived/business fields using
+               the specified operator and value. Apply the group's logicOperator (AND/OR) across
+               all rows. If the combined result is true → trigger review.
+               Example: { leftFieldId: "source:vulnerability_rag", operator: "!=",
+                          rightConstantValue: "None" } means check whether the customer's
+               vulnerability_rag source field is any value other than the string "None".
+
+      PATH B — text definition only (no "vulnerabilityRules" key in the escalation rules block):
+               Read the vulnerability definition provided in == COMPLIANCE POLICY INTERNAL RULES ==.
+               Evaluate whether the customer's situation matches one of the SPECIFIC CATEGORIES
+               listed in that definition. Match strictly — do not apply a general concept of
+               vulnerability. Financial hardship, unemployment, or payment difficulty are NOT
+               vulnerability categories unless they are explicitly named in the definition.
+               If the customer's situation does not clearly fall within a listed category → do NOT
+               trigger review on this rule.
+
   - legalAction: true            →  review if any legal action indicator is present
   - debtDispute: true            →  review if customer has disputed the debt
   - balanceAbove: <N>            →  review if outstanding balance exceeds N
