@@ -219,6 +219,7 @@ export const decisions = pgTable("decisions", {
   status: text("status").default("pending").notNull(),
   agentAgreed: boolean("agent_agreed"),
   agentReason: text("agent_reason"),
+  agentOverrideTreatment: text("agent_override_treatment"),
   emailAccepted: boolean("email_accepted"),
   emailRejectReason: text("email_reject_reason"),
   reviewedAt: timestamp("reviewed_at"),

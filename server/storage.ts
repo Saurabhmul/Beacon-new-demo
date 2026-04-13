@@ -51,7 +51,7 @@ export interface IStorage {
   getDecisions(companyId: string, status?: string): Promise<Decision[]>;
   getDecision(id: number): Promise<Decision | undefined>;
   createDecision(data: InsertDecision): Promise<Decision>;
-  updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string): Promise<Decision>;
+  updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string, agentOverrideTreatment?: string): Promise<Decision>;
   updateDecisionEmailReview(id: number, emailAccepted: boolean, emailRejectReason?: string): Promise<Decision>;
   deletePendingDecisions(companyId: string): Promise<void>;
   deleteDecisionsByIds(ids: number[], companyId: string): Promise<void>;
@@ -230,13 +230,14 @@ export class DatabaseStorage implements IStorage {
     return decision;
   }
 
-  async updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string): Promise<Decision> {
+  async updateDecisionReview(id: number, agentAgreed: boolean, agentReason?: string, agentOverrideTreatment?: string): Promise<Decision> {
     const [decision] = await db
       .update(decisions)
       .set({
         status: agentAgreed ? "approved" : "rejected",
         agentAgreed,
         agentReason: agentReason || null,
+        agentOverrideTreatment: agentOverrideTreatment || null,
         reviewedAt: new Date(),
       })
       .where(eq(decisions.id, id))

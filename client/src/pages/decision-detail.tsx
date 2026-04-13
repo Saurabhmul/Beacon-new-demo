@@ -11,6 +11,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { TreatmentWithRules } from "@shared/schema";
+import {
   Table,
   TableBody,
   TableCell,
@@ -177,14 +185,27 @@ export default function DecisionDetailPage() {
   const isSuperAdmin = user?.role === "superadmin";
 
   const [agentReason, setAgentReason] = useState("");
+  const [agentOverrideTreatment, setAgentOverrideTreatment] = useState("");
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const [showEmailRejectForm, setShowEmailRejectForm] = useState(false);
+  const [emailRejectReason, setEmailRejectReason] = useState("");
 
   const { data: decision, isLoading } = useQuery<Decision>({
     queryKey: ["/api/decisions", params.id],
   });
 
+  const { data: treatmentsData } = useQuery<TreatmentWithRules[]>({
+    queryKey: ["/api/policy-pack/treatments"],
+    enabled: showRejectForm,
+  });
+
+  const overrideOptions = [
+    ...(treatmentsData ?? []).map((t) => t.name),
+    "Agent Review",
+  ];
+
   const reviewMutation = useMutation({
-    mutationFn: async (data: { agentAgreed: boolean; agentReason?: string }) => {
+    mutationFn: async (data: { agentAgreed: boolean; agentReason?: string; agentOverrideTreatment?: string }) => {
       const res = await apiRequest("PATCH", `/api/decisions/${params.id}/review`, data);
       return res.json();
     },
@@ -207,6 +228,8 @@ export default function DecisionDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/decisions", params.id] });
+      setShowEmailRejectForm(false);
+      setEmailRejectReason("");
       toast({ title: "Email review saved" });
     },
     onError: () => {
@@ -532,31 +555,71 @@ export default function DecisionDetailPage() {
                   <p className="text-sm whitespace-pre-line leading-relaxed" data-testid="text-email-draft">{proposedEmail}</p>
                 </div>
                 {!isSuperAdmin && decision.emailAccepted === null && !decision.reviewedAt && (
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => emailMutation.mutate({ emailAccepted: true })}
-                      disabled={emailMutation.isPending}
-                      data-testid="button-accept-email"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Accept Email
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => emailMutation.mutate({ emailAccepted: false })}
-                      disabled={emailMutation.isPending}
-                      data-testid="button-reject-email"
-                    >
-                      <XCircle className="w-3.5 h-3.5 mr-1" /> Reject Email
-                    </Button>
-                  </div>
+                  !showEmailRejectForm ? (
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => emailMutation.mutate({ emailAccepted: true })}
+                        disabled={emailMutation.isPending}
+                        data-testid="button-accept-email"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Accept Email
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setShowEmailRejectForm(true)}
+                        disabled={emailMutation.isPending}
+                        data-testid="button-reject-email"
+                      >
+                        <XCircle className="w-3.5 h-3.5 mr-1" /> Reject Email
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Textarea
+                        placeholder="Reason for rejecting email (optional)"
+                        value={emailRejectReason}
+                        onChange={(e) => setEmailRejectReason(e.target.value)}
+                        rows={2}
+                        data-testid="textarea-email-reject-reason"
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => emailMutation.mutate({ emailAccepted: false, emailRejectReason: emailRejectReason || undefined })}
+                          disabled={emailMutation.isPending}
+                          data-testid="button-confirm-email-reject"
+                        >
+                          {emailMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}
+                          Confirm Rejection
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => { setShowEmailRejectForm(false); setEmailRejectReason(""); }}
+                          disabled={emailMutation.isPending}
+                          data-testid="button-cancel-email-reject"
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )
                 )}
                 {decision.emailAccepted !== null && decision.emailAccepted !== undefined && (
-                  <Badge variant={decision.emailAccepted ? "default" : "destructive"} data-testid="badge-email-decision">
-                    {decision.emailAccepted ? "Email Accepted" : "Email Rejected"}
-                  </Badge>
+                  <div className="space-y-1">
+                    <Badge variant={decision.emailAccepted ? "default" : "destructive"} data-testid="badge-email-decision">
+                      {decision.emailAccepted ? "Email Accepted" : "Email Rejected"}
+                    </Badge>
+                    {!decision.emailAccepted && decision.emailRejectReason && (
+                      <p className="text-xs text-muted-foreground" data-testid="text-email-reject-reason">
+                        {decision.emailRejectReason}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -666,6 +729,19 @@ export default function DecisionDetailPage() {
                   </div>
                 ) : (
                   <div className="space-y-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Select correct action</label>
+                      <Select value={agentOverrideTreatment} onValueChange={setAgentOverrideTreatment}>
+                        <SelectTrigger data-testid="select-override-treatment">
+                          <SelectValue placeholder="Select correct action..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {overrideOptions.map((opt) => (
+                            <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <Textarea
                       placeholder="Reason for rejection (optional)"
                       value={agentReason}
@@ -676,7 +752,7 @@ export default function DecisionDetailPage() {
                     <div className="flex gap-2">
                       <Button
                         variant="destructive"
-                        onClick={() => reviewMutation.mutate({ agentAgreed: false, agentReason })}
+                        onClick={() => reviewMutation.mutate({ agentAgreed: false, agentReason, agentOverrideTreatment: agentOverrideTreatment || undefined })}
                         disabled={reviewMutation.isPending}
                         data-testid="button-confirm-reject"
                       >
@@ -685,7 +761,7 @@ export default function DecisionDetailPage() {
                       </Button>
                       <Button
                         variant="outline"
-                        onClick={() => { setShowRejectForm(false); setAgentReason(""); }}
+                        onClick={() => { setShowRejectForm(false); setAgentReason(""); setAgentOverrideTreatment(""); }}
                         disabled={reviewMutation.isPending}
                         data-testid="button-cancel-reject"
                       >
@@ -699,11 +775,16 @@ export default function DecisionDetailPage() {
           )}
 
           {!isPending && (
-            <div className="flex items-center gap-2 py-2">
+            <div className="flex flex-wrap items-center gap-2 py-2">
               {decision.agentAgreed ? (
                 <><CheckCircle2 className="w-4 h-4 text-green-600" /><span className="text-sm font-medium text-green-700">Approved</span></>
               ) : (
                 <><XCircle className="w-4 h-4 text-destructive" /><span className="text-sm font-medium text-destructive">Rejected</span></>
+              )}
+              {!decision.agentAgreed && decision.agentOverrideTreatment && (
+                <Badge variant="outline" className="text-xs" data-testid="badge-override-treatment">
+                  → {decision.agentOverrideTreatment}
+                </Badge>
               )}
               {decision.agentReason && (
                 <span className="text-sm text-muted-foreground ml-2">— {decision.agentReason}</span>

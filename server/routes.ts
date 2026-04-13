@@ -944,7 +944,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/policy-pack/treatments", authenticate, authorize("superadmin", "admin", "manager"), companyFilter, async (req: any, res) => {
+  app.get("/api/policy-pack/treatments", authenticate, authorize("superadmin", "admin", "manager", "agent"), companyFilter, async (req: any, res) => {
     try {
       const companyId = getCompanyId(req);
       const pack = await storage.getPolicyPack(companyId);
@@ -3227,8 +3227,8 @@ export async function registerRoutes(
       const id = parseInt(req.params.id);
       const existing = await storage.getDecision(id);
       if (!existing || existing.companyId !== companyId) return res.status(404).json({ error: "Decision not found" });
-      const { agentAgreed, agentReason } = req.body;
-      const decision = await storage.updateDecisionReview(id, agentAgreed, agentReason);
+      const { agentAgreed, agentReason, agentOverrideTreatment } = req.body;
+      const decision = await storage.updateDecisionReview(id, agentAgreed, agentReason, agentOverrideTreatment);
       res.json(decision);
     } catch (error) {
       res.status(500).json({ error: "Failed to update review" });
