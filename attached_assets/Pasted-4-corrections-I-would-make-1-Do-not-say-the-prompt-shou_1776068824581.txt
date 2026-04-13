@@ -1,0 +1,79 @@
+4 corrections I would make
+1) Do not say the prompt should match “exactly”
+
+I would change this acceptance criterion:
+
+System prompt matches the new configuration-led Beacon Decision AI prompt exactly.
+
+to:
+
+System prompt matches the approved Beacon Decision AI prompt functionally, including decision order, AGENT_REVIEW-first logic, priority-based treatment evaluation, configuration-led reasoning, internal action alignment, and the new JSON schema.
+
+Why:
+
+“exactly” is too brittle
+engineering may need tiny formatting edits, escaping changes, or interpolation changes
+what matters is the logic and output contract, not character-for-character identity
+2) The validator should validate recommended_treatment_name against the configured treatment name or "Agent Review"
+
+The plan says:
+
+Keep: recommended_treatment_code configured-code check
+
+Good, but incomplete.
+
+Add this too:
+
+validate that recommended_treatment_name matches the configured treatment name corresponding to the code
+or equals "Agent Review" when code is AGENT_REVIEW
+
+Why:
+
+your prompt explicitly requires exact configured treatment name/code matching
+validating only the code still allows sloppy name drift in the UI
+3) Do not hardcode structuredAssessments = [] unless the code truly tolerates it everywhere
+
+This line in the plan needs caution:
+
+structuredAssessments finalParsed.structured_assessments (array) → [] (removed from schema)
+
+I would rewrite it as:
+
+structuredAssessments: use [] only where the existing downstream code requires an array; otherwise leave unset / null and make the UI tolerant of missing structured assessments for new decisions.
+
+Why:
+
+forcing [] everywhere can be fine, but only if every consumer expects an array
+if some logic checks “has assessments” vs “field missing,” you may accidentally change behavior
+safer wording is: preserve compatibility intentionally, not casually
+4) Add one more server-side extraction: preserve decisionStatus and internalActionRationale inside ai_raw_output
+
+The UI plan assumes new fields come from finalAiOutput, which is good.
+But I would explicitly state:
+
+no DB column is needed for decisionStatus
+no DB column is needed for internalActionRationale
+these should remain available through stored ai_raw_output / finalAiOutput
+
+Why:
+
+otherwise engineers may think they need new columns
+your own plan says no schema change, so this should be explicit
+Small wording improvements I would make
+In routes.ts
+
+Add a note like this:
+
+Continue storing the full parsed final AI output in ai_raw_output so nested fields such as treatment_decision, decision_factors, and internal_action_rationale remain available to the UI without DB schema changes.
+
+That makes the no-schema-change story much cleaner.
+
+In decision-detail.tsx
+
+For backward compatibility, I would explicitly say:
+
+if finalAiOutput.treatment_decision.treatment_rationale is missing, fall back to DB treatmentEligibilityExplanation
+if finalAiOutput.internal_action_rationale is missing, hide that section cleanly
+if finalAiOutput.decision_factors is missing, hide the nested factor lists cleanly
+
+That avoids broken rendering for old decisions.
