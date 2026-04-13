@@ -2981,8 +2981,8 @@ export async function registerRoutes(
                   })
                   .finally(() => {
                     inFlight--;
+                    dispatch(); // may increment inFlight for next queued customer
                     emitEvent({ type: "progress", completed, failed, inFlight, total: customers.length, customerGuid: custId });
-                    dispatch();
                   });
               }
               if (inFlight === 0 && queue.length === 0) {
