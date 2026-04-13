@@ -2665,11 +2665,25 @@ export async function registerRoutes(
           }
           console.log(`[Batch] Starting parallel analysis | customers=${customers.length} | concurrency=${maxConcurrency}`);
 
-          // Per-AI-call timeout (ms), minimum 30s
-          const aiCallTimeoutMs = Math.max(30_000, parseInt(process.env.AI_CALL_TIMEOUT_MS || "120000", 10));
+          // Per-AI-call timeout (ms), minimum 30s — guard against NaN from invalid env
+          const rawTimeoutMs = parseInt(process.env.AI_CALL_TIMEOUT_MS || "120000", 10);
+          const aiCallTimeoutMs = Math.max(30_000, isNaN(rawTimeoutMs) ? 120_000 : rawTimeoutMs);
 
-          // Freeze shared context — no cross-customer mutation possible
-          const frozenTreatments = Object.freeze(packedTreatments.map(t => Object.freeze({ ...t }))) as readonly DecisionPacketTreatment[];
+          // Deep-freeze shared context — no cross-customer mutation possible,
+          // including nested arrays (whenToOfferRules, blockedIfRules, conditions)
+          const frozenTreatments = Object.freeze(
+            packedTreatments.map(t => Object.freeze({
+              ...t,
+              whenToOfferRules: Object.freeze(t.whenToOfferRules.map(g => Object.freeze({
+                ...g,
+                conditions: Object.freeze([...g.conditions]),
+              }))),
+              blockedIfRules: Object.freeze(t.blockedIfRules.map(g => Object.freeze({
+                ...g,
+                conditions: Object.freeze([...g.conditions]),
+              }))),
+            }))
+          ) as readonly DecisionPacketTreatment[];
           const frozenAllPolicyFields = Object.freeze([...allPolicyFields]);
           const frozenBusinessFieldDefs = Object.freeze([...businessFieldDefs]);
           const frozenDerivedFieldDefs = Object.freeze([...derivedFieldDefs]);
@@ -2724,17 +2738,18 @@ export async function registerRoutes(
             }));
             const tCtxMs = Date.now() - tCtxStart;
 
-            // Stage: business field inference (AI, with timeout + backoff)
+            // Stage: business field inference (AI)
+            // timeout wraps each individual attempt; backoff retries each timed-out-free attempt
             const tBizStart = Date.now();
-            const businessFieldTraces = await withAiTimeout(
-              callWithBackoff(
-                () => inferBusinessFields(businessFieldMetas, contextSections),
+            const businessFieldTraces = await callWithBackoff(
+              () => withAiTimeout(
+                inferBusinessFields(businessFieldMetas, contextSections),
                 custId,
-                "bizFields"
+                "bizFields",
+                aiCallTimeoutMs
               ),
               custId,
-              "bizFields",
-              aiCallTimeoutMs
+              "bizFields"
             );
             const tBizMs = Date.now() - tBizStart;
 
@@ -2778,123 +2793,105 @@ export async function registerRoutes(
             const systemPrompt = buildFinalDecisionSystemPrompt();
             const userPrompt = buildFinalDecisionUserPrompt(packet);
 
-            // Stage: final AI decision (attempt 1 + optional attempt 2, with timeout + backoff)
+            // Stage: final AI decision — errors propagate so pool counts this customer as failed
+            // timeout wraps each individual generateContent attempt; backoff retries non-timeout failures
             const tFinalStart = Date.now();
             let attempt1RawText = "";
             let attempt1Parsed: Record<string, unknown> | null = null;
             let attempt1Passed = false;
             let attempt1Errors: string[] = [];
-
-            let finalParsed: Record<string, unknown> | null = null;
+            let finalParsed: Record<string, unknown>;
             let attempt2RawText = "";
             let attempt2Passed = false;
             let attempt2Errors: string[] = [];
-            let usedFallback = false;
 
-            try {
-              const resp1 = await withAiTimeout(
-                callWithBackoff(
-                  () => decisionAI.models.generateContent({
-                    model: "gemini-2.5-pro",
-                    contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }],
-                    config: { maxOutputTokens: 16000 },
-                  }),
-                  custId,
-                  "finalDecision-1"
-                ),
+            const resp1 = await callWithBackoff(
+              () => withAiTimeout(
+                decisionAI.models.generateContent({
+                  model: "gemini-2.5-pro",
+                  contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }],
+                  config: { maxOutputTokens: 16000 },
+                }),
                 custId,
                 "finalDecision-1",
                 aiCallTimeoutMs
-              );
-              attempt1RawText = resp1.text || "";
-              attempt1Parsed = tryParseDecisionJson(attempt1RawText);
-              const v1 = validateFinalDecisionOutput(attempt1Parsed, packet);
-              attempt1Passed = v1.valid;
-              attempt1Errors = v1.errors;
+              ),
+              custId,
+              "finalDecision-1"
+            );
+            attempt1RawText = resp1.text || "";
+            attempt1Parsed = tryParseDecisionJson(attempt1RawText);
+            const v1 = validateFinalDecisionOutput(attempt1Parsed, packet);
+            attempt1Passed = v1.valid;
+            attempt1Errors = v1.errors;
 
-              if (attempt1Passed) {
-                finalParsed = attempt1Parsed;
-              } else {
-                const retryPrompt = buildFinalDecisionRetryPrompt(attempt1Errors.join("; "));
-                const resp2 = await withAiTimeout(
-                  callWithBackoff(
-                    () => decisionAI.models.generateContent({
-                      model: "gemini-2.5-pro",
-                      contents: [
-                        { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
-                        { role: "model", parts: [{ text: attempt1RawText }] },
-                        { role: "user", parts: [{ text: retryPrompt }] },
-                      ],
-                      config: { maxOutputTokens: 16000 },
-                    }),
-                    custId,
-                    "finalDecision-2"
-                  ),
+            if (attempt1Passed && attempt1Parsed) {
+              finalParsed = attempt1Parsed;
+            } else {
+              const retryPrompt = buildFinalDecisionRetryPrompt(attempt1Errors.join("; "));
+              const resp2 = await callWithBackoff(
+                () => withAiTimeout(
+                  decisionAI.models.generateContent({
+                    model: "gemini-2.5-pro",
+                    contents: [
+                      { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
+                      { role: "model", parts: [{ text: attempt1RawText }] },
+                      { role: "user", parts: [{ text: retryPrompt }] },
+                    ],
+                    config: { maxOutputTokens: 16000 },
+                  }),
                   custId,
                   "finalDecision-2",
                   aiCallTimeoutMs
-                );
-                attempt2RawText = resp2.text || "";
-                const attempt2Parsed = tryParseDecisionJson(attempt2RawText);
-                const v2 = validateFinalDecisionOutput(attempt2Parsed, packet);
-                attempt2Passed = v2.valid;
-                attempt2Errors = v2.errors;
-                if (attempt2Passed) {
-                  finalParsed = attempt2Parsed;
-                } else {
-                  usedFallback = true;
-                  finalParsed = attempt2Parsed || attempt1Parsed;
-                }
+                ),
+                custId,
+                "finalDecision-2"
+              );
+              attempt2RawText = resp2.text || "";
+              const attempt2Parsed = tryParseDecisionJson(attempt2RawText);
+              const v2 = validateFinalDecisionOutput(attempt2Parsed, packet);
+              attempt2Passed = v2.valid;
+              attempt2Errors = v2.errors;
+              if (attempt2Passed && attempt2Parsed) {
+                finalParsed = attempt2Parsed;
+              } else {
+                // Both validation attempts failed — count this customer as failed
+                const errSummary = `attempt1: [${attempt1Errors.join("; ")}]; attempt2: [${attempt2Errors.join("; ")}]`;
+                console.error(`[analyze] Customer ${custId}: both validation attempts failed. ${errSummary}`);
+                throw new Error(`Customer ${custId}: both AI validation attempts failed. ${errSummary}`);
               }
-            } catch (aiErr) {
-              console.error(`[analyze] AI call error for customer ${custId}:`, aiErr);
-              usedFallback = true;
             }
             const tFinalMs = Date.now() - tFinalStart;
 
-            let treatmentName = "Agent Review";
-            let treatmentCode = "AGENT_REVIEW";
-            let customerSituation = "Automated analysis failed — manual review required.";
-            let treatmentEligibilityExplanation = "";
-            let structuredAssessments: Array<{ name: string; value: string | null; reason: string }> = [];
-            let proposedEmail = "NO_ACTION";
-            let internalAction = "";
-            let requiresAgentReview = true;
-
-            if (finalParsed && !usedFallback) {
-              const code = String(finalParsed.recommended_treatment_code || "AGENT_REVIEW");
-              const matchedTreatment = (frozenTreatments as unknown as DecisionPacketTreatment[]).find(t => t.code === code);
-              if (code === "AGENT_REVIEW") {
-                treatmentName = "Agent Review";
-                treatmentCode = "AGENT_REVIEW";
-              } else if (code === "NO_ACTION") {
-                treatmentName = "No Action";
-                treatmentCode = "NO_ACTION";
-              } else if (matchedTreatment) {
-                treatmentName = matchedTreatment.name;
-                treatmentCode = code;
-              } else {
-                treatmentName = String(finalParsed.recommended_treatment_name || "Agent Review");
-                treatmentCode = code;
-              }
-              customerSituation = String(finalParsed.customer_summary || "");
-              const td = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
-                ? finalParsed.treatment_decision as Record<string, unknown>
-                : null;
-              treatmentEligibilityExplanation = String(td?.["treatment_rationale"] || "");
-              structuredAssessments = [];
-              proposedEmail = String(finalParsed.proposed_email_to_customer || "NO_ACTION");
-              internalAction = String(finalParsed.internal_action || "");
-              requiresAgentReview = Boolean(finalParsed.requires_agent_review);
-            } else if (finalParsed && usedFallback) {
-              customerSituation = String(finalParsed.customer_summary || finalParsed.customer_situation || "Automated analysis failed — manual review required.");
-              const tdFb = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
-                ? finalParsed.treatment_decision as Record<string, unknown>
-                : null;
-              treatmentEligibilityExplanation = String(tdFb?.["treatment_rationale"] || "");
+            // Extract treatment details — finalParsed is guaranteed valid here
+            const code = String(finalParsed.recommended_treatment_code || "AGENT_REVIEW");
+            const matchedTreatment = (frozenTreatments as unknown as DecisionPacketTreatment[]).find(t => t.code === code);
+            let treatmentName: string;
+            let treatmentCode: string;
+            if (code === "AGENT_REVIEW") {
+              treatmentName = "Agent Review";
+              treatmentCode = "AGENT_REVIEW";
+            } else if (code === "NO_ACTION") {
+              treatmentName = "No Action";
+              treatmentCode = "NO_ACTION";
+            } else if (matchedTreatment) {
+              treatmentName = matchedTreatment.name;
+              treatmentCode = code;
+            } else {
+              treatmentName = String(finalParsed.recommended_treatment_name || "Agent Review");
+              treatmentCode = code;
             }
+            const customerSituation = String(finalParsed.customer_summary || "");
+            const td = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
+              ? finalParsed.treatment_decision as Record<string, unknown>
+              : null;
+            const treatmentEligibilityExplanation = String(td?.["treatment_rationale"] || "");
+            const structuredAssessments: Array<{ name: string; value: string | null; reason: string }> = [];
+            const proposedEmail = String(finalParsed.proposed_email_to_customer || "NO_ACTION");
+            const internalAction = String(finalParsed.internal_action || "");
+            const requiresAgentReview = Boolean(finalParsed.requires_agent_review);
 
-            console.log(`[Decisioning] Customer ${custId}: AI selected treatment "${treatmentName}" (${treatmentCode}) | requires_agent_review=${requiresAgentReview} | validation=${attempt1Passed ? "pass-attempt1" : attempt2Passed ? "pass-attempt2" : "failed"} | fallback=${usedFallback}`);
+            console.log(`[Decisioning] Customer ${custId}: AI selected treatment "${treatmentName}" (${treatmentCode}) | requires_agent_review=${requiresAgentReview} | validation=${attempt1Passed ? "pass-attempt1" : "pass-attempt2"}`);
 
             const validationTrace: Record<string, unknown> = {
               attempt_1: {
@@ -2902,7 +2899,7 @@ export async function registerRoutes(
                 errors: attempt1Errors,
                 raw_response: attempt1RawText.substring(0, 3000),
               },
-              final_status: (attempt1Passed || attempt2Passed) ? "passed" : "failed",
+              final_status: "passed",
             };
             if (!attempt1Passed) {
               validationTrace["attempt_2"] = {
@@ -2918,7 +2915,7 @@ export async function registerRoutes(
               business_fields_trace: businessFieldTraces,
               derived_fields_trace: derivedFieldTraces,
               validation: validationTrace,
-              final_ai_output: finalParsed || {},
+              final_ai_output: finalParsed,
             };
 
             // Stage: save
@@ -2930,10 +2927,10 @@ export async function registerRoutes(
               companyId,
               customerGuid: custId,
               customerData: combinedData,
-              proposedSolution: usedFallback ? "Agent Review" : String(finalParsed?.proposed_next_best_action || ""),
+              proposedSolution: String(finalParsed.proposed_next_best_action || ""),
               internalAction: internalAction || (requiresAgentReview ? "Escalate for agent review." : ""),
               proposedEmailToCustomer: proposedEmail,
-              aiRawOutput: finalParsed as Record<string, unknown> | undefined,
+              aiRawOutput: finalParsed as Record<string, unknown>,
               status: "pending",
               recommendedTreatmentName: treatmentName,
               recommendedTreatmentCode: treatmentCode,
