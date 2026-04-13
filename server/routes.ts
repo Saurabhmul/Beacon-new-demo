@@ -163,6 +163,86 @@ function buildResolvedRuleGroups(
     });
 }
 
+// ——— Analysis concurrency helpers ————————————————————————————————————————————
+
+class AiTimeoutError extends Error {
+  constructor(
+    public readonly custId: string,
+    public readonly stage: string,
+    ms: number
+  ) {
+    super(`AI call timed out after ${ms / 1000}s`);
+    this.name = "AiTimeoutError";
+  }
+}
+
+/**
+ * Races a promise against a timeout. On timeout the returned promise rejects
+ * with AiTimeoutError. The timeout timer is always cleared when the original
+ * promise settles, so it never fires after the race is decided.
+ */
+function withAiTimeout<T>(
+  promise: Promise<T>,
+  custId: string,
+  stage: string,
+  ms: number
+): Promise<T> {
+  let timer!: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => {
+      console.warn(`[Timeout] ${custId} stage=${stage} elapsed=${ms / 1000}s`);
+      reject(new AiTimeoutError(custId, stage, ms));
+    }, ms);
+  });
+  return Promise.race([
+    promise.then(
+      (v) => { clearTimeout(timer); return v; },
+      (e) => { clearTimeout(timer); throw e; }
+    ),
+    timeoutPromise,
+  ]);
+}
+
+/**
+ * Calls fn and retries on HTTP 429 / 5xx with exponential back-off + jitter.
+ * AiTimeoutError is NEVER retried — it propagates immediately.
+ * Logs each retry with customer, stage, attempt number, wait, and HTTP status.
+ */
+async function callWithBackoff<T>(
+  fn: () => Promise<T>,
+  custId: string,
+  stage: string,
+  maxRetries = 3
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      lastErr = err;
+      if (err instanceof AiTimeoutError) throw err;
+      const anyErr = err as Record<string, unknown>;
+      const status =
+        anyErr?.["status"] ?? anyErr?.["statusCode"] ?? anyErr?.["code"];
+      const isRetryable =
+        status === 429 ||
+        status === "RESOURCE_EXHAUSTED" ||
+        (typeof status === "number" && status >= 500);
+      if (!isRetryable || attempt === maxRetries) throw err;
+      const waitMs =
+        Math.min(1000 * Math.pow(2, attempt), 30_000) +
+        Math.floor(Math.random() * 1000);
+      console.warn(
+        `[Retry] ${custId} attempt=${attempt + 1}/${maxRetries} stage=${stage} waitMs=${waitMs} httpStatus=${String(status)}`
+      );
+      await new Promise<void>((r) => setTimeout(r, waitMs));
+    }
+  }
+  throw lastErr;
+}
+
+// —————————————————————————————————————————————————————————————————————————————
+
 const WORD_TO_UI_OPERATOR: Record<string, string> = {
   equals: "=",
   not_equals: "!=",
@@ -2577,240 +2657,339 @@ export async function registerRoutes(
             sample: t.whenToOfferRules[0]?.conditions[0]?.plainEnglish ?? "(no conditions)",
           })));
 
-          for (const [custId, data] of customers) {
-            try {
-              const combinedData: Record<string, unknown> = {
-                ...data.loan,
-                _payments: data.payments,
-                _conversations: data.conversations,
-                _payment_count: data.payments.length,
-                _conversation_count: data.conversations.length,
-              };
-
-              const resolvedSourceFields = buildResolvedSourceFieldsMap(combinedData, allPolicyFields);
-
-              const contextSections = emptyContextSections();
-              contextSections.customerProfile = resolvedSourceFields;
-              contextSections.loanData = data.loan;
-              contextSections.paymentData = data.payments;
-              contextSections.conversationData = data.conversations;
-              contextSections.resolvedSourceFields = resolvedSourceFields;
-              if (data.bureau) contextSections.bureauData = data.bureau;
-              if (data.income) contextSections.incomeEmploymentData = data.income;
-              if (rulebookGuidanceItems.length > 0) {
-                contextSections.knowledgeBaseAgentGuidance = rulebookGuidanceItems;
-              }
-              if (compliancePolicyRules.length > 0) {
-                contextSections.compliancePolicyInternalRules = compliancePolicyRules;
-              }
-
-              const businessFieldMetas = businessFieldDefs.map(f => ({
-                id: String(f.id),
-                label: f.label,
-                description: f.description,
-                dataType: f.dataType,
-                allowedValues: f.allowedValues,
-                defaultValue: f.defaultValue,
-                businessMeaning: f.businessMeaning,
-              }));
-
-              const businessFieldTraces = await inferBusinessFields(businessFieldMetas, contextSections);
-
-              const businessFieldsMap: Record<string, unknown> = {};
-              for (const trace of businessFieldTraces) {
-                if (trace.value !== null) businessFieldsMap[trace.field_label] = trace.value;
-              }
-
-              // narrativeTextFieldIds is intentionally empty. Compliance rule titles and
-              // rulebook section names are never referenced as operands in derived field
-              // formulas, so they must not appear here. Adding them caused false-positive
-              // "unstructured guidance operand" errors: a compiledPolicy section key such as
-              // "affordability" matched the business field label "Affordability" via the
-              // case-insensitive check in isNarrativeTextField, blocking valid arithmetic.
-              const narrativeTextFieldIds: Record<string, boolean> = {};
-
-              const derivedFieldTraces = computeDerivedFields(derivedFieldDefs, resolvedSourceFields, businessFieldsMap, narrativeTextFieldIds, allPolicyFields);
-
-              const derivedFieldsMap: Record<string, unknown> = {};
-              for (const trace of derivedFieldTraces) {
-                if (trace.output_value !== null) derivedFieldsMap[trace.field_label] = trace.output_value;
-              }
-
-              console.log(`[Decisioning] Customer ${custId}: starting analysis with ${packedTreatments.length} treatments, ${Object.keys(businessFieldsMap).length} business fields, ${Object.keys(derivedFieldsMap).length} derived fields`, packedTreatments.map(t => ({
-                name: t.name,
-                code: t.code,
-                whenToOffer: t.whenToOfferRules.reduce((s, g) => s + g.conditions.length, 0),
-                blockedIf: t.blockedIfRules.reduce((s, g) => s + g.conditions.length, 0),
-                offerSamples: t.whenToOfferRules.flatMap(g => g.conditions.map(c => c.plainEnglish)),
-                blockSamples: t.blockedIfRules.flatMap(g => g.conditions.map(c => c.plainEnglish)),
-              })));
-
-              const packet = buildDecisionPacket({
-                customerId: custId,
-                resolvedSourceFields,
-                businessFields: businessFieldsMap,
-                derivedFields: derivedFieldsMap,
-                loanData: data.loan,
-                paymentData: data.payments,
-                conversationData: data.conversations,
-                treatments: packedTreatments,
-              });
-
-              const systemPrompt = buildFinalDecisionSystemPrompt();
-              const userPrompt = buildFinalDecisionUserPrompt(packet);
-
-              let attempt1RawText = "";
-              let attempt1Parsed: Record<string, unknown> | null = null;
-              let attempt1Passed = false;
-              let attempt1Errors: string[] = [];
-
-              let finalParsed: Record<string, unknown> | null = null;
-              let attempt2RawText = "";
-              let attempt2Passed = false;
-              let attempt2Errors: string[] = [];
-              let usedFallback = false;
-
-              try {
-                const resp1 = await decisionAI.models.generateContent({
-                  model: "gemini-2.5-pro",
-                  contents: [
-                    { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
-                  ],
-                  config: { maxOutputTokens: 16000 },
-                });
-                attempt1RawText = resp1.text || "";
-                attempt1Parsed = tryParseDecisionJson(attempt1RawText);
-                const v1 = validateFinalDecisionOutput(attempt1Parsed, packet);
-                attempt1Passed = v1.valid;
-                attempt1Errors = v1.errors;
-
-                if (attempt1Passed) {
-                  finalParsed = attempt1Parsed;
-                } else {
-                  const retryPrompt = buildFinalDecisionRetryPrompt(attempt1Errors.join("; "));
-                  const resp2 = await decisionAI.models.generateContent({
-                    model: "gemini-2.5-pro",
-                    contents: [
-                      { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
-                      { role: "model", parts: [{ text: attempt1RawText }] },
-                      { role: "user", parts: [{ text: retryPrompt }] },
-                    ],
-                    config: { maxOutputTokens: 16000 },
-                  });
-                  attempt2RawText = resp2.text || "";
-                  const attempt2Parsed = tryParseDecisionJson(attempt2RawText);
-                  const v2 = validateFinalDecisionOutput(attempt2Parsed, packet);
-                  attempt2Passed = v2.valid;
-                  attempt2Errors = v2.errors;
-                  if (attempt2Passed) {
-                    finalParsed = attempt2Parsed;
-                  } else {
-                    usedFallback = true;
-                    finalParsed = attempt2Parsed || attempt1Parsed;
-                  }
-                }
-              } catch (aiErr) {
-                console.error(`[analyze] AI call error for customer ${custId}:`, aiErr);
-                usedFallback = true;
-              }
-
-              let treatmentName = "Agent Review";
-              let treatmentCode = "AGENT_REVIEW";
-              let customerSituation = "Automated analysis failed — manual review required.";
-              let treatmentEligibilityExplanation = "";
-              let structuredAssessments: Array<{ name: string; value: string | null; reason: string }> = [];
-              let proposedEmail = "NO_ACTION";
-              let internalAction = "";
-              let requiresAgentReview = true;
-
-              if (finalParsed && !usedFallback) {
-                const code = String(finalParsed.recommended_treatment_code || "AGENT_REVIEW");
-                const matchedTreatment = packedTreatments.find(t => t.code === code);
-                if (code === "AGENT_REVIEW") {
-                  treatmentName = "Agent Review";
-                  treatmentCode = "AGENT_REVIEW";
-                } else if (code === "NO_ACTION") {
-                  treatmentName = "No Action";
-                  treatmentCode = "NO_ACTION";
-                } else if (matchedTreatment) {
-                  treatmentName = matchedTreatment.name;
-                  treatmentCode = code;
-                } else {
-                  treatmentName = String(finalParsed.recommended_treatment_name || "Agent Review");
-                  treatmentCode = code;
-                }
-                customerSituation = String(finalParsed.customer_summary || "");
-                const td = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
-                  ? finalParsed.treatment_decision as Record<string, unknown>
-                  : null;
-                treatmentEligibilityExplanation = String(td?.["treatment_rationale"] || "");
-                structuredAssessments = [];
-                proposedEmail = String(finalParsed.proposed_email_to_customer || "NO_ACTION");
-                internalAction = String(finalParsed.internal_action || "");
-                requiresAgentReview = Boolean(finalParsed.requires_agent_review);
-              } else if (finalParsed && usedFallback) {
-                customerSituation = String(finalParsed.customer_summary || finalParsed.customer_situation || "Automated analysis failed — manual review required.");
-                const tdFb = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
-                  ? finalParsed.treatment_decision as Record<string, unknown>
-                  : null;
-                treatmentEligibilityExplanation = String(tdFb?.["treatment_rationale"] || "");
-              }
-
-              console.log(`[Decisioning] Customer ${custId}: AI selected treatment "${treatmentName}" (${treatmentCode}) | requires_agent_review=${requiresAgentReview} | validation=${attempt1Passed ? "pass-attempt1" : attempt2Passed ? "pass-attempt2" : "failed"} | fallback=${usedFallback}`);
-
-              const validationTrace: Record<string, unknown> = {
-                attempt_1: {
-                  passed: attempt1Passed,
-                  errors: attempt1Errors,
-                  raw_response: attempt1RawText.substring(0, 3000),
-                },
-                final_status: (attempt1Passed || attempt2Passed) ? "passed" : "failed",
-              };
-              if (!attempt1Passed) {
-                validationTrace["attempt_2"] = {
-                  passed: attempt2Passed,
-                  errors: attempt2Errors,
-                  raw_response: attempt2RawText.substring(0, 3000),
-                };
-              }
-
-              const decisionTraceJson: Record<string, unknown> = {
-                engine_version: "1.0",
-                decision_packet: packet as unknown as Record<string, unknown>,
-                business_fields_trace: businessFieldTraces,
-                derived_fields_trace: derivedFieldTraces,
-                validation: validationTrace,
-                final_ai_output: finalParsed || {},
-              };
-
-              await storage.createDecision({
-                clientConfigId: clientConfig?.id ?? null,
-                dataUploadId: loanUpload.id,
-                userId,
-                companyId,
-                customerGuid: custId,
-                customerData: combinedData,
-                proposedSolution: usedFallback ? "Agent Review" : String(finalParsed?.proposed_next_best_action || ""),
-                internalAction: internalAction || (requiresAgentReview ? "Escalate for agent review." : ""),
-                proposedEmailToCustomer: proposedEmail,
-                aiRawOutput: finalParsed as Record<string, unknown> | undefined,
-                status: "pending",
-                recommendedTreatmentName: treatmentName,
-                recommendedTreatmentCode: treatmentCode,
-                customerSituation,
-                treatmentEligibilityExplanation,
-                structuredAssessments,
-                decisionTraceJson,
-              });
-
-              completed++;
-              emitEvent({ type: "progress", completed, failed, total: customers.length, customerGuid: custId });
-            } catch (err) {
-              failed++;
-              console.error(`AI analysis failed for customer ${custId}:`, err);
-              emitEvent({ type: "error", completed, failed, total: customers.length, customerGuid: custId, error: String(err) });
-            }
+          // Read and validate concurrency config
+          const rawConcurrency = parseInt(process.env.ANALYSIS_MAX_CONCURRENCY || "3", 10);
+          const maxConcurrency = Math.max(1, Math.min(5, isNaN(rawConcurrency) ? 3 : rawConcurrency));
+          if (maxConcurrency !== rawConcurrency) {
+            console.warn(`[Batch] ANALYSIS_MAX_CONCURRENCY=${rawConcurrency} out of range [1,5]; using ${maxConcurrency}`);
           }
+          console.log(`[Batch] Starting parallel analysis | customers=${customers.length} | concurrency=${maxConcurrency}`);
+
+          // Per-AI-call timeout (ms), minimum 30s
+          const aiCallTimeoutMs = Math.max(30_000, parseInt(process.env.AI_CALL_TIMEOUT_MS || "120000", 10));
+
+          // Freeze shared context — no cross-customer mutation possible
+          const frozenTreatments = Object.freeze(packedTreatments.map(t => Object.freeze({ ...t }))) as readonly DecisionPacketTreatment[];
+          const frozenAllPolicyFields = Object.freeze([...allPolicyFields]);
+          const frozenBusinessFieldDefs = Object.freeze([...businessFieldDefs]);
+          const frozenDerivedFieldDefs = Object.freeze([...derivedFieldDefs]);
+          const frozenComplianceRules = Object.freeze([...compliancePolicyRules]);
+          const frozenRulebookItems = Object.freeze([...rulebookGuidanceItems]);
+
+          // ——— processCustomer —————————————————————————————————————
+          const processCustomer = async (custId: string, data: {
+            loan: Record<string, unknown>;
+            payments: Record<string, unknown>[];
+            conversations: Record<string, unknown>[];
+            bureau: Record<string, unknown> | null;
+            income: Record<string, unknown> | null;
+          }): Promise<void> => {
+            const t0 = Date.now();
+
+            // Stage: context build
+            const tCtxStart = Date.now();
+            const combinedData: Record<string, unknown> = {
+              ...data.loan,
+              _payments: data.payments,
+              _conversations: data.conversations,
+              _payment_count: data.payments.length,
+              _conversation_count: data.conversations.length,
+            };
+
+            const resolvedSourceFields = buildResolvedSourceFieldsMap(combinedData, frozenAllPolicyFields as typeof allPolicyFields);
+
+            const contextSections = emptyContextSections();
+            contextSections.customerProfile = resolvedSourceFields;
+            contextSections.loanData = data.loan;
+            contextSections.paymentData = data.payments;
+            contextSections.conversationData = data.conversations;
+            contextSections.resolvedSourceFields = resolvedSourceFields;
+            if (data.bureau) contextSections.bureauData = data.bureau;
+            if (data.income) contextSections.incomeEmploymentData = data.income;
+            if (frozenRulebookItems.length > 0) {
+              contextSections.knowledgeBaseAgentGuidance = [...frozenRulebookItems];
+            }
+            if (frozenComplianceRules.length > 0) {
+              contextSections.compliancePolicyInternalRules = [...frozenComplianceRules];
+            }
+
+            const businessFieldMetas = (frozenBusinessFieldDefs as typeof businessFieldDefs).map(f => ({
+              id: String(f.id),
+              label: f.label,
+              description: f.description,
+              dataType: f.dataType,
+              allowedValues: f.allowedValues,
+              defaultValue: f.defaultValue,
+              businessMeaning: f.businessMeaning,
+            }));
+            const tCtxMs = Date.now() - tCtxStart;
+
+            // Stage: business field inference (AI, with timeout + backoff)
+            const tBizStart = Date.now();
+            const businessFieldTraces = await withAiTimeout(
+              callWithBackoff(
+                () => inferBusinessFields(businessFieldMetas, contextSections),
+                custId,
+                "bizFields"
+              ),
+              custId,
+              "bizFields",
+              aiCallTimeoutMs
+            );
+            const tBizMs = Date.now() - tBizStart;
+
+            const businessFieldsMap: Record<string, unknown> = {};
+            for (const trace of businessFieldTraces) {
+              if (trace.value !== null) businessFieldsMap[trace.field_label] = trace.value;
+            }
+
+            // Stage: derived fields
+            const tDerivedStart = Date.now();
+            // narrativeTextFieldIds intentionally empty — see comment in prior version
+            const narrativeTextFieldIds: Record<string, boolean> = {};
+            const derivedFieldTraces = computeDerivedFields(
+              frozenDerivedFieldDefs as typeof derivedFieldDefs,
+              resolvedSourceFields,
+              businessFieldsMap,
+              narrativeTextFieldIds,
+              frozenAllPolicyFields as typeof allPolicyFields
+            );
+
+            const derivedFieldsMap: Record<string, unknown> = {};
+            for (const trace of derivedFieldTraces) {
+              if (trace.output_value !== null) derivedFieldsMap[trace.field_label] = trace.output_value;
+            }
+            const tDerivedMs = Date.now() - tDerivedStart;
+
+            console.log(`[Decisioning] Customer ${custId}: starting analysis with ${frozenTreatments.length} treatments, ${Object.keys(businessFieldsMap).length} business fields, ${Object.keys(derivedFieldsMap).length} derived fields`);
+
+            // Build decision packet
+            const packet = buildDecisionPacket({
+              customerId: custId,
+              resolvedSourceFields,
+              businessFields: businessFieldsMap,
+              derivedFields: derivedFieldsMap,
+              loanData: data.loan,
+              paymentData: data.payments,
+              conversationData: data.conversations,
+              treatments: frozenTreatments as unknown as DecisionPacketTreatment[],
+            });
+
+            const systemPrompt = buildFinalDecisionSystemPrompt();
+            const userPrompt = buildFinalDecisionUserPrompt(packet);
+
+            // Stage: final AI decision (attempt 1 + optional attempt 2, with timeout + backoff)
+            const tFinalStart = Date.now();
+            let attempt1RawText = "";
+            let attempt1Parsed: Record<string, unknown> | null = null;
+            let attempt1Passed = false;
+            let attempt1Errors: string[] = [];
+
+            let finalParsed: Record<string, unknown> | null = null;
+            let attempt2RawText = "";
+            let attempt2Passed = false;
+            let attempt2Errors: string[] = [];
+            let usedFallback = false;
+
+            try {
+              const resp1 = await withAiTimeout(
+                callWithBackoff(
+                  () => decisionAI.models.generateContent({
+                    model: "gemini-2.5-pro",
+                    contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }],
+                    config: { maxOutputTokens: 16000 },
+                  }),
+                  custId,
+                  "finalDecision-1"
+                ),
+                custId,
+                "finalDecision-1",
+                aiCallTimeoutMs
+              );
+              attempt1RawText = resp1.text || "";
+              attempt1Parsed = tryParseDecisionJson(attempt1RawText);
+              const v1 = validateFinalDecisionOutput(attempt1Parsed, packet);
+              attempt1Passed = v1.valid;
+              attempt1Errors = v1.errors;
+
+              if (attempt1Passed) {
+                finalParsed = attempt1Parsed;
+              } else {
+                const retryPrompt = buildFinalDecisionRetryPrompt(attempt1Errors.join("; "));
+                const resp2 = await withAiTimeout(
+                  callWithBackoff(
+                    () => decisionAI.models.generateContent({
+                      model: "gemini-2.5-pro",
+                      contents: [
+                        { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
+                        { role: "model", parts: [{ text: attempt1RawText }] },
+                        { role: "user", parts: [{ text: retryPrompt }] },
+                      ],
+                      config: { maxOutputTokens: 16000 },
+                    }),
+                    custId,
+                    "finalDecision-2"
+                  ),
+                  custId,
+                  "finalDecision-2",
+                  aiCallTimeoutMs
+                );
+                attempt2RawText = resp2.text || "";
+                const attempt2Parsed = tryParseDecisionJson(attempt2RawText);
+                const v2 = validateFinalDecisionOutput(attempt2Parsed, packet);
+                attempt2Passed = v2.valid;
+                attempt2Errors = v2.errors;
+                if (attempt2Passed) {
+                  finalParsed = attempt2Parsed;
+                } else {
+                  usedFallback = true;
+                  finalParsed = attempt2Parsed || attempt1Parsed;
+                }
+              }
+            } catch (aiErr) {
+              console.error(`[analyze] AI call error for customer ${custId}:`, aiErr);
+              usedFallback = true;
+            }
+            const tFinalMs = Date.now() - tFinalStart;
+
+            let treatmentName = "Agent Review";
+            let treatmentCode = "AGENT_REVIEW";
+            let customerSituation = "Automated analysis failed — manual review required.";
+            let treatmentEligibilityExplanation = "";
+            let structuredAssessments: Array<{ name: string; value: string | null; reason: string }> = [];
+            let proposedEmail = "NO_ACTION";
+            let internalAction = "";
+            let requiresAgentReview = true;
+
+            if (finalParsed && !usedFallback) {
+              const code = String(finalParsed.recommended_treatment_code || "AGENT_REVIEW");
+              const matchedTreatment = (frozenTreatments as unknown as DecisionPacketTreatment[]).find(t => t.code === code);
+              if (code === "AGENT_REVIEW") {
+                treatmentName = "Agent Review";
+                treatmentCode = "AGENT_REVIEW";
+              } else if (code === "NO_ACTION") {
+                treatmentName = "No Action";
+                treatmentCode = "NO_ACTION";
+              } else if (matchedTreatment) {
+                treatmentName = matchedTreatment.name;
+                treatmentCode = code;
+              } else {
+                treatmentName = String(finalParsed.recommended_treatment_name || "Agent Review");
+                treatmentCode = code;
+              }
+              customerSituation = String(finalParsed.customer_summary || "");
+              const td = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
+                ? finalParsed.treatment_decision as Record<string, unknown>
+                : null;
+              treatmentEligibilityExplanation = String(td?.["treatment_rationale"] || "");
+              structuredAssessments = [];
+              proposedEmail = String(finalParsed.proposed_email_to_customer || "NO_ACTION");
+              internalAction = String(finalParsed.internal_action || "");
+              requiresAgentReview = Boolean(finalParsed.requires_agent_review);
+            } else if (finalParsed && usedFallback) {
+              customerSituation = String(finalParsed.customer_summary || finalParsed.customer_situation || "Automated analysis failed — manual review required.");
+              const tdFb = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
+                ? finalParsed.treatment_decision as Record<string, unknown>
+                : null;
+              treatmentEligibilityExplanation = String(tdFb?.["treatment_rationale"] || "");
+            }
+
+            console.log(`[Decisioning] Customer ${custId}: AI selected treatment "${treatmentName}" (${treatmentCode}) | requires_agent_review=${requiresAgentReview} | validation=${attempt1Passed ? "pass-attempt1" : attempt2Passed ? "pass-attempt2" : "failed"} | fallback=${usedFallback}`);
+
+            const validationTrace: Record<string, unknown> = {
+              attempt_1: {
+                passed: attempt1Passed,
+                errors: attempt1Errors,
+                raw_response: attempt1RawText.substring(0, 3000),
+              },
+              final_status: (attempt1Passed || attempt2Passed) ? "passed" : "failed",
+            };
+            if (!attempt1Passed) {
+              validationTrace["attempt_2"] = {
+                passed: attempt2Passed,
+                errors: attempt2Errors,
+                raw_response: attempt2RawText.substring(0, 3000),
+              };
+            }
+
+            const decisionTraceJson: Record<string, unknown> = {
+              engine_version: "1.0",
+              decision_packet: packet as unknown as Record<string, unknown>,
+              business_fields_trace: businessFieldTraces,
+              derived_fields_trace: derivedFieldTraces,
+              validation: validationTrace,
+              final_ai_output: finalParsed || {},
+            };
+
+            // Stage: save
+            const tSaveStart = Date.now();
+            await storage.createDecision({
+              clientConfigId: clientConfig?.id ?? null,
+              dataUploadId: loanUpload.id,
+              userId,
+              companyId,
+              customerGuid: custId,
+              customerData: combinedData,
+              proposedSolution: usedFallback ? "Agent Review" : String(finalParsed?.proposed_next_best_action || ""),
+              internalAction: internalAction || (requiresAgentReview ? "Escalate for agent review." : ""),
+              proposedEmailToCustomer: proposedEmail,
+              aiRawOutput: finalParsed as Record<string, unknown> | undefined,
+              status: "pending",
+              recommendedTreatmentName: treatmentName,
+              recommendedTreatmentCode: treatmentCode,
+              customerSituation,
+              treatmentEligibilityExplanation,
+              structuredAssessments,
+              decisionTraceJson,
+            });
+            const tSaveMs = Date.now() - tSaveStart;
+
+            const totalMs = Date.now() - t0;
+            console.log(
+              `[Timing] ${custId} | context=${tCtxMs}ms | bizFields=${tBizMs}ms | derivedFields=${tDerivedMs}ms | finalDecision=${tFinalMs}ms | save=${tSaveMs}ms | total=${totalMs}ms`
+            );
+          };
+          // ——— end processCustomer ————————————————————————————————
+
+          // ——— Concurrency-limited worker pool ———————————————————
+          const batchStart = Date.now();
+          const queue = [...customers];
+          let inFlight = 0;
+
+          await new Promise<void>((resolvePool) => {
+            const dispatch = () => {
+              while (inFlight < maxConcurrency && queue.length > 0) {
+                const item = queue.shift()!;
+                const [custId, custData] = item;
+                inFlight++;
+                processCustomer(custId, custData)
+                  .then(() => {
+                    completed++;
+                  })
+                  .catch((err: unknown) => {
+                    failed++;
+                    console.error(`AI analysis failed for customer ${custId}:`, err);
+                  })
+                  .finally(() => {
+                    inFlight--;
+                    emitEvent({ type: "progress", completed, failed, inFlight, total: customers.length, customerGuid: custId });
+                    dispatch();
+                  });
+              }
+              if (inFlight === 0 && queue.length === 0) {
+                resolvePool();
+              }
+            };
+            dispatch();
+          });
+
+          const batchWallClock = Math.round((Date.now() - batchStart) / 1000);
+          const avgPerCustomer = customers.length > 0
+            ? Math.round(batchWallClock / customers.length)
+            : 0;
+          console.log(
+            `[Batch] done | total=${customers.length} | completed=${completed} | failed=${failed} | wallClock=${batchWallClock}s | avgPerCustomer=${avgPerCustomer}s`
+          );
 
           emitEvent({ type: "complete", completed, failed, total: customers.length });
         } catch (error) {
