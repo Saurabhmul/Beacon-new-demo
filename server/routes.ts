@@ -2755,11 +2755,22 @@ export async function registerRoutes(
             // callAIForField. backoff retries non-timeout failures (429/5xx) on the
             // entire inferBusinessFields invocation.
             const tBizStart = Date.now();
-            const businessFieldTraces = await callWithBackoff(
-              () => inferBusinessFields(businessFieldMetas, contextSections, aiCallTimeoutMs),
-              custId,
-              "bizFields"
-            );
+            let businessFieldTraces: Awaited<ReturnType<typeof inferBusinessFields>>;
+            try {
+              businessFieldTraces = await callWithBackoff(
+                () => inferBusinessFields(businessFieldMetas, contextSections, aiCallTimeoutMs),
+                custId,
+                "bizFields"
+              );
+            } catch (err: unknown) {
+              const tBizElapsed = Date.now() - tBizStart;
+              if (err instanceof Error && err.name === "FieldCallTimeoutError") {
+                console.warn(
+                  `[Timeout] ${custId} stage=bizFields elapsed=${tBizElapsed}ms — ${err.message}`
+                );
+              }
+              throw err;
+            }
             const tBizMs = Date.now() - tBizStart;
 
             const businessFieldsMap: Record<string, unknown> = {};
