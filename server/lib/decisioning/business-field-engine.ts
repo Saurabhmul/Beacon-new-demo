@@ -545,7 +545,21 @@ export async function inferBusinessFields(
           result = applyInsufficientEvidenceNormalization(firstExtracted);
         }
       }
-    } catch (err) {
+    } catch (err: unknown) {
+      // Retryable HTTP errors (429, 5xx, RESOURCE_EXHAUSTED) must propagate so the
+      // caller's backoff wrapper can retry the entire inferBusinessFields invocation.
+      // Non-retryable errors (parse/validation failures, unexpected SDK errors) are
+      // degraded to a null trace so other fields can still be inferred.
+      const anyErr = err as Record<string, unknown>;
+      const status = anyErr?.["status"] ?? anyErr?.["statusCode"] ?? anyErr?.["code"];
+      const isRetryable =
+        status === 429 ||
+        status === "RESOURCE_EXHAUSTED" ||
+        (typeof status === "number" && status >= 500);
+      if (isRetryable) {
+        console.warn(`[business-field-engine] Retryable error (${String(status)}) on field "${field.label}" — propagating for retry`);
+        throw err;
+      }
       console.error(`[business-field-engine] Error inferring field "${field.label}":`, err);
       result = {
         value: null,
