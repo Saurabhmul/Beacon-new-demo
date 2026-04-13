@@ -379,35 +379,6 @@ export default function DecisionDetailPage() {
         </CardContent>
       </Card>
 
-      {/* SECTION 2 — Source Data */}
-      <Card data-testid="section-source-data">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Database className="w-4 h-4" />
-            Source Data
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {(() => {
-            const cards = [
-              { title: "Loan Data", content: loanData, extra: undefined },
-              { title: "Payment History", content: paymentData, extra: undefined },
-              { title: "Conversations", content: conversationData, extra: undefined },
-              { title: "Income & Employment", content: incomeEmploymentData, extra: undefined },
-              { title: "Bureau", content: bureauData, extra: undefined },
-            ].filter(c => isNonEmptyValue(c.content));
-
-            if (cards.length === 0) {
-              return <p className="text-sm text-muted-foreground" data-testid="text-no-source-data">No source data available</p>;
-            }
-
-            return cards.map(c => (
-              <SourceDataCard key={c.title} title={c.title} content={c.content} extra={c.extra} />
-            ));
-          })()}
-        </CardContent>
-      </Card>
-
       {/* SECTION 3 — Business Fields */}
       <Card data-testid="section-business-fields">
         <CardHeader className="pb-3">
@@ -474,7 +445,7 @@ export default function DecisionDetailPage() {
           ) : (
             <CollapsibleSection
               title={`Derived Fields (${derivedFieldsTrace.length})`}
-              defaultOpen={derivedFieldsTrace.length <= 5}
+              defaultOpen={false}
             >
               <div className="overflow-x-auto">
                 <Table>
