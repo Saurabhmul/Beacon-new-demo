@@ -177,25 +177,31 @@ class AiTimeoutError extends Error {
 }
 
 /**
- * Races a promise against a timeout. On timeout the returned promise rejects
- * with AiTimeoutError. The timeout timer is always cleared when the original
- * promise settles, so it never fires after the race is decided.
+ * Accepts a factory fn that receives an AbortSignal (for true request cancellation
+ * when the SDK supports it) and races it against a timeout. On timeout:
+ *   1. controller.abort() is called — cancels the underlying HTTP request if the SDK
+ *      has wired up the signal (GoogleGenAI `abortSignal` field does).
+ *   2. The returned promise rejects with AiTimeoutError.
+ * The timeout timer is always cleared when fn settles, so it never fires after
+ * the race is decided.
  */
 function withAiTimeout<T>(
-  promise: Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
   custId: string,
   stage: string,
   ms: number
 ): Promise<T> {
+  const controller = new AbortController();
   let timer!: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<T>((_, reject) => {
     timer = setTimeout(() => {
       console.warn(`[Timeout] ${custId} stage=${stage} elapsed=${ms / 1000}s`);
+      controller.abort();
       reject(new AiTimeoutError(custId, stage, ms));
     }, ms);
   });
   return Promise.race([
-    promise.then(
+    fn(controller.signal).then(
       (v) => { clearTimeout(timer); return v; },
       (e) => { clearTimeout(timer); throw e; }
     ),
@@ -2665,9 +2671,12 @@ export async function registerRoutes(
           }
           console.log(`[Batch] Starting parallel analysis | customers=${customers.length} | concurrency=${maxConcurrency}`);
 
-          // Per-AI-call timeout (ms), minimum 30s — guard against NaN from invalid env
+          // Per-AI-call timeout (ms) — configurable, default 120s, NaN-safe
           const rawTimeoutMs = parseInt(process.env.AI_CALL_TIMEOUT_MS || "120000", 10);
-          const aiCallTimeoutMs = Math.max(30_000, isNaN(rawTimeoutMs) ? 120_000 : rawTimeoutMs);
+          const aiCallTimeoutMs = isNaN(rawTimeoutMs) ? 120_000 : rawTimeoutMs;
+          if (aiCallTimeoutMs < 30_000) {
+            console.warn(`[Batch] AI_CALL_TIMEOUT_MS=${aiCallTimeoutMs}ms is very low (<30s) — Gemini calls typically take 30–120s`);
+          }
 
           // Deep-freeze shared context — no cross-customer mutation possible,
           // including nested arrays (whenToOfferRules, blockedIfRules, conditions)
@@ -2739,11 +2748,12 @@ export async function registerRoutes(
             const tCtxMs = Date.now() - tCtxStart;
 
             // Stage: business field inference (AI)
-            // timeout wraps each individual attempt; backoff retries each timed-out-free attempt
+            // timeout wraps each individual attempt; backoff retries non-timeout failures
+            // inferBusinessFields does not accept AbortSignal so _signal is intentionally unused
             const tBizStart = Date.now();
             const businessFieldTraces = await callWithBackoff(
               () => withAiTimeout(
-                inferBusinessFields(businessFieldMetas, contextSections),
+                (_signal) => inferBusinessFields(businessFieldMetas, contextSections),
                 custId,
                 "bizFields",
                 aiCallTimeoutMs
@@ -2807,10 +2817,11 @@ export async function registerRoutes(
 
             const resp1 = await callWithBackoff(
               () => withAiTimeout(
-                decisionAI.models.generateContent({
+                (signal) => decisionAI.models.generateContent({
                   model: "gemini-2.5-pro",
                   contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }],
                   config: { maxOutputTokens: 16000 },
+                  abortSignal: signal,
                 }),
                 custId,
                 "finalDecision-1",
@@ -2831,7 +2842,7 @@ export async function registerRoutes(
               const retryPrompt = buildFinalDecisionRetryPrompt(attempt1Errors.join("; "));
               const resp2 = await callWithBackoff(
                 () => withAiTimeout(
-                  decisionAI.models.generateContent({
+                  (signal) => decisionAI.models.generateContent({
                     model: "gemini-2.5-pro",
                     contents: [
                       { role: "user", parts: [{ text: systemPrompt + "\n\n" + userPrompt }] },
@@ -2839,6 +2850,7 @@ export async function registerRoutes(
                       { role: "user", parts: [{ text: retryPrompt }] },
                     ],
                     config: { maxOutputTokens: 16000 },
+                    abortSignal: signal,
                   }),
                   custId,
                   "finalDecision-2",
