@@ -1,0 +1,51 @@
+b) What instruction to give Replit
+
+I would give Replit this:
+
+Implement customer analysis with a concurrency-limited pool, with max 5 customers in parallel.
+Keep the two AI calls for a single customer sequential, but process multiple customers concurrently.
+Add detailed stage timing logs so we can measure where time is spent:
+
+fetch/build customer context
+business field inference AI call
+derived field computation
+final decision AI call
+validation/save
+
+Requirements:
+
+concurrency configurable via env var, default 3, can raise to 5
+preserve per-customer isolation and deterministic save behavior
+do not fail whole batch if one customer fails
+add retry with exponential backoff for rate limits / transient AI errors
+capture token usage and latency per AI call if available
+return batch progress: completed / failed / in-flight
+keep result ordering stable in UI even if execution is parallel
+
+Acceptance criteria:
+
+20 customers run materially faster than sequential mode
+no duplicate decisions
+no mixed-up customer outputs
+partial failures are visible and retryable
+logs clearly show average latency per stage
+
+I would also tell them this:
+
+Start with maxConcurrency=3 for safety, test, then raise to 5 if rate limits and DB load are stable.
+
+Why I prefer that:
+
+5 parallel customers may actually mean up to 10 AI calls active over time if the pipeline overlaps badly.
+If Gemini or your infra rate-limits, jumping straight to 5 may create instability.
+Starting at 3 gives you cleaner measurement.
+
+My practical recommendation:
+
+Yes, ask Replit to build parallelism.
+Do not hardcode 5.
+Make it configurable, start at 3, then move to 5 after observing latency and error rate.
+
+The one sentence version you can send Replit is:
+
+Please refactor batch analysis to run customers through a concurrency-limited worker pool with configurable concurrency (default 3, target 5), keeping each customer’s two AI calls sequential, and add per-stage timing, retry/backoff, partial-failure handling, and stable result persistence.
