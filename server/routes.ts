@@ -109,7 +109,7 @@ function formatConditionPlainEnglish(
 
 /**
  * Builds resolved rule groups from a treatment's ruleGroups array.
- * Separates by ruleType ("when-to-offer" vs "blocked-if"), resolves field refs to labels,
+ * Separates by ruleType ("when_to_offer" vs "blocked_if"), resolves field refs to labels,
  * and formats a plain English string per condition. Preserves group order and condition sort order.
  */
 function buildResolvedRuleGroups(
@@ -128,7 +128,7 @@ function buildResolvedRuleGroups(
       sortOrder: number;
     }>;
   }>,
-  ruleType: "when-to-offer" | "blocked-if",
+  ruleType: "when_to_offer" | "blocked_if",
   idToLabel: Map<string, string>,
   treatmentName: string,
 ): ResolvedRuleGroup[] {
@@ -2528,8 +2528,8 @@ export async function registerRoutes(
             .filter(t => t.enabled)
             .sort((a, b) => a.displayOrder - b.displayOrder)
             .map(t => {
-              const whenToOfferRules = buildResolvedRuleGroups(t.ruleGroups, "when-to-offer", idToLabel, t.name);
-              const blockedIfRules = buildResolvedRuleGroups(t.ruleGroups, "blocked-if", idToLabel, t.name);
+              const whenToOfferRules = buildResolvedRuleGroups(t.ruleGroups, "when_to_offer", idToLabel, t.name);
+              const blockedIfRules = buildResolvedRuleGroups(t.ruleGroups, "blocked_if", idToLabel, t.name);
               return {
                 name: t.name,
                 code: makeTreatmentCode(t.name),
