@@ -2564,20 +2564,21 @@ export async function registerRoutes(
                   treatmentName = String(finalParsed.recommended_treatment_name || "Agent Review");
                   treatmentCode = code;
                 }
-                customerSituation = String(finalParsed.customer_situation || "");
-                treatmentEligibilityExplanation = String(finalParsed.treatment_eligibility_explanation || "");
-                structuredAssessments = Array.isArray(finalParsed.structured_assessments)
-                  ? (finalParsed.structured_assessments as unknown[]).filter(
-                      (a): a is Record<string, unknown> =>
-                        a !== null && typeof a === "object" && typeof (a as Record<string, unknown>)["name"] === "string" && typeof (a as Record<string, unknown>)["reason"] === "string"
-                    ).map(a => ({ name: String(a["name"]), value: a["value"] ?? null, reason: String(a["reason"]) }))
-                  : [];
+                customerSituation = String(finalParsed.customer_summary || "");
+                const td = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
+                  ? finalParsed.treatment_decision as Record<string, unknown>
+                  : null;
+                treatmentEligibilityExplanation = String(td?.["treatment_rationale"] || "");
+                structuredAssessments = [];
                 proposedEmail = String(finalParsed.proposed_email_to_customer || "NO_ACTION");
                 internalAction = String(finalParsed.internal_action || "");
                 requiresAgentReview = Boolean(finalParsed.requires_agent_review);
               } else if (finalParsed && usedFallback) {
-                customerSituation = String(finalParsed.customer_situation || "Automated analysis failed — manual review required.");
-                treatmentEligibilityExplanation = String(finalParsed.treatment_eligibility_explanation || "");
+                customerSituation = String(finalParsed.customer_summary || finalParsed.customer_situation || "Automated analysis failed — manual review required.");
+                const tdFb = (finalParsed.treatment_decision && typeof finalParsed.treatment_decision === "object" && !Array.isArray(finalParsed.treatment_decision))
+                  ? finalParsed.treatment_decision as Record<string, unknown>
+                  : null;
+                treatmentEligibilityExplanation = String(tdFb?.["treatment_rationale"] || "");
               }
 
               const validationTrace: Record<string, unknown> = {

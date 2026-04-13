@@ -7,24 +7,25 @@ export interface ValidationResult {
 
 const REQUIRED_KEYS = [
   "customer_guid",
-  "customer_situation",
-  "customer_situation_confidence_score",
-  "customer_situation_evidence",
-  "used_fields",
-  "used_rules",
-  "missing_information",
-  "key_factors_considered",
-  "structured_assessments",
   "recommended_treatment_name",
   "recommended_treatment_code",
-  "proposed_next_best_action",
-  "treatment_eligibility_explanation",
-  "blocked_conditions",
-  "proposed_next_best_confidence_score",
-  "proposed_next_best_evidence",
   "requires_agent_review",
+  "customer_summary",
+  "treatment_decision",
+  "decision_factors",
   "internal_action",
+  "internal_action_rationale",
+  "proposed_next_best_action",
   "proposed_email_to_customer",
+] as const;
+
+const DECISION_FACTORS_ARRAY_KEYS = [
+  "source_fields_used",
+  "derived_fields_used",
+  "business_fields_used",
+  "missing_information",
+  "key_factors",
+  "rules_applied",
 ] as const;
 
 export function validateFinalDecisionOutput(
@@ -48,50 +49,13 @@ export function validateFinalDecisionOutput(
   if (typeof parsed.customer_guid !== "string") {
     errors.push("customer_guid must be a string");
   }
-  if (typeof parsed.customer_situation !== "string") {
-    errors.push("customer_situation must be a string");
-  }
 
-  const situationScore = parsed.customer_situation_confidence_score;
-  if (typeof situationScore !== "number" || !Number.isInteger(situationScore) || situationScore < 1 || situationScore > 10) {
-    errors.push("customer_situation_confidence_score must be an integer 1–10");
-  }
-
-  const nbsScore = parsed.proposed_next_best_confidence_score;
-  if (typeof nbsScore !== "number" || !Number.isInteger(nbsScore) || nbsScore < 1 || nbsScore > 10) {
-    errors.push("proposed_next_best_confidence_score must be an integer 1–10");
+  if (typeof parsed.customer_summary !== "string") {
+    errors.push("customer_summary must be a string");
   }
 
   if (typeof parsed.requires_agent_review !== "boolean") {
     errors.push("requires_agent_review must be a boolean");
-  }
-
-  if (!Array.isArray(parsed.used_fields)) errors.push("used_fields must be an array");
-  if (!Array.isArray(parsed.used_rules)) errors.push("used_rules must be an array");
-  if (!Array.isArray(parsed.missing_information)) errors.push("missing_information must be an array");
-  if (!Array.isArray(parsed.key_factors_considered)) errors.push("key_factors_considered must be an array");
-  if (!Array.isArray(parsed.blocked_conditions)) errors.push("blocked_conditions must be an array");
-
-  if (!Array.isArray(parsed.structured_assessments)) {
-    errors.push("structured_assessments must be an array");
-  } else {
-    const validItems: unknown[] = [];
-    for (const item of parsed.structured_assessments as unknown[]) {
-      if (item && typeof item === "object") {
-        const obj = item as Record<string, unknown>;
-        if (
-          "name" in obj &&
-          "value" in obj &&
-          "reason" in obj &&
-          typeof obj["name"] === "string" &&
-          (typeof obj["value"] === "string" || obj["value"] === null) &&
-          typeof obj["reason"] === "string"
-        ) {
-          validItems.push(item);
-        }
-      }
-    }
-    parsed.structured_assessments = validItems;
   }
 
   const treatmentCode = parsed.recommended_treatment_code;
@@ -107,6 +71,49 @@ export function validateFinalDecisionOutput(
       errors.push(
         `recommended_treatment_code "${treatmentCode}" is not a valid configured treatment code, AGENT_REVIEW, or NO_ACTION`
       );
+    } else {
+      const treatmentName = parsed.recommended_treatment_name;
+      if (typeof treatmentName !== "string") {
+        errors.push("recommended_treatment_name must be a string");
+      } else {
+        if (treatmentCode === "AGENT_REVIEW" || treatmentCode === "NO_ACTION") {
+          const expectedName = treatmentCode === "AGENT_REVIEW" ? "Agent Review" : "No Action";
+          if (treatmentName !== expectedName) {
+            errors.push(
+              `recommended_treatment_name must be "${expectedName}" when code is "${treatmentCode}", got "${treatmentName}"`
+            );
+          }
+        } else {
+          const matchedTreatment = packet.policy.treatments.find(t => t.code === treatmentCode);
+          if (matchedTreatment && treatmentName !== matchedTreatment.name) {
+            errors.push(
+              `recommended_treatment_name "${treatmentName}" does not match configured name "${matchedTreatment.name}" for code "${treatmentCode}"`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  if (typeof parsed.treatment_decision !== "object" || parsed.treatment_decision === null || Array.isArray(parsed.treatment_decision)) {
+    errors.push("treatment_decision must be an object");
+  } else {
+    const td = parsed.treatment_decision as Record<string, unknown>;
+    if (typeof td["selected_treatment"] !== "string") errors.push("treatment_decision.selected_treatment must be a string");
+    if (typeof td["decision_status"] !== "string") errors.push("treatment_decision.decision_status must be a string");
+    if (typeof td["treatment_rationale"] !== "string") errors.push("treatment_decision.treatment_rationale must be a string");
+  }
+
+  if (typeof parsed.decision_factors !== "object" || parsed.decision_factors === null || Array.isArray(parsed.decision_factors)) {
+    errors.push("decision_factors must be an object");
+  } else {
+    const df = parsed.decision_factors as Record<string, unknown>;
+    for (const key of DECISION_FACTORS_ARRAY_KEYS) {
+      if (!(key in df)) {
+        (df as Record<string, unknown>)[key] = [];
+      } else if (!Array.isArray(df[key])) {
+        errors.push(`decision_factors.${key} must be an array`);
+      }
     }
   }
 

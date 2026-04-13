@@ -275,15 +275,18 @@ export default function DecisionDetailPage() {
   const proposedEmail = decision.proposedEmailToCustomer || "NO_ACTION";
   const internalAction = decision.internalAction || "";
 
-  const situationConfidence = asNumber(finalAiOutput?.["customer_situation_confidence_score"]);
   const requiresAgentReview = asBoolean(finalAiOutput?.["requires_agent_review"]);
-  const usedFields = asStringArray(finalAiOutput?.["used_fields"]);
-  const usedRules = asStringArray(finalAiOutput?.["used_rules"]);
-  const missingInfo = asStringArray(finalAiOutput?.["missing_information"]);
-  const keyFactors = asStringArray(finalAiOutput?.["key_factors_considered"]);
-  const blockedConditions = asStringArray(finalAiOutput?.["blocked_conditions"]);
-  const paymentSummary = asString(finalAiOutput?.["recent_payment_history_summary"]);
-  const convSummary = asString(finalAiOutput?.["conversation_summary"]);
+  const treatmentDecision = asRecord(finalAiOutput?.["treatment_decision"]);
+  const decisionFactors = asRecord(finalAiOutput?.["decision_factors"]);
+  const sourceFieldsUsed = asStringArray(decisionFactors?.["source_fields_used"]);
+  const derivedFieldsUsed = asStringArray(decisionFactors?.["derived_fields_used"]);
+  const businessFieldsUsed = asStringArray(decisionFactors?.["business_fields_used"]);
+  const missingInfo = asStringArray(decisionFactors?.["missing_information"]);
+  const keyFactors = asStringArray(decisionFactors?.["key_factors"]);
+  const rulesApplied = asStringArray(decisionFactors?.["rules_applied"]);
+  const treatmentRationale = asString(treatmentDecision?.["treatment_rationale"]);
+  const decisionStatus = asString(treatmentDecision?.["decision_status"]);
+  const internalActionRationale = asString(finalAiOutput?.["internal_action_rationale"]);
 
   const loanData = groupedSourceData?.["loanData"] ?? customerData;
   const paymentData = asArray(groupedSourceData?.["paymentData"] ?? customerData["_payments"]);
@@ -349,19 +352,22 @@ export default function DecisionDetailPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Recommended Treatment</p>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <p className="text-sm font-semibold" data-testid="text-recommended-treatment">{recommendedTreatment}</p>
                 {recommendedCode && (
                   <Badge variant="outline" className="text-xs font-mono">{recommendedCode}</Badge>
                 )}
+                {decisionStatus && (
+                  <Badge
+                    variant={decisionStatus === "AGENT_REVIEW" ? "destructive" : "secondary"}
+                    className="text-xs"
+                    data-testid="badge-decision-status"
+                  >
+                    {decisionStatus}
+                  </Badge>
+                )}
               </div>
             </div>
-            {situationConfidence !== undefined && (
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Situation Confidence</p>
-                <p className="text-sm" data-testid="text-situation-confidence">{situationConfidence}/10</p>
-              </div>
-            )}
           </div>
 
           {customerSituation && (
@@ -385,8 +391,8 @@ export default function DecisionDetailPage() {
           {(() => {
             const cards = [
               { title: "Loan Data", content: loanData, extra: undefined },
-              { title: "Payment History", content: paymentData, extra: paymentSummary },
-              { title: "Conversations", content: conversationData, extra: convSummary },
+              { title: "Payment History", content: paymentData, extra: undefined },
+              { title: "Conversations", content: conversationData, extra: undefined },
               { title: "Income & Employment", content: incomeEmploymentData, extra: undefined },
               { title: "Bureau", content: bureauData, extra: undefined },
             ].filter(c => isNonEmptyValue(c.content));
@@ -518,61 +524,42 @@ export default function DecisionDetailPage() {
         </CardHeader>
         <CardContent className="space-y-6">
 
-          {/* Structured Assessments */}
-          <div>
-            <h3 className="text-sm font-semibold mb-3">Structured Assessments</h3>
-            {structuredAssessments.length === 0 ? (
-              <p className="text-sm text-muted-foreground" data-testid="text-no-assessments">No assessments available</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Assessment</TableHead>
-                    <TableHead>Value</TableHead>
-                    <TableHead>Reason</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {structuredAssessments.map((a, i) => (
-                    <TableRow key={i} data-testid={`row-assessment-${i}`}>
-                      <TableCell className="text-sm font-medium">{a.name}</TableCell>
-                      <TableCell className="text-sm">
-                        {a.value !== null && a.value !== undefined ? a.value : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{a.reason}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </div>
-
-          <Separator />
-
-          {/* Decision Factors */}
-          {(usedFields || usedRules || missingInfo || keyFactors) && (
+          {/* Decision Factors — gated on decisionFactors being present (new schema only) */}
+          {decisionFactors && (
             <div>
               <h3 className="text-sm font-semibold mb-3">Decision Factors</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {usedFields && (
+                {sourceFieldsUsed && sourceFieldsUsed.length > 0 && (
                   <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Fields Used</p>
-                    <StringList items={usedFields} />
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Source Fields Used</p>
+                    <StringList items={sourceFieldsUsed} />
                   </div>
                 )}
-                {usedRules && (
+                {derivedFieldsUsed && derivedFieldsUsed.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Derived Fields Used</p>
+                    <StringList items={derivedFieldsUsed} />
+                  </div>
+                )}
+                {businessFieldsUsed && businessFieldsUsed.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Business Fields Used</p>
+                    <StringList items={businessFieldsUsed} />
+                  </div>
+                )}
+                {rulesApplied && rulesApplied.length > 0 && (
                   <div>
                     <p className="text-xs font-medium text-muted-foreground mb-1">Rules Applied</p>
-                    <StringList items={usedRules} />
+                    <StringList items={rulesApplied} />
                   </div>
                 )}
-                {missingInfo && (
+                {missingInfo && missingInfo.length > 0 && (
                   <div>
                     <p className="text-xs font-medium text-muted-foreground mb-1">Missing Information</p>
                     <StringList items={missingInfo} />
                   </div>
                 )}
-                {keyFactors && (
+                {keyFactors && keyFactors.length > 0 && (
                   <div>
                     <p className="text-xs font-medium text-muted-foreground mb-1">Key Factors</p>
                     <StringList items={keyFactors} />
@@ -583,19 +570,13 @@ export default function DecisionDetailPage() {
             </div>
           )}
 
-          {/* Treatment Rationale */}
-          {(treatmentExplanation || (blockedConditions && blockedConditions.length > 0)) && (
+          {/* Treatment Rationale — prefer new nested treatmentRationale, fall back to DB column */}
+          {(treatmentRationale || treatmentExplanation) && (
             <div>
               <h3 className="text-sm font-semibold mb-3">Treatment Rationale</h3>
-              {treatmentExplanation && (
-                <p className="text-sm leading-relaxed mb-2" data-testid="text-treatment-explanation">{treatmentExplanation}</p>
-              )}
-              {blockedConditions && blockedConditions.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Blocked Conditions</p>
-                  <StringList items={blockedConditions} />
-                </div>
-              )}
+              <p className="text-sm leading-relaxed mb-2" data-testid="text-treatment-explanation">
+                {treatmentRationale || treatmentExplanation}
+              </p>
               <Separator className="mt-4" />
             </div>
           )}
@@ -605,6 +586,12 @@ export default function DecisionDetailPage() {
             <div>
               <h3 className="text-sm font-semibold mb-2">Internal Action</h3>
               <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-internal-action">{internalAction}</p>
+              {internalActionRationale && (
+                <div className="mt-3">
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Internal Action Rationale</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-internal-action-rationale">{internalActionRationale}</p>
+                </div>
+              )}
               <Separator className="mt-4" />
             </div>
           )}
@@ -653,8 +640,8 @@ export default function DecisionDetailPage() {
             )}
           </div>
 
-          {/* Policy & Guidance Used */}
-          {hasTrace && usedRules && usedRules.length > 0 && (
+          {/* Policy & Guidance Used — match against rulesApplied (new schema) or fall back gracefully */}
+          {hasTrace && rulesApplied && rulesApplied.length > 0 && (
             <>
               <Separator />
               <CollapsibleSection title="Policy & Guidance Used" defaultOpen={false}>
@@ -664,7 +651,6 @@ export default function DecisionDetailPage() {
                   const matchItem = (item: unknown): { title: string; text: string } | null => {
                     if (!item || typeof item !== "object") return null;
                     const obj = item as Record<string, unknown>;
-                    const id = String(obj.id || "");
                     const label = String(obj.label || obj.title || obj.name || "");
                     const text = String(obj.text || obj.content || obj.description || label);
                     if (!label) return null;
@@ -676,7 +662,7 @@ export default function DecisionDetailPage() {
                     ...(kbGuidance || []),
                   ];
 
-                  for (const rule of usedRules) {
+                  for (const rule of rulesApplied) {
                     const byId = allPolicyItems.find(item => {
                       if (!item || typeof item !== "object") return false;
                       const obj = item as Record<string, unknown>;
@@ -690,7 +676,7 @@ export default function DecisionDetailPage() {
                       if (!item || typeof item !== "object") return false;
                       const obj = item as Record<string, unknown>;
                       const label = String(obj.label || obj.title || obj.name || "");
-                      return label === rule;
+                      return label === rule || label.toLowerCase() === rule.toLowerCase();
                     });
                     if (byLabel) {
                       const m = matchItem(byLabel);
@@ -699,7 +685,15 @@ export default function DecisionDetailPage() {
                   }
 
                   if (matched.length === 0) {
-                    return <p className="text-sm text-muted-foreground">No policy or guidance items were used</p>;
+                    return (
+                      <div className="space-y-1">
+                        {rulesApplied.map((rule, i) => (
+                          <div key={i} className="border rounded p-3">
+                            <p className="text-xs text-muted-foreground">{rule}</p>
+                          </div>
+                        ))}
+                      </div>
+                    );
                   }
 
                   return (
