@@ -71,12 +71,18 @@ export function makeTreatmentCode(name: string): string {
 function resolveFieldRefToLabel(ref: string | null | undefined, idToLabel: Map<string, string>, context: string): string {
   if (!ref) return "[Unknown field]";
   const bare = ref.startsWith("source:") ? ref.slice(7) : ref;
-  const resolved = idToLabel.get(bare) ?? bare;
-  if (resolved === bare && /^\d+$/.test(bare)) {
-    console.warn(`[Treatment Rules] ${context}: could not resolve field ID "${bare}" — check that allPolicyFields is complete`);
+  const fromMap = idToLabel.get(bare);
+  if (fromMap) return fromMap;
+  if (/^\d+$/.test(bare)) {
+    console.warn(`[Treatment Rules] ${context}: could not resolve numeric field ID "${bare}" — check that allPolicyFields is complete`);
     return `[Unresolved field: ${bare}]`;
   }
-  return resolved;
+  const fromMapFull = idToLabel.get(ref);
+  if (fromMapFull) return fromMapFull;
+  if (bare !== ref) {
+    console.warn(`[Treatment Rules] ${context}: could not resolve field ref "${ref}" after stripping prefix — returning bare name "${bare}"`);
+  }
+  return bare;
 }
 
 /**
@@ -2605,7 +2611,14 @@ export async function registerRoutes(
                 if (trace.output_value !== null) derivedFieldsMap[trace.field_label] = trace.output_value;
               }
 
-              console.log(`[Decisioning] Customer ${custId}: starting analysis with ${packedTreatments.length} treatments, ${Object.keys(businessFieldsMap).length} business fields, ${Object.keys(derivedFieldsMap).length} derived fields`);
+              console.log(`[Decisioning] Customer ${custId}: starting analysis with ${packedTreatments.length} treatments, ${Object.keys(businessFieldsMap).length} business fields, ${Object.keys(derivedFieldsMap).length} derived fields`, packedTreatments.map(t => ({
+                name: t.name,
+                code: t.code,
+                whenToOffer: t.whenToOfferRules.reduce((s, g) => s + g.conditions.length, 0),
+                blockedIf: t.blockedIfRules.reduce((s, g) => s + g.conditions.length, 0),
+                offerSamples: t.whenToOfferRules.flatMap(g => g.conditions.map(c => c.plainEnglish)),
+                blockSamples: t.blockedIfRules.flatMap(g => g.conditions.map(c => c.plainEnglish)),
+              })));
 
               const packet = buildDecisionPacket({
                 customerId: custId,
