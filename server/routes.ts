@@ -2416,11 +2416,36 @@ export async function registerRoutes(
         text: rb.extractedText || rb.sopText || "",
       })).filter((rb) => (rb as Record<string, unknown>)["text"]);
 
-      const customerIdField = "customer / account / loan id";
+      const CUSTOMER_ID_CANDIDATES = [
+        "customer / account / loan id",
+        "customer_id",
+        "customer id",
+        "account_id",
+        "account id",
+        "loan_id",
+        "loan id",
+        "id",
+      ];
+
+      const firstLoanKeys = loanRecords[0] ? Object.keys(loanRecords[0]) : [];
+      const customerIdField =
+        CUSTOMER_ID_CANDIDATES.find(c => firstLoanKeys.some(k => k.toLowerCase() === c.toLowerCase()))
+        ?? firstLoanKeys[0]
+        ?? "customer / account / loan id";
+
+      console.log(`[Analyze] Customer ID field detected: "${customerIdField}" (from keys: [${firstLoanKeys.slice(0, 5).join(", ")}])`);
+
       const customerMap = new Map<string, { loan: Record<string, unknown>; payments: Record<string, unknown>[]; conversations: Record<string, unknown>[]; bureau: Record<string, unknown> | null; income: Record<string, unknown> | null }>();
 
+      const resolveId = (row: Record<string, unknown>): string => {
+        const direct = row[customerIdField];
+        if (direct != null && String(direct).trim()) return String(direct).trim();
+        const keyLower = Object.keys(row).find(k => k.toLowerCase() === customerIdField.toLowerCase());
+        return keyLower ? String(row[keyLower] || "").trim() : "";
+      };
+
       for (const loan of loanRecords) {
-        const custId = String(loan[customerIdField] || "").trim();
+        const custId = resolveId(loan);
         if (!custId) continue;
         if (!customerMap.has(custId)) {
           customerMap.set(custId, { loan, payments: [], conversations: [], bureau: null, income: null });
@@ -2428,28 +2453,28 @@ export async function registerRoutes(
       }
 
       for (const payment of paymentRecords) {
-        const custId = String(payment[customerIdField] || "").trim();
+        const custId = resolveId(payment);
         if (custId && customerMap.has(custId)) {
           customerMap.get(custId)!.payments.push(payment);
         }
       }
 
       for (const conv of conversationRecords) {
-        const custId = String(conv[customerIdField] || "").trim();
+        const custId = resolveId(conv);
         if (custId && customerMap.has(custId)) {
           customerMap.get(custId)!.conversations.push(conv);
         }
       }
 
       for (const bureau of bureauRecords) {
-        const custId = String(bureau[customerIdField] || "").trim();
+        const custId = resolveId(bureau);
         if (custId && customerMap.has(custId) && !customerMap.get(custId)!.bureau) {
           customerMap.get(custId)!.bureau = bureau;
         }
       }
 
       for (const income of incomeRecords) {
-        const custId = String(income[customerIdField] || "").trim();
+        const custId = resolveId(income);
         if (custId && customerMap.has(custId) && !customerMap.get(custId)!.income) {
           customerMap.get(custId)!.income = income;
         }
