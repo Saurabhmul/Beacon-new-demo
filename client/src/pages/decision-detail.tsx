@@ -22,13 +22,10 @@ import {
   ArrowLeft,
   CheckCircle2,
   XCircle,
-  AlertTriangle,
   Loader2,
   ChevronDown,
   ChevronRight,
-  Mail,
   Brain,
-  Database,
 } from "lucide-react";
 import type { Decision } from "@shared/schema";
 
@@ -69,14 +66,6 @@ function statusLabel(status: string): string {
   return "Pending Review";
 }
 
-function isNonEmptyValue(val: unknown): boolean {
-  if (val === null || val === undefined) return false;
-  if (typeof val === "string") return val.length > 0;
-  if (Array.isArray(val)) return val.length > 0;
-  if (typeof val === "object") return Object.keys(val as object).length > 0;
-  return true;
-}
-
 function CollapsibleSection({ title, children, defaultOpen }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen ?? true);
   return (
@@ -92,80 +81,6 @@ function CollapsibleSection({ title, children, defaultOpen }: { title: string; c
       </button>
       {open && <div className="px-4 pb-4">{children}</div>}
     </div>
-  );
-}
-
-function StringList({ items, emptyText = "None" }: { items: unknown; emptyText?: string }) {
-  const arr = Array.isArray(items) ? items : [];
-  if (arr.length === 0) return <span className="text-sm text-muted-foreground">{emptyText}</span>;
-  return (
-    <ul className="list-disc list-inside space-y-1">
-      {arr.map((item, i) => (
-        <li key={i} className="text-sm">{String(item)}</li>
-      ))}
-    </ul>
-  );
-}
-
-function SourceDataCard({ title, content, extra }: { title: string; content: unknown; extra?: string }) {
-  if (!isNonEmptyValue(content)) return null;
-
-  let rows: Array<[string, string]> = [];
-
-  if (Array.isArray(content)) {
-    return (
-      <Card className="overflow-hidden">
-        <CardHeader className="py-3 px-4 bg-muted/30">
-          <CardTitle className="text-sm font-semibold">{title}</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {extra && <p className="text-sm px-4 pt-3 pb-1 text-muted-foreground italic">{extra}</p>}
-          <div className="overflow-x-auto max-h-56 overflow-y-auto">
-            <Table>
-              <TableBody>
-                {(content as Record<string, unknown>[]).slice(0, 20).map((row, i) => (
-                  Object.entries(row).map(([k, v]) => (
-                    <TableRow key={`${i}-${k}`}>
-                      <TableCell className="text-xs font-medium text-muted-foreground w-40">{k}</TableCell>
-                      <TableCell className="text-xs">{String(v ?? "")}</TableCell>
-                    </TableRow>
-                  ))
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (typeof content === "object" && content !== null) {
-    rows = Object.entries(content as Record<string, unknown>)
-      .filter(([, v]) => v !== null && v !== undefined && String(v).length > 0)
-      .map(([k, v]) => [k, String(v)]);
-  }
-
-  if (rows.length === 0) return null;
-
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader className="py-3 px-4 bg-muted/30">
-        <CardTitle className="text-sm font-semibold">{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="p-0">
-        {extra && <p className="text-sm px-4 pt-3 pb-1 text-muted-foreground italic">{extra}</p>}
-        <Table>
-          <TableBody>
-            {rows.map(([k, v]) => (
-              <TableRow key={k}>
-                <TableCell className="text-xs font-medium text-muted-foreground w-40">{k}</TableCell>
-                <TableCell className="text-xs">{v}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -197,20 +112,6 @@ export default function DecisionDetailPage() {
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to submit review.", variant: "destructive" });
-    },
-  });
-
-  const emailMutation = useMutation({
-    mutationFn: async (data: { emailAccepted: boolean; emailRejectReason?: string }) => {
-      const res = await apiRequest("PATCH", `/api/decisions/${params.id}/email-review`, data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/decisions", params.id] });
-      toast({ title: "Email review saved" });
-    },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to save email review.", variant: "destructive" });
     },
   });
 
@@ -247,9 +148,6 @@ export default function DecisionDetailPage() {
   function asString(val: unknown): string | undefined {
     return typeof val === "string" ? val : undefined;
   }
-  function asNumber(val: unknown): number | undefined {
-    return typeof val === "number" ? val : undefined;
-  }
   function asBoolean(val: unknown): boolean | undefined {
     return typeof val === "boolean" ? val : undefined;
   }
@@ -258,44 +156,18 @@ export default function DecisionDetailPage() {
     return val.filter((v): v is string => typeof v === "string");
   }
 
-  const packet = asRecord(trace?.["decision_packet"]);
-  const packetCustomer = asRecord(packet?.["customer"]);
-  const groupedSourceData = asRecord(packetCustomer?.["groupedSourceData"]);
   const businessFieldsTrace = asArray(trace?.["business_fields_trace"]);
   const derivedFieldsTrace = asArray(trace?.["derived_fields_trace"]);
   const finalAiOutput = asRecord(trace?.["final_ai_output"]);
 
-  const customerData = asRecord(decision.customerData) ?? {};
   const customerId = getCustomerId(decision);
   const recommendedTreatment = decision.recommendedTreatmentName || decision.proposedSolution || "Unknown";
   const recommendedCode = decision.recommendedTreatmentCode || "";
   const customerSituation = decision.customerSituation || decision.problemDescription || "";
-  const treatmentExplanation = decision.treatmentEligibilityExplanation || decision.solutionEvidence || "";
-  const structuredAssessments = decision.structuredAssessments || [];
-  const proposedEmail = decision.proposedEmailToCustomer || "NO_ACTION";
-  const internalAction = decision.internalAction || "";
 
   const requiresAgentReview = asBoolean(finalAiOutput?.["requires_agent_review"]);
   const treatmentDecision = asRecord(finalAiOutput?.["treatment_decision"]);
-  const decisionFactors = asRecord(finalAiOutput?.["decision_factors"]);
-  const sourceFieldsUsed = asStringArray(decisionFactors?.["source_fields_used"]);
-  const derivedFieldsUsed = asStringArray(decisionFactors?.["derived_fields_used"]);
-  const businessFieldsUsed = asStringArray(decisionFactors?.["business_fields_used"]);
-  const missingInfo = asStringArray(decisionFactors?.["missing_information"]);
-  const keyFactors = asStringArray(decisionFactors?.["key_factors"]);
-  const rulesApplied = asStringArray(decisionFactors?.["rules_applied"]);
-  const treatmentRationale = asString(treatmentDecision?.["treatment_rationale"]);
   const decisionStatus = asString(treatmentDecision?.["decision_status"]);
-  const internalActionRationale = asString(finalAiOutput?.["internal_action_rationale"]);
-
-  const loanData = groupedSourceData?.["loanData"] ?? customerData;
-  const paymentData = asArray(groupedSourceData?.["paymentData"] ?? customerData["_payments"]);
-  const conversationData = asArray(groupedSourceData?.["conversationData"] ?? customerData["_conversations"]);
-  const bureauData = asRecord(groupedSourceData?.["bureauData"]) ?? {};
-  const incomeEmploymentData = asRecord(groupedSourceData?.["incomeEmploymentData"]) ?? {};
-
-  const complianceRules = asArray(asRecord(packet?.["policy"])?.["compliancePolicyInternalRules"]);
-  const kbGuidance = asArray(asRecord(packet?.["guidance"])?.["knowledgeBaseAgentGuidance"]);
 
   const isPending = decision.status === "pending";
 
@@ -379,35 +251,6 @@ export default function DecisionDetailPage() {
         </CardContent>
       </Card>
 
-      {/* SECTION 2 — Source Data */}
-      <Card data-testid="section-source-data">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Database className="w-4 h-4" />
-            Source Data
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {(() => {
-            const cards = [
-              { title: "Loan Data", content: loanData, extra: undefined },
-              { title: "Payment History", content: paymentData, extra: undefined },
-              { title: "Conversations", content: conversationData, extra: undefined },
-              { title: "Income & Employment", content: incomeEmploymentData, extra: undefined },
-              { title: "Bureau", content: bureauData, extra: undefined },
-            ].filter(c => isNonEmptyValue(c.content));
-
-            if (cards.length === 0) {
-              return <p className="text-sm text-muted-foreground" data-testid="text-no-source-data">No source data available</p>;
-            }
-
-            return cards.map(c => (
-              <SourceDataCard key={c.title} title={c.title} content={c.content} extra={c.extra} />
-            ));
-          })()}
-        </CardContent>
-      </Card>
-
       {/* SECTION 3 — Business Fields */}
       <Card data-testid="section-business-fields">
         <CardHeader className="pb-3">
@@ -474,7 +317,7 @@ export default function DecisionDetailPage() {
           ) : (
             <CollapsibleSection
               title={`Derived Fields (${derivedFieldsTrace.length})`}
-              defaultOpen={derivedFieldsTrace.length <= 5}
+              defaultOpen={false}
             >
               <div className="overflow-x-auto">
                 <Table>
@@ -517,206 +360,14 @@ export default function DecisionDetailPage() {
         </CardContent>
       </Card>
 
-      {/* SECTION 5 — Treatment Decision / Validation / Email */}
-      <Card data-testid="section-treatment-decision">
+      {/* SECTION 5 — Agent Review */}
+      <Card data-testid="section-agent-review">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Treatment Decision</CardTitle>
+          <CardTitle className="text-base">Agent Review</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-6">
-
-          {/* Decision Factors — gated on decisionFactors being present (new schema only) */}
-          {decisionFactors && (
-            <div>
-              <h3 className="text-sm font-semibold mb-3">Decision Factors</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {sourceFieldsUsed && sourceFieldsUsed.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Source Fields Used</p>
-                    <StringList items={sourceFieldsUsed} />
-                  </div>
-                )}
-                {derivedFieldsUsed && derivedFieldsUsed.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Derived Fields Used</p>
-                    <StringList items={derivedFieldsUsed} />
-                  </div>
-                )}
-                {businessFieldsUsed && businessFieldsUsed.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Business Fields Used</p>
-                    <StringList items={businessFieldsUsed} />
-                  </div>
-                )}
-                {rulesApplied && rulesApplied.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Rules Applied</p>
-                    <StringList items={rulesApplied} />
-                  </div>
-                )}
-                {missingInfo && missingInfo.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Missing Information</p>
-                    <StringList items={missingInfo} />
-                  </div>
-                )}
-                {keyFactors && keyFactors.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Key Factors</p>
-                    <StringList items={keyFactors} />
-                  </div>
-                )}
-              </div>
-              <Separator className="mt-4" />
-            </div>
-          )}
-
-          {/* Treatment Rationale — prefer new nested treatmentRationale, fall back to DB column */}
-          {(treatmentRationale || treatmentExplanation) && (
-            <div>
-              <h3 className="text-sm font-semibold mb-3">Treatment Rationale</h3>
-              <p className="text-sm leading-relaxed mb-2" data-testid="text-treatment-explanation">
-                {treatmentRationale || treatmentExplanation}
-              </p>
-              <Separator className="mt-4" />
-            </div>
-          )}
-
-          {/* Internal Action */}
-          {internalAction && (
-            <div>
-              <h3 className="text-sm font-semibold mb-2">Internal Action</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-internal-action">{internalAction}</p>
-              {internalActionRationale && (
-                <div className="mt-3">
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Internal Action Rationale</p>
-                  <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-internal-action-rationale">{internalActionRationale}</p>
-                </div>
-              )}
-              <Separator className="mt-4" />
-            </div>
-          )}
-
-          {/* Email Draft */}
-          <div>
-            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-              <Mail className="w-4 h-4" />
-              Email Draft
-            </h3>
-            {!proposedEmail || proposedEmail === "NO_ACTION" ? (
-              <p className="text-sm text-muted-foreground" data-testid="text-no-email">No email draft generated</p>
-            ) : (
-              <div className="space-y-3">
-                <div className="bg-muted/40 rounded p-3">
-                  <p className="text-sm whitespace-pre-line leading-relaxed" data-testid="text-email-draft">{proposedEmail}</p>
-                </div>
-                {!isSuperAdmin && decision.emailAccepted === null && !decision.reviewedAt && (
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => emailMutation.mutate({ emailAccepted: true })}
-                      disabled={emailMutation.isPending}
-                      data-testid="button-accept-email"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Accept Email
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => emailMutation.mutate({ emailAccepted: false })}
-                      disabled={emailMutation.isPending}
-                      data-testid="button-reject-email"
-                    >
-                      <XCircle className="w-3.5 h-3.5 mr-1" /> Reject Email
-                    </Button>
-                  </div>
-                )}
-                {decision.emailAccepted !== null && decision.emailAccepted !== undefined && (
-                  <Badge variant={decision.emailAccepted ? "default" : "destructive"} data-testid="badge-email-decision">
-                    {decision.emailAccepted ? "Email Accepted" : "Email Rejected"}
-                  </Badge>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Policy & Guidance Used — match against rulesApplied (new schema) or fall back gracefully */}
-          {hasTrace && rulesApplied && rulesApplied.length > 0 && (
-            <>
-              <Separator />
-              <CollapsibleSection title="Policy & Guidance Used" defaultOpen={false}>
-                {(() => {
-                  const matched: Array<{ title: string; text: string }> = [];
-
-                  const matchItem = (item: unknown): { title: string; text: string } | null => {
-                    if (!item || typeof item !== "object") return null;
-                    const obj = item as Record<string, unknown>;
-                    const label = String(obj.label || obj.title || obj.name || "");
-                    const text = String(obj.text || obj.content || obj.description || label);
-                    if (!label) return null;
-                    return { title: label, text };
-                  };
-
-                  const allPolicyItems = [
-                    ...(complianceRules || []),
-                    ...(kbGuidance || []),
-                  ];
-
-                  for (const rule of rulesApplied) {
-                    const byId = allPolicyItems.find(item => {
-                      if (!item || typeof item !== "object") return false;
-                      const obj = item as Record<string, unknown>;
-                      return String(obj["id"] ?? "") === rule;
-                    });
-                    if (byId) {
-                      const m = matchItem(byId);
-                      if (m) { matched.push(m); continue; }
-                    }
-                    const byLabel = allPolicyItems.find(item => {
-                      if (!item || typeof item !== "object") return false;
-                      const obj = item as Record<string, unknown>;
-                      const label = String(obj.label || obj.title || obj.name || "");
-                      return label === rule || label.toLowerCase() === rule.toLowerCase();
-                    });
-                    if (byLabel) {
-                      const m = matchItem(byLabel);
-                      if (m) matched.push(m);
-                    }
-                  }
-
-                  if (matched.length === 0) {
-                    return (
-                      <div className="space-y-1">
-                        {rulesApplied.map((rule, i) => (
-                          <div key={i} className="border rounded p-3">
-                            <p className="text-xs text-muted-foreground">{rule}</p>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="space-y-2">
-                      {matched.map((item, i) => (
-                        <div key={i} className="border rounded p-3">
-                          <p className="text-xs font-medium mb-1">{item.title}</p>
-                          <p className="text-xs text-muted-foreground">{item.text}</p>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </CollapsibleSection>
-            </>
-          )}
-
-          <Separator />
-
-          {/* Agent Review Form */}
+        <CardContent className="space-y-4">
           {!isSuperAdmin && isPending && (
-            <div data-testid="section-agent-review">
-              <h3 className="text-sm font-semibold mb-3">Agent Review</h3>
+            <div>
               <div className="space-y-3">
                 {!showRejectForm ? (
                   <div className="flex gap-3">
