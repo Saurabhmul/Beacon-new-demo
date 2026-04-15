@@ -30,10 +30,16 @@ import { validateFinalDecisionOutput, tryParseDecisionJson } from "./lib/decisio
 import { emptyContextSections } from "./lib/decisioning/context-sections";
 import { GoogleGenAI } from "@google/genai";
 
-const decisionAI = new GoogleGenAI({
+const genAiConfig: any = {
   apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-  httpOptions: { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL },
-});
+};
+if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+  genAiConfig.httpOptions = {
+    apiVersion: "",
+    baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
+  };
+}
+const decisionAI = new GoogleGenAI(genAiConfig);
 
 function normalizeSampleValues(input: unknown[]): string[] {
   const seen = new Set<string>();

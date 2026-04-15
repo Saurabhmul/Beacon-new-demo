@@ -21,13 +21,16 @@ import {
   type ContextDataArray,
 } from "./context-sections";
 
-const ai = new GoogleGenAI({
+const genAiConfig: any = {
   apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-  httpOptions: {
+};
+if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+  genAiConfig.httpOptions = {
     apiVersion: "",
     baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-  },
-});
+  };
+}
+const ai = new GoogleGenAI(genAiConfig);
 
 const HISTORY_KEEP_LATEST = 10;
 

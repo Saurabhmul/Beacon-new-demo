@@ -2,13 +2,16 @@ import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { LogicalDerivationConfigSchema } from "./lib/derivation-config";
 
-const ai = new GoogleGenAI({
+const genAiConfig: any = {
   apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-  httpOptions: {
+};
+if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+  genAiConfig.httpOptions = {
     apiVersion: "",
     baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-  },
-});
+  };
+}
+const ai = new GoogleGenAI(genAiConfig);
 
 export interface AIDecisionOutput {
   customer_guid: string;
